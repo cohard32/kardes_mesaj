@@ -18,9 +18,9 @@ class MedyaServisi {
   MedyaServisi._();
   static final MedyaServisi instance = MedyaServisi._();
 
-  // TODO(kullanici): Cloudinary bilgilerini gir
-  static const String _cloudName = 'CLOUD_NAME';
-  static const String _uploadPreset = 'UPLOAD_PRESET';
+  // Cloudinary bilgileri (unsigned upload — gizli anahtar gerekmez)
+  static const String _cloudName = 'diifisaog';
+  static const String _uploadPreset = 'kardes_mesaj';
 
   bool get ayarliMi => _cloudName != 'CLOUD_NAME';
 
