@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/mesaj.dart';
 import 'bildirim_servisi.dart';
+import 'medya_servisi.dart';
 
 /// Firestore üzerinde mesaj okuma/yazma işlemlerini yöneten servis.
 /// İki kişilik tek sohbet olduğu için tek bir `mesajlar` koleksiyonu yeter.
@@ -41,6 +44,34 @@ class MesajServisi {
       baslik: eposta,
       govde: temiz,
     );
+  }
+
+  /// Medya (resim/video/ses) gönderir: önce Cloudinary'ye yükler,
+  /// sonra Firestore'a medya mesajı ekler ve karşı tarafa bildirim atar.
+  /// Yükleme başarısızsa false döner.
+  Future<bool> medyaGonder(File dosya, MesajTipi tip) async {
+    final uid = _uid;
+    if (uid == null) return false;
+
+    final url = await MedyaServisi.instance.yukle(dosya, tip);
+    if (url == null) return false;
+
+    await _koleksiyon.add(
+      Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),
+    );
+
+    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
+    final etiket = switch (tip) {
+      MesajTipi.resim => '📷 Fotoğraf',
+      MesajTipi.video => '🎥 Video',
+      MesajTipi.ses => '🎤 Sesli mesaj',
+      MesajTipi.metin => 'Mesaj',
+    };
+    BildirimServisi.instance.karsiTarafaBildirimGonder(
+      baslik: eposta,
+      govde: etiket,
+    );
+    return true;
   }
 
   /// Bir mesaja emoji tepkisi ekler/kaldırır. Aynı emoji tekrar seçilirse

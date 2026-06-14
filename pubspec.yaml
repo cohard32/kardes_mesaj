@@ -46,6 +46,9 @@ dependencies:
   package_info_plus: ^10.1.0
   open_filex: ^4.7.0
   path_provider: ^2.1.5
+  image_picker: ^1.2.2
+  record: ^7.1.0
+  video_player: ^2.11.1
 
 dev_dependencies:
   flutter_test:
