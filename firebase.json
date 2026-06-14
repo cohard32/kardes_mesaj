@@ -1,0 +1,25 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "kardes-mesaj",
+          "appId": "1:1085271498779:android:9bd31a7d2123eedd8898be",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "kardes-mesaj",
+          "configurations": {
+            "android": "1:1085271498779:android:9bd31a7d2123eedd8898be",
+            "ios": "1:1085271498779:ios:cfba9a316928e7d08898be"
+          }
+        }
+      }
+    }
+  }
+}

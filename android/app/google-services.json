@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1085271498779",
+    "project_id": "kardes-mesaj",
+    "storage_bucket": "kardes-mesaj.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1085271498779:android:9bd31a7d2123eedd8898be",
+        "android_client_info": {
+          "package_name": "com.welat.kardes_mesaj"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCtFjGTr9Kx5zA4MJqMVNJI0E81Z2WH3k8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
