@@ -17,8 +17,8 @@ class GuncellemeServisi {
   GuncellemeServisi._();
   static final GuncellemeServisi instance = GuncellemeServisi._();
 
-  // TODO(kullanici): kendi GitHub repo bilgini gir
-  static const String _repoOwner = 'KULLANICI_ADI';
+  // GitHub repo bilgisi (otomatik güncelleme buradan release çeker)
+  static const String _repoOwner = 'cohard32';
   static const String _repoName = 'kardes_mesaj';
 
   /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
