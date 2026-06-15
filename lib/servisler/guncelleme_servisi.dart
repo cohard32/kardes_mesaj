@@ -23,7 +23,7 @@ class GuncellemeServisi {
   // ⚠️ ÖNEMLİ: Bu sürüm pubspec.yaml'daki "version" ile AYNI olmalı.
   // Her release'te ikisini birlikte yükselt. (package_info_plus, Agora ffi
   // çakışması nedeniyle kaldırıldı; sürüm artık derleme-zamanı sabiti.)
-  static const String mevcutSurum = '1.4.0';
+  static const String mevcutSurum = '1.4.1';
 
   /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';
@@ -87,21 +87,32 @@ class GuncellemeServisi {
     String apkUrl,
     void Function(double yuzde) ilerleme,
   ) async {
-    final istek = http.Request('GET', Uri.parse(apkUrl));
-    final yanit = await http.Client().send(istek);
-    final toplam = yanit.contentLength ?? 0;
-
-    final bytes = <int>[];
-    var indirilen = 0;
-    await for (final parca in yanit.stream) {
-      bytes.addAll(parca);
-      indirilen += parca.length;
-      if (toplam > 0) ilerleme(indirilen / toplam);
-    }
-
     final dizin = await getTemporaryDirectory();
     final dosya = File('${dizin.path}/kardes_mesaj_guncelleme.apk');
-    await dosya.writeAsBytes(bytes);
+
+    final istemci = http.Client();
+    try {
+      final istek = http.Request('GET', Uri.parse(apkUrl));
+      final yanit = await istemci.send(istek);
+      final toplam = yanit.contentLength ?? 0;
+
+      // ÖNEMLİ: APK'yı RAM'de biriktirme (büyük APK'da "out of memory" verir),
+      // gelen parçaları doğrudan diske akıt.
+      final sink = dosya.openWrite();
+      var indirilen = 0;
+      try {
+        await for (final parca in yanit.stream) {
+          sink.add(parca);
+          indirilen += parca.length;
+          if (toplam > 0) ilerleme(indirilen / toplam);
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
+      }
+    } finally {
+      istemci.close();
+    }
 
     // Android paket yükleyiciyi açar (REQUEST_INSTALL_PACKAGES izni gerekir)
     await OpenFilex.open(dosya.path);
