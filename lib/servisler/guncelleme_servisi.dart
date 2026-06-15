@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// GitHub Releases üzerinden uygulama içi otomatik güncelleme.
@@ -21,6 +20,11 @@ class GuncellemeServisi {
   static const String _repoOwner = 'cohard32';
   static const String _repoName = 'kardes_mesaj';
 
+  // ⚠️ ÖNEMLİ: Bu sürüm pubspec.yaml'daki "version" ile AYNI olmalı.
+  // Her release'te ikisini birlikte yükselt. (package_info_plus, Agora ffi
+  // çakışması nedeniyle kaldırıldı; sürüm artık derleme-zamanı sabiti.)
+  static const String mevcutSurum = '1.4.0';
+
   /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';
 
@@ -28,7 +32,7 @@ class GuncellemeServisi {
   Future<GuncellemeBilgisi?> kontrolEt() async {
     if (!_ayarliMi) return null;
     try {
-      final mevcut = (await PackageInfo.fromPlatform()).version;
+      const mevcut = mevcutSurum;
       final url = Uri.parse(
         'https://api.github.com/repos/$_repoOwner/$_repoName/releases/latest',
       );

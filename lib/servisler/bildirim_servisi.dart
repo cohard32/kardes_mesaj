@@ -5,6 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
@@ -12,11 +14,39 @@ import 'ayar_servisi.dart';
 
 /// Arka plan / uygulama kapalı mesaj handler'ı.
 /// Top-level (sınıf dışı) olmak ZORUNDA — Android arka planda izole çalıştırır.
-/// `notification` payload'lu mesajlar sistem tepsisinde otomatik gösterildiği
-/// için burada ekstra iş yapmaya gerek yok.
+/// Normal mesaj `notification` payload'ı sistem tepsisinde otomatik gösterilir.
+/// Çağrı (data: tur=arama) gelirse uygulama KAPALI olsa bile tam ekran
+/// gelen-arama ekranını (CallKit) gösterir.
 @pragma('vm:entry-point')
 Future<void> arkaplanMesajHandler(RemoteMessage message) async {
-  // Bilinçli olarak boş: notification payload'ı sistem tarafından gösterilir.
+  if (message.data['tur'] == 'arama') {
+    await gelenAramayiGoster(message.data);
+  }
+}
+
+/// FCM çağrı verisinden tam ekran "gelen arama" bildirimini gösterir.
+/// Hem arka plan handler'ı hem de uygulama açıkken kullanılır.
+Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
+  final kanal = (data['kanal'] ?? 'arama').toString();
+  final arayan = (data['arayan'] ?? 'Kardeş').toString();
+  final video = data['tip'] == 'video';
+  final params = CallKitParams(
+    id: kanal,
+    nameCaller: arayan,
+    appName: 'Kardeş Mesaj',
+    handle: video ? 'Görüntülü arama' : 'Sesli arama',
+    type: video ? 1 : 0,
+    extra: <String, dynamic>{'kanal': kanal, 'tip': data['tip']},
+    android: const AndroidParams(
+      isCustomNotification: true,
+      isShowFullLockedScreen: true,
+      isShowCallID: false,
+      ringtonePath: 'system_ringtone_default',
+      textAccept: 'Kabul Et',
+      textDecline: 'Reddet',
+    ),
+  );
+  await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
 
 /// Kartsız (Spark planı) bildirim servisi.
@@ -126,6 +156,36 @@ class BildirimServisi {
     required String baslik,
     required String govde,
   }) async {
+    await _push(mesajAlanlari: {
+      'notification': {'title': baslik, 'body': govde},
+      'android': {
+        'priority': 'high',
+        'notification': {'channel_id': _kanalId},
+      },
+    });
+  }
+
+  /// Karşı tarafa GELEN ARAMA push'u (data-only, yüksek öncelikli).
+  /// Uygulama kapalıyken arka plan handler bunu yakalayıp CallKit gösterir.
+  Future<void> karsiTarafaAramaGonder({
+    required String arayan,
+    required String tip,
+    required String kanal,
+  }) async {
+    await _push(mesajAlanlari: {
+      'data': {
+        'tur': 'arama',
+        'arayan': arayan,
+        'tip': tip,
+        'kanal': kanal,
+      },
+      'android': {'priority': 'high'},
+    });
+  }
+
+  /// FCM HTTP v1 ortak gönderim: karşı tarafın token'ını bulur, service account
+  /// ile OAuth2 alır, [mesajAlanlari]'nı `message` gövdesine ekleyip yollar.
+  Future<void> _push({required Map<String, dynamic> mesajAlanlari}) async {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) return;
@@ -162,14 +222,7 @@ class BildirimServisi {
           url,
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'message': {
-              'token': hedefToken,
-              'notification': {'title': baslik, 'body': govde},
-              'android': {
-                'priority': 'high',
-                'notification': {'channel_id': _kanalId},
-              },
-            },
+            'message': {'token': hedefToken, ...mesajAlanlari},
           }),
         );
         if (yanit.statusCode != 200) {

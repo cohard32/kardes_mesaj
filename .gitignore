@@ -51,3 +51,6 @@ assets/service_account.json
 assets/*firebase-adminsdk*.json
 assets/*service*account*.json
 *serviceAccount*.json
+
+# Gradle build raporlari/artefaktlari
+android/build/

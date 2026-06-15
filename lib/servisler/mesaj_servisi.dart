@@ -65,6 +65,7 @@ class MesajServisi {
       MesajTipi.resim => '📷 Fotoğraf',
       MesajTipi.video => '🎥 Video',
       MesajTipi.ses => '🎤 Sesli mesaj',
+      MesajTipi.gif => '🎞️ GIF',
       MesajTipi.metin => 'Mesaj',
     };
     BildirimServisi.instance.karsiTarafaBildirimGonder(
@@ -72,6 +73,32 @@ class MesajServisi {
       govde: etiket,
     );
     return true;
+  }
+
+  /// GIF/sticker gönderir. GIPHY URL'i doğrudan Firestore'a yazılır
+  /// (Cloudinary'ye yükleme gerekmez — GIF zaten internette barınıyor).
+  Future<void> gifGonder(String url) async {
+    final uid = _uid;
+    if (uid == null) return;
+
+    await _koleksiyon.add(
+      Mesaj.yeniMedyaVerisi(gonderen: uid, tip: MesajTipi.gif, medyaUrl: url),
+    );
+
+    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
+    BildirimServisi.instance.karsiTarafaBildirimGonder(
+      baslik: eposta,
+      govde: '🎞️ GIF',
+    );
+  }
+
+  /// Karşı taraftan gelen bir sesli mesajı "dinlendi" işaretler.
+  Future<void> sesDinlendiIsaretle(String mesajId) async {
+    try {
+      await _koleksiyon.doc(mesajId).update({'sesDinlendi': true});
+    } catch (_) {
+      // mesaj silinmiş olabilir; sessizce geç
+    }
   }
 
   /// Bir mesaja emoji tepkisi ekler/kaldırır. Aynı emoji tekrar seçilirse

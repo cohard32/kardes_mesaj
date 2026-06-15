@@ -8,8 +8,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///   metin:    mesaj içeriği
 ///   zaman:    sunucu zaman damgası
 ///   goruldu:  karşı taraf gördü mü
-/// Mesaj türü: düz metin veya bir medya (resim/video/ses).
-enum MesajTipi { metin, resim, video, ses }
+/// Mesaj türü: düz metin veya bir medya (resim/video/ses/gif/sticker).
+enum MesajTipi { metin, resim, video, ses, gif }
 
 class Mesaj {
   final String id;
@@ -18,8 +18,9 @@ class Mesaj {
   final DateTime? zaman;
   final bool goruldu;
   final String? tepki; // mesaja verilen emoji tepkisi (👍 ❤️ ...) veya null
-  final MesajTipi tip; // metin / resim / video / ses
-  final String? medyaUrl; // resim/video/ses için Cloudinary URL'i
+  final MesajTipi tip; // metin / resim / video / ses / gif
+  final String? medyaUrl; // resim/video/ses Cloudinary URL'i veya GIPHY GIF URL'i
+  final bool sesDinlendi; // sesli mesaj karşı tarafça dinlendi mi
 
   Mesaj({
     required this.id,
@@ -30,6 +31,7 @@ class Mesaj {
     this.tepki,
     this.tip = MesajTipi.metin,
     this.medyaUrl,
+    this.sesDinlendi = false,
   });
 
   /// Firestore dokümanından Mesaj nesnesi üretir.
@@ -46,6 +48,7 @@ class Mesaj {
       tepki: d['tepki'] as String?,
       tip: _tipCoz(d['tip'] as String?),
       medyaUrl: d['medyaUrl'] as String?,
+      sesDinlendi: (d['sesDinlendi'] ?? false) as bool,
     );
   }
 
@@ -57,6 +60,8 @@ class Mesaj {
         return MesajTipi.video;
       case 'ses':
         return MesajTipi.ses;
+      case 'gif':
+        return MesajTipi.gif;
       default:
         return MesajTipi.metin;
     }

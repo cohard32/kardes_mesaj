@@ -9,7 +9,8 @@ plugins {
 
 android {
     namespace = "com.welat.kardes_mesaj"
-    compileSdk = flutter.compileSdkVersion
+    // Agora (agora_rtc_engine) compileSdk 34+ gerektirir → 36'ya sabitlendi.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
