@@ -20,6 +20,36 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // APK boyutunu kucult: Agora'nin temel arama icin GEREKSIZ ek ozellik
+    // kutuphanelerini cikar (AV1, sanal arka plan, uzamsal ses, super cozunurluk,
+    // yuz/icerik analizi vb.). Temel ses/goruntulu arama core'da, etkilenmez.
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "**/libagora_ai_echo_cancellation_extension.so",
+                "**/libagora_ai_echo_cancellation_ll_extension.so",
+                "**/libagora_ai_noise_suppression_extension.so",
+                "**/libagora_ai_noise_suppression_ll_extension.so",
+                "**/libagora_audio_beauty_extension.so",
+                "**/libagora_clear_vision_extension.so",
+                "**/libagora_content_inspect_extension.so",
+                "**/libagora_drm_loader_extension.so",
+                "**/libagora_face_capture_extension.so",
+                "**/libagora_face_detection_extension.so",
+                "**/libagora_full_audio_format_extension.so",
+                "**/libagora_pvc_extension.so",
+                "**/libagora_screen_capture_extension.so",
+                "**/libagora_segmentation_extension.so",
+                "**/libagora_spatial_audio_extension.so",
+                "**/libagora_super_resolution_extension.so",
+                "**/libagora_video_av1_encoder_extension.so",
+                "**/libagora_video_av1_decoder_extension.so",
+                "**/libagora_video_quality_analyzer_extension.so",
+                "**/libagora_vqa_extension.so",
+            )
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.welat.kardes_mesaj"

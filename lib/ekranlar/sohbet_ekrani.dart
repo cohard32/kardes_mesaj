@@ -80,6 +80,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       }
     });
     _guncellemeKontrol();
+    AramaServisi.instance.eskiAramayiTemizle(); // kalmış stale aramayı temizle
     _gelenAramaDinle();
   }
 
@@ -90,9 +91,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       final d = doc.data();
       if (d == null) return;
       final kanal = d['kanal'] as String?;
+      final ts = d['zaman'];
+      // Sadece TAZE (son 90 sn) çağrıları aç — eski/stale doküman titremeye yol açmasın.
+      final taze = ts is Timestamp &&
+          DateTime.now().difference(ts.toDate()).inSeconds.abs() < 90;
       if (d['durum'] == 'cagriliyor' &&
           d['arayan'] != _uid &&
           kanal != null &&
+          taze &&
           _gelenAramaKanali != kanal) {
         _gelenAramaKanali = kanal;
         Navigator.of(context)
@@ -108,21 +114,28 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     });
   }
 
-  // Görüntülü/sesli arama başlat → arama ekranını aç.
+  // Görüntülü/sesli arama başlat → arama ekranını aç. Hata olursa ekranda göster.
   Future<void> _aramaBaslat(AramaTipi tip) async {
-    final kanal = await AramaServisi.instance.aramaBaslat(tip);
-    if (!mounted) return;
-    if (kanal == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
+    try {
+      final kanal = await AramaServisi.instance.aramaBaslat(tip);
+      if (!mounted) return;
+      if (kanal == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
+        );
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+        ),
       );
-      return;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
     }
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
-      ),
-    );
   }
 
   @override

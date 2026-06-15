@@ -11,6 +11,14 @@ enum AramaTipi { video, ses }
 AramaTipi aramaTipiCoz(String? s) =>
     s == 'video' ? AramaTipi.video : AramaTipi.ses;
 
+/// Arama başlatma/katılma sırasında oluşan, kullanıcıya gösterilecek hata.
+class AramaHatasi implements Exception {
+  final String mesaj;
+  AramaHatasi(this.mesaj);
+  @override
+  String toString() => mesaj;
+}
+
 /// Görüntülü/sesli arama servisi — Agora (medya) + Firestore (sinyalleşme).
 ///
 /// KARTSIZ: Agora "testing mode" (App Certificate kapalı) → token gerekmez,
@@ -94,38 +102,67 @@ class AramaServisi {
   String _kanalUret() => 'k_${DateTime.now().millisecondsSinceEpoch}';
 
   /// ARAYAN: arama başlatır. İzin yoksa null, başlarsa katılınan kanalı döner.
+  /// Agora/Firestore hatası olursa temizleyip [AramaHatasi] fırlatır.
   Future<String?> aramaBaslat(AramaTipi tip) async {
     if (!await _izinIste(tip)) return null;
     final kanal = _kanalUret();
-    await _engineHazirla(tip);
-    await _katil(kanal);
+    try {
+      await _engineHazirla(tip);
+      await _katil(kanal);
 
-    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
-    await _aramaDoc.set({
-      'arayan': _uid,
-      'arayanEposta': eposta,
-      'tip': tip.name,
-      'kanal': kanal,
-      'durum': 'cagriliyor',
-      'zaman': FieldValue.serverTimestamp(),
-    });
+      final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
+      await _aramaDoc.set({
+        'arayan': _uid,
+        'arayanEposta': eposta,
+        'tip': tip.name,
+        'kanal': kanal,
+        'durum': 'cagriliyor',
+        'zaman': FieldValue.serverTimestamp(),
+      });
 
-    // Karşı tarafı çaldır (uygulama kapalıyken bile → CallKit)
-    BildirimServisi.instance.karsiTarafaAramaGonder(
-      arayan: eposta,
-      tip: tip.name,
-      kanal: kanal,
-    );
-    return kanal;
+      // Karşı tarafı çaldır (uygulama kapalıyken bile → CallKit)
+      BildirimServisi.instance.karsiTarafaAramaGonder(
+        arayan: eposta,
+        tip: tip.name,
+        kanal: kanal,
+      );
+      return kanal;
+    } catch (e) {
+      await bitir(); // motoru ve yarım kalan Firestore dokümanını temizle
+      throw AramaHatasi('Arama başlatılamadı: $e');
+    }
   }
 
   /// ARANAN: gelen aramayı kabul eder ve aynı kanala katılır.
   Future<bool> kabulEt(String kanal, AramaTipi tip) async {
     if (!await _izinIste(tip)) return false;
-    await _engineHazirla(tip);
-    await _katil(kanal);
-    await _aramaDoc.set({'durum': 'kabul'}, SetOptions(merge: true));
-    return true;
+    try {
+      await _engineHazirla(tip);
+      await _katil(kanal);
+      await _aramaDoc.set({'durum': 'kabul'}, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      await bitir();
+      throw AramaHatasi('Aramaya katılınamadı: $e');
+    }
+  }
+
+  /// Açılışta kalmış (stale) arama dokümanını temizler. Eski bir 'cagriliyor'
+  /// kaydı, gelen-arama ekranının durmadan açılmasına/siyah ekran titremesine
+  /// yol açabilir; 90 sn'den eski kayıtları 'bitti' yapar.
+  Future<void> eskiAramayiTemizle() async {
+    try {
+      final d = await aktifArama();
+      if (d == null) return;
+      final durum = d['durum'];
+      if (durum != 'cagriliyor' && durum != 'kabul') return;
+      final ts = d['zaman'];
+      final eski = ts is! Timestamp ||
+          DateTime.now().difference(ts.toDate()).inSeconds.abs() > 90;
+      if (eski) {
+        await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
+      }
+    } catch (_) {}
   }
 
   /// ARANAN: gelen aramayı reddeder.

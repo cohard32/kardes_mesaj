@@ -29,6 +29,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
   final _arama = AramaServisi.instance;
   StreamSubscription? _sub;
   Timer? _sayac;
+  Timer? _zamanAsimi;
   int _saniye = 0;
   bool _micKapali = false;
   bool _kameraKapali = false;
@@ -50,11 +51,18 @@ class _AramaEkraniState extends State<AramaEkrani> {
         _kapat();
       }
     });
+    // Karşı taraf 45 sn içinde katılmazsa aramayı kapat.
+    _zamanAsimi = Timer(const Duration(seconds: 45), () {
+      if (!_kapandi && _arama.karsiUid.value == null) {
+        _kapat(mesaj: 'Cevap verilmedi');
+      }
+    });
   }
 
   void _baglantiKontrol() {
-    if (_arama.karsiUid.value != null && _sayac == null) {
-      _sayac = Timer.periodic(const Duration(seconds: 1), (_) {
+    if (_arama.karsiUid.value != null) {
+      _zamanAsimi?.cancel();
+      _sayac ??= Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _saniye++);
       });
     }
@@ -63,6 +71,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
   @override
   void dispose() {
     _sayac?.cancel();
+    _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     _sub?.cancel();
     if (!_kapandi) _arama.bitir();
@@ -73,6 +82,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (_kapandi) return;
     _kapandi = true;
     _sayac?.cancel();
+    _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     await _sub?.cancel();
     await _arama.bitir();
