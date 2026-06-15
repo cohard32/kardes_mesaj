@@ -73,7 +73,12 @@ class AramaServisi {
     ));
 
     e.registerEventHandler(RtcEngineEventHandler(
-      onJoinChannelSuccess: (connection, elapsed) => katildi.value = true,
+      onJoinChannelSuccess: (connection, elapsed) {
+        katildi.value = true;
+        // Hoparlör yönlendirmesi ANCAK kanala katıldıktan sonra ayarlanabilir;
+        // önce çağrılırsa ERR_NOT_READY (-3) verir. Hata olursa yok say.
+        e.setEnableSpeakerphone(tip == AramaTipi.video).catchError((_) {});
+      },
       onUserJoined: (connection, remoteUid, elapsed) =>
           karsiUid.value = remoteUid,
       onUserOffline: (connection, remoteUid, reason) => karsiUid.value = null,
@@ -86,7 +91,6 @@ class AramaServisi {
     } else {
       await e.disableVideo();
     }
-    await e.setEnableSpeakerphone(tip == AramaTipi.video);
     _engine = e;
   }
 

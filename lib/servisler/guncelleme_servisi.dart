@@ -23,7 +23,7 @@ class GuncellemeServisi {
   // ⚠️ ÖNEMLİ: Bu sürüm pubspec.yaml'daki "version" ile AYNI olmalı.
   // Her release'te ikisini birlikte yükselt. (package_info_plus, Agora ffi
   // çakışması nedeniyle kaldırıldı; sürüm artık derleme-zamanı sabiti.)
-  static const String mevcutSurum = '1.4.2';
+  static const String mevcutSurum = '1.4.3';
 
   /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';
