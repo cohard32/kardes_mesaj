@@ -46,6 +46,9 @@ class AramaServisi {
   /// Kanala başarıyla katıldım mı (yerel önizleme/medya hazır).
   final ValueNotifier<bool> katildi = ValueNotifier<bool>(false);
 
+  /// Son Agora hatası (bağlantı/token/sertifika vb.) — UI'da göstermek için.
+  final ValueNotifier<String?> sonHata = ValueNotifier<String?>(null);
+
   Stream<DocumentSnapshot<Map<String, dynamic>>> aramaDinle() =>
       _aramaDoc.snapshots();
 
@@ -66,6 +69,17 @@ class AramaServisi {
   }
 
   Future<void> _engineHazirla(AramaTipi tip) async {
+    sonHata.value = null;
+    // Önceki motor kalmışsa (yarım kalan/çift tıklama) önce temizle —
+    // iki RtcEngine aynı anda olursa Agora hata verir.
+    if (_engine != null) {
+      try {
+        await _engine?.release();
+      } catch (_) {}
+      _engine = null;
+      karsiUid.value = null;
+      katildi.value = false;
+    }
     final e = createAgoraRtcEngine();
     await e.initialize(const RtcEngineContext(
       appId: appId,
@@ -74,14 +88,31 @@ class AramaServisi {
 
     e.registerEventHandler(RtcEngineEventHandler(
       onJoinChannelSuccess: (connection, elapsed) {
+        debugPrint('Agora: kanala katıldım → ${connection.channelId}');
         katildi.value = true;
         // Hoparlör yönlendirmesi ANCAK kanala katıldıktan sonra ayarlanabilir;
         // önce çağrılırsa ERR_NOT_READY (-3) verir. Hata olursa yok say.
         e.setEnableSpeakerphone(tip == AramaTipi.video).catchError((_) {});
       },
-      onUserJoined: (connection, remoteUid, elapsed) =>
-          karsiUid.value = remoteUid,
-      onUserOffline: (connection, remoteUid, reason) => karsiUid.value = null,
+      onUserJoined: (connection, remoteUid, elapsed) {
+        debugPrint('Agora: karşı taraf katıldı → uid=$remoteUid');
+        karsiUid.value = remoteUid;
+      },
+      onUserOffline: (connection, remoteUid, reason) {
+        debugPrint('Agora: karşı taraf ayrıldı → $reason');
+        karsiUid.value = null;
+      },
+      onError: (err, msg) {
+        debugPrint('Agora HATA: $err — $msg');
+        // Token/sertifika hatası (en olası kök neden) burada görünür.
+        sonHata.value = '$err: $msg';
+      },
+      onConnectionStateChanged: (connection, state, reason) {
+        debugPrint('Agora bağlantı durumu: $state ($reason)');
+        if (state == ConnectionStateType.connectionStateFailed) {
+          sonHata.value = 'Bağlantı başarısız ($reason)';
+        }
+      },
     ));
 
     await e.enableAudio();
@@ -160,10 +191,12 @@ class AramaServisi {
       if (d == null) return;
       final durum = d['durum'];
       if (durum != 'cagriliyor' && durum != 'kabul') return;
+      final benimki = d['arayan'] == _uid; // kendi yarım kalan aramam
       final ts = d['zaman'];
       final eski = ts is! Timestamp ||
           DateTime.now().difference(ts.toDate()).inSeconds.abs() > 90;
-      if (eski) {
+      // Kendi yarım kalan aramam VEYA 90 sn'den eski herhangi bir arama → temizle.
+      if (benimki || eski) {
         await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
       }
     } catch (_) {}

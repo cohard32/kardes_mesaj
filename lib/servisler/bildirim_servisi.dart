@@ -56,9 +56,29 @@ class BildirimServisi {
   BildirimServisi._();
   static final BildirimServisi instance = BildirimServisi._();
 
-  // AndroidManifest'teki default_notification_channel_id ile AYNI olmalı.
-  static const String _kanalId = 'kardes_mesaj_kanal';
-  static const String _kanalAdi = 'Kardeş Mesaj Bildirimleri';
+  // AndroidManifest default_notification_channel_id = _kanalVarsayilan.
+  // Android 8+'da bildirim sesi KANALA kilitlidir → her ses için ayrı kanal.
+  static const String _kanalVarsayilan = 'kardes_mesaj_kanal';
+  static const String _kanalSessiz = 'kardes_mesaj_kanal_sessiz';
+  static const String _kanalKedi = 'kardes_mesaj_kanal_kedi';
+  static const String _kanalCingirak = 'kardes_mesaj_kanal_cingirak';
+  static const String _kanalOzel = 'kardes_mesaj_kanal_ozel';
+
+  /// Seçili sese göre aktif bildirim kanalı id'si.
+  String get aktifKanalId {
+    switch (AyarServisi.instance.bildirimSesi.value) {
+      case 'sessiz':
+        return _kanalSessiz;
+      case 'kedi':
+        return _kanalKedi;
+      case 'cingirak':
+        return _kanalCingirak;
+      case 'ozel':
+        return _kanalOzel;
+      default:
+        return _kanalVarsayilan;
+    }
+  }
 
   final FirebaseMessaging _mesajlasma = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _yerel =
@@ -83,20 +103,75 @@ class BildirimServisi {
       settings: const InitializationSettings(android: androidInit),
     );
 
-    const kanal = AndroidNotificationChannel(
-      _kanalId,
-      _kanalAdi,
-      description: 'Yeni mesaj bildirimleri',
-      importance: Importance.high,
-    );
-    await _yerel
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(kanal);
+    await _kanallariKur();
 
     // 3) Uygulama AÇIKKEN gelen mesajı elle göster (foreground'da sistem
     //    otomatik göstermez)
     FirebaseMessaging.onMessage.listen(_foregroundGoster);
+  }
+
+  AndroidFlutterLocalNotificationsPlugin? get _android =>
+      _yerel.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+
+  /// Tüm ses kanallarını oluşturur (varsayılan/sessiz/kedi/çıngırak + özel).
+  Future<void> _kanallariKur() async {
+    final a = _android;
+    if (a == null) return;
+    await a.createNotificationChannel(const AndroidNotificationChannel(
+      _kanalVarsayilan, 'Varsayılan',
+      description: 'Yeni mesaj bildirimleri',
+      importance: Importance.high,
+    ));
+    await a.createNotificationChannel(const AndroidNotificationChannel(
+      _kanalSessiz, 'Sessiz',
+      importance: Importance.high,
+      playSound: false,
+    ));
+    await a.createNotificationChannel(const AndroidNotificationChannel(
+      _kanalKedi, 'Yavru Kedi',
+      importance: Importance.high,
+      sound: RawResourceAndroidNotificationSound('kedi'),
+    ));
+    await a.createNotificationChannel(const AndroidNotificationChannel(
+      _kanalCingirak, 'Çıngırak',
+      importance: Importance.high,
+      sound: RawResourceAndroidNotificationSound('cingirak'),
+    ));
+    await _ozelKanaliKur();
+  }
+
+  /// Özel ses kanalını kullanıcının seçtiği URI ile (yeniden) kurar.
+  /// Android kanalın sesini sonradan değiştirmez → önce sil, sonra oluştur.
+  Future<void> _ozelKanaliKur() async {
+    final a = _android;
+    if (a == null) return;
+    await a.deleteNotificationChannel(channelId: _kanalOzel);
+    final uri = AyarServisi.instance.ozelSesUri.value;
+    if (uri != null && uri.isNotEmpty) {
+      await a.createNotificationChannel(AndroidNotificationChannel(
+        _kanalOzel, 'Özel Ses',
+        importance: Importance.high,
+        sound: UriAndroidNotificationSound(uri),
+      ));
+    }
+  }
+
+  /// Ses seçimi değişince çağrılır: özel kanalı tazeler + tercihi Firestore'a
+  /// yayınlar (karşı taraf push'u bu kanalı kullanır → kapalıyken bile doğru ses).
+  Future<void> sesGuncelle() async {
+    await _ozelKanaliKur();
+    await kanalYayinla();
+  }
+
+  /// Aktif kanal id'sini Firestore'a yazar.
+  Future<void> kanalYayinla() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    await _kullanicilar.doc(uid).set(
+      {'bildirimKanali': aktifKanalId},
+      SetOptions(merge: true),
+    );
   }
 
   void _foregroundGoster(RemoteMessage message) {
@@ -107,18 +182,18 @@ class BildirimServisi {
     final ayar = AyarServisi.instance;
     if (!ayar.bildirimAcik.value) return; // bildirim kapalıysa gösterme
 
+    // Ses, seçili kanaldan gelir (kedi/çıngırak/özel/sessiz/varsayılan).
     _yerel.show(
       id: bildirim.hashCode,
       title: bildirim.title,
       body: bildirim.body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          _kanalId,
-          _kanalAdi,
+          aktifKanalId,
+          'Kardeş Mesaj',
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',
-          playSound: !ayar.sessizMi,
           enableVibration: ayar.titresimAcik.value,
         ),
       ),
@@ -140,6 +215,9 @@ class BildirimServisi {
       }, SetOptions(merge: true));
     }
 
+    // Seçili bildirim kanalını da yayınla (karşı taraf push'ta kullanır)
+    await kanalYayinla();
+
     // Token zamanla yenilenebilir — değişince güncelle
     _mesajlasma.onTokenRefresh.listen((yeniToken) {
       _kullanicilar.doc(kullanici.uid).set(
@@ -156,11 +234,12 @@ class BildirimServisi {
     required String baslik,
     required String govde,
   }) async {
-    await _push(mesajAlanlari: {
+    await _push(kur: (hedefKanal) => {
       'notification': {'title': baslik, 'body': govde},
       'android': {
         'priority': 'high',
-        'notification': {'channel_id': _kanalId},
+        // Karşı tarafın SEÇTİĞİ kanal → kendi sesini duyar (kapalıyken bile)
+        'notification': {'channel_id': hedefKanal},
       },
     });
   }
@@ -172,7 +251,7 @@ class BildirimServisi {
     required String tip,
     required String kanal,
   }) async {
-    await _push(mesajAlanlari: {
+    await _push(kur: (_) => {
       'data': {
         'tur': 'arama',
         'arayan': arayan,
@@ -183,19 +262,25 @@ class BildirimServisi {
     });
   }
 
-  /// FCM HTTP v1 ortak gönderim: karşı tarafın token'ını bulur, service account
-  /// ile OAuth2 alır, [mesajAlanlari]'nı `message` gövdesine ekleyip yollar.
-  Future<void> _push({required Map<String, dynamic> mesajAlanlari}) async {
+  /// FCM HTTP v1 ortak gönderim: karşı tarafın token'ını + seçtiği bildirim
+  /// kanalını bulur, service account ile OAuth2 alır, [kur](hedefKanal) ile
+  /// `message` gövdesini oluşturup yollar.
+  Future<void> _push({
+    required Map<String, dynamic> Function(String hedefKanal) kur,
+  }) async {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) return;
 
-      // Karşı tarafın token'ını bul
+      // Karşı tarafın token'ı + seçtiği bildirim kanalı
       final snap = await _kullanicilar.get();
       String? hedefToken;
+      var hedefKanal = _kanalVarsayilan;
       for (final doc in snap.docs) {
         if (doc.id != uid) {
-          hedefToken = doc.data()['fcmToken'] as String?;
+          final d = doc.data();
+          hedefToken = d['fcmToken'] as String?;
+          hedefKanal = (d['bildirimKanali'] as String?) ?? _kanalVarsayilan;
           if (hedefToken != null) break;
         }
       }
@@ -222,7 +307,7 @@ class BildirimServisi {
           url,
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'message': {'token': hedefToken, ...mesajAlanlari},
+            'message': {'token': hedefToken, ...kur(hedefKanal)},
           }),
         );
         if (yanit.statusCode != 200) {

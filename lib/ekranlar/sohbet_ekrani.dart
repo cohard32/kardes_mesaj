@@ -91,14 +91,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       final d = doc.data();
       if (d == null) return;
       final kanal = d['kanal'] as String?;
-      final ts = d['zaman'];
-      // Sadece TAZE (son 90 sn) çağrıları aç — eski/stale doküman titremeye yol açmasın.
-      final taze = ts is Timestamp &&
-          DateTime.now().difference(ts.toDate()).inSeconds.abs() < 90;
+      // Gelen arama: durum 'cagriliyor', arayan ben değilim, bu kanalı daha
+      // önce açmadım. (Saat-tabanlı tazelik kontrolü KALDIRILDI — telefon saati
+      // farklıysa gelen arama ekranını açmıyordu; stale kayıtlar
+      // eskiAramayiTemizle + dedup ile yönetiliyor.)
       if (d['durum'] == 'cagriliyor' &&
           d['arayan'] != _uid &&
           kanal != null &&
-          taze &&
           _gelenAramaKanali != kanal) {
         _gelenAramaKanali = kanal;
         Navigator.of(context)

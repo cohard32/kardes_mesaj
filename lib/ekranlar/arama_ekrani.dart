@@ -141,13 +141,29 @@ class _AramaEkraniState extends State<AramaEkrani> {
           return Container(
             color: Renkler.zemin,
             alignment: Alignment.center,
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: const [
-                CircularProgressIndicator(color: Renkler.accent),
-                SizedBox(height: 16),
-                Text('Bağlanıyor...',
+              children: [
+                const CircularProgressIndicator(color: Renkler.accent),
+                const SizedBox(height: 16),
+                const Text('Bağlanıyor...',
                     style: TextStyle(color: Renkler.metinSoluk)),
+                // Agora bağlantı/token hatası varsa göster (tanı için).
+                ValueListenableBuilder<String?>(
+                  valueListenable: _arama.sonHata,
+                  builder: (_, hata, _) => hata == null
+                      ? const SizedBox.shrink()
+                      : Padding(
+                          padding: const EdgeInsets.only(top: 14),
+                          child: Text(
+                            'Bağlantı hatası: $hata',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                color: Colors.redAccent, fontSize: 13),
+                          ),
+                        ),
+                ),
               ],
             ),
           );
@@ -319,24 +335,33 @@ class _GelenAramaEkraniState extends State<GelenAramaEkrani> {
 
   Future<void> _kabul() async {
     setState(() => _islemde = true);
-    final ok = await _arama.kabulEt(widget.kanal, widget.tip);
-    if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
-      );
-      Navigator.of(context).pop();
-      return;
-    }
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => AramaEkrani(
-          kanal: widget.kanal,
-          tip: widget.tip,
-          baslik: widget.arayan,
+    try {
+      final ok = await _arama.kabulEt(widget.kanal, widget.tip);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
+        );
+        Navigator.of(context).pop();
+        return;
+      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => AramaEkrani(
+            kanal: widget.kanal,
+            tip: widget.tip,
+            baslik: widget.arayan,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      // kabulEt hata fırlatırsa (Agora) ekran takılı kalmasın, hatayı göster.
+      if (!mounted) return;
+      setState(() => _islemde = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kabul edilemedi: $e')),
+      );
+    }
   }
 
   Future<void> _reddet() async {

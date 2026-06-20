@@ -12,8 +12,11 @@ class AyarServisi {
   // Varsayılan değerlerle başlar; baslat() ile kayıttan yüklenir.
   final ValueNotifier<bool> bildirimAcik = ValueNotifier<bool>(true);
   final ValueNotifier<bool> titresimAcik = ValueNotifier<bool>(true);
-  // 'varsayilan' | 'sessiz' (ileride assets/sesler içindeki özel sesler eklenir)
+  // 'varsayilan' | 'sessiz' | 'kedi' | 'cingirak' | 'ozel'
   final ValueNotifier<String> bildirimSesi = ValueNotifier<String>('varsayilan');
+  // 'ozel' seçiliyse: kullanıcının telefondan seçtiği sesin content:// URI'si + adı
+  final ValueNotifier<String?> ozelSesUri = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> ozelSesAdi = ValueNotifier<String?>(null);
 
   /// main() içinde bir kez çağrılır.
   Future<void> baslat() async {
@@ -21,6 +24,16 @@ class AyarServisi {
     bildirimAcik.value = _prefs?.getBool('bildirimAcik') ?? true;
     titresimAcik.value = _prefs?.getBool('titresimAcik') ?? true;
     bildirimSesi.value = _prefs?.getString('bildirimSesi') ?? 'varsayilan';
+    ozelSesUri.value = _prefs?.getString('ozelSesUri');
+    ozelSesAdi.value = _prefs?.getString('ozelSesAdi');
+  }
+
+  /// Telefondan seçilen özel sesi kaydeder.
+  Future<void> ozelSesAyarla(String uri, String ad) async {
+    ozelSesUri.value = uri;
+    ozelSesAdi.value = ad;
+    await _prefs?.setString('ozelSesUri', uri);
+    await _prefs?.setString('ozelSesAdi', ad);
   }
 
   Future<void> bildirimAcikAyarla(bool deger) async {

@@ -38,18 +38,22 @@ void _callkitDinle() {
   FlutterCallkitIncoming.onEvent.listen((event) async {
     switch (event) {
       case CallEventActionCallAccept():
-        final bilgi = await AramaServisi.instance.aktifArama();
-        final kanal = bilgi?['kanal'] as String?;
-        if (kanal == null) return;
-        final tip = aramaTipiCoz(bilgi?['tip'] as String?);
-        final ok = await AramaServisi.instance.kabulEt(kanal, tip);
-        if (ok) {
-          navigatorKey.currentState?.push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
-            ),
-          );
+        try {
+          final bilgi = await AramaServisi.instance.aktifArama();
+          final kanal = bilgi?['kanal'] as String?;
+          if (kanal == null) return;
+          final tip = aramaTipiCoz(bilgi?['tip'] as String?);
+          final ok = await AramaServisi.instance.kabulEt(kanal, tip);
+          if (ok) {
+            navigatorKey.currentState?.push(
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+              ),
+            );
+          }
+        } catch (e) {
+          debugPrint('CallKit kabul hatası: $e');
         }
         break;
       case CallEventActionCallDecline():
