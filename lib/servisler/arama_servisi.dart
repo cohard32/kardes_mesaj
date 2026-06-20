@@ -1,9 +1,11 @@
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:agora_token_service/agora_token_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'bildirim_servisi.dart';
 
 enum AramaTipi { video, ses }
@@ -126,8 +128,19 @@ class AramaServisi {
   }
 
   Future<void> _katil(String kanal) async {
+    // Projede App Certificate açık → token ZORUNLU. Token'ı uygulama içinde
+    // üretiyoruz (kartsız, backend yok). uid '0' = herhangi bir uid'e izin verir.
+    final token = RtcTokenBuilder.build(
+      appId: appId,
+      appCertificate: agoraSertifika,
+      channelName: kanal,
+      uid: '0',
+      role: RtcRole.publisher,
+      expireTimestamp:
+          DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400, // 24 saat
+    );
     await _engine?.joinChannel(
-      token: '',
+      token: token,
       channelId: kanal,
       uid: 0,
       options: const ChannelMediaOptions(),

@@ -54,3 +54,6 @@ assets/*service*account*.json
 
 # Gradle build raporlari/artefaktlari
 android/build/
+
+# Gizli Agora App Certificate (token uretimi)
+lib/gizli.dart
