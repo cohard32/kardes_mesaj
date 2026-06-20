@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Bildirim sesleri koddan SADECE string adıyla (RawResourceAndroidNotificationSound)
+  kullanılıyor → kaynak optimizasyonu/küçültücü bunları "kullanılmıyor" sanıp
+  silebiliyor. Bu dosya onları açıkça KORUR (APK'da kalmalarını sağlar).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/kedi,@raw/kedi2,@raw/kedi3,@raw/kedi4,@raw/cingirak"
+    tools:shrinkMode="safe" />
