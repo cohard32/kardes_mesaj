@@ -3,6 +3,7 @@ import 'package:agora_token_service/agora_token_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
@@ -47,6 +48,11 @@ class AramaServisi {
 
   /// Kanala başarıyla katıldım mı (yerel önizleme/medya hazır).
   final ValueNotifier<bool> katildi = ValueNotifier<bool>(false);
+
+  // CallKit ile (uygulama KAPALIYKEN) kabul edilip henüz ekranı açılmamış arama.
+  // Soğuk başlangıçta navigator hazır olmayabilir → SohbetEkrani açılınca işler.
+  String? bekleyenKanal;
+  AramaTipi? bekleyenTip;
 
   /// Son Agora hatası (bağlantı/token/sertifika vb.) — UI'da göstermek için.
   final ValueNotifier<String?> sonHata = ValueNotifier<String?>(null);
@@ -185,6 +191,10 @@ class AramaServisi {
   Future<bool> kabulEt(String kanal, AramaTipi tip) async {
     if (!await _izinIste(tip)) return false;
     try {
+      // Varsa CallKit gelen-arama bildirimini kapat (çift UI olmasın).
+      try {
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (_) {}
       await _engineHazirla(tip);
       await _katil(kanal);
       await _aramaDoc.set({'durum': 'kabul'}, SetOptions(merge: true));
@@ -226,12 +236,17 @@ class AramaServisi {
       await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
     } catch (_) {}
     try {
+      await FlutterCallkitIncoming.endAllCalls(); // varsa CallKit'i kapat
+    } catch (_) {}
+    try {
       await _engine?.leaveChannel();
       await _engine?.release();
     } catch (_) {}
     _engine = null;
     karsiUid.value = null;
     katildi.value = false;
+    bekleyenKanal = null;
+    bekleyenTip = null;
   }
 
   // ---- Arama içi kontroller ----

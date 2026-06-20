@@ -82,6 +82,23 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _guncellemeKontrol();
     AramaServisi.instance.eskiAramayiTemizle(); // kalmış stale aramayı temizle
     _gelenAramaDinle();
+    // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
+  }
+
+  void _bekleyenAramayiAc() {
+    final s = AramaServisi.instance;
+    final kanal = s.bekleyenKanal;
+    final tip = s.bekleyenTip;
+    if (kanal != null && tip != null && mounted) {
+      s.bekleyenKanal = null;
+      s.bekleyenTip = null;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+        ),
+      );
+    }
   }
 
   // Uygulama AÇIKKEN gelen aramayı yakalar → gelen arama ekranını açar.

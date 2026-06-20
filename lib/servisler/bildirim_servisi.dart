@@ -41,6 +41,7 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       isCustomNotification: true,
       isShowFullLockedScreen: true,
       isShowCallID: false,
+      isImportant: true,
       ringtonePath: 'system_ringtone_default',
       textAccept: 'Kabul Et',
       textDecline: 'Reddet',
@@ -58,26 +59,47 @@ class BildirimServisi {
 
   // AndroidManifest default_notification_channel_id = _kanalVarsayilan.
   // Android 8+'da bildirim sesi KANALA kilitlidir → her ses için ayrı kanal.
+  // ⚠️ Kanalın sesi sonradan DEĞİŞTİRİLEMEZ. Ses çalmıyorsa kilitli eski
+  // kanal sebebidir → _kanalVer'i artır (yeni id'ler TAZE oluşur, ses gelir).
+  static const String _kanalVer = 'v2';
   static const String _kanalVarsayilan = 'kardes_mesaj_kanal';
-  static const String _kanalSessiz = 'kardes_mesaj_kanal_sessiz';
-  static const String _kanalKedi = 'kardes_mesaj_kanal_kedi';
-  static const String _kanalCingirak = 'kardes_mesaj_kanal_cingirak';
-  static const String _kanalOzel = 'kardes_mesaj_kanal_ozel';
+
+  // Eski (kilitli/sessiz kalmış olabilecek) kanallar — açılışta silinir.
+  static const List<String> _eskiKanallar = [
+    'kardes_mesaj_kanal_sessiz',
+    'kardes_mesaj_kanal_kedi',
+    'kardes_mesaj_kanal_cingirak',
+    'kardes_mesaj_kanal_ozel',
+  ];
+
+  // Kedi sesleri: seçim anahtarı → gösterim adı (raw kaynak adı = anahtarın aynısı)
+  static const Map<String, String> _kediSesleri = {
+    'kedi': 'Yavru Kedi 1 🐱',
+    'kedi2': 'Yavru Kedi 2 😻',
+    'kedi3': 'Yavru Kedi 3 🐈',
+    'kedi4': 'Yavru Kedi 4 🐾',
+  };
+
+  String _kanalIdFor(String secim) =>
+      secim == 'varsayilan' ? _kanalVarsayilan : 'km_${_kanalVer}_$secim';
 
   /// Seçili sese göre aktif bildirim kanalı id'si.
-  String get aktifKanalId {
-    switch (AyarServisi.instance.bildirimSesi.value) {
-      case 'sessiz':
-        return _kanalSessiz;
-      case 'kedi':
-        return _kanalKedi;
-      case 'cingirak':
-        return _kanalCingirak;
-      case 'ozel':
-        return _kanalOzel;
-      default:
-        return _kanalVarsayilan;
+  String get aktifKanalId =>
+      _kanalIdFor(AyarServisi.instance.bildirimSesi.value);
+
+  /// Seçili sesin AndroidNotificationSound karşılığı (Android <8 + detayda).
+  AndroidNotificationSound? _sesFor(String secim) {
+    if (_kediSesleri.containsKey(secim)) {
+      return RawResourceAndroidNotificationSound(secim);
     }
+    if (secim == 'cingirak') {
+      return const RawResourceAndroidNotificationSound('cingirak');
+    }
+    if (secim == 'ozel') {
+      final u = AyarServisi.instance.ozelSesUri.value;
+      return (u == null || u.isEmpty) ? null : UriAndroidNotificationSound(u);
+    }
+    return null; // varsayilan (sistem) / sessiz
   }
 
   final FirebaseMessaging _mesajlasma = FirebaseMessaging.instance;
@@ -114,29 +136,44 @@ class BildirimServisi {
       _yerel.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
 
-  /// Tüm ses kanallarını oluşturur (varsayılan/sessiz/kedi/çıngırak + özel).
+  /// Tüm ses kanallarını oluşturur. Önce eski/kilitli kanalları siler,
+  /// sonra her sesi TAZE kanalda (doğru sesle) kurar.
   Future<void> _kanallariKur() async {
     final a = _android;
     if (a == null) return;
+
+    // Eski sürüm kanallarını temizle (sesleri kilitli kalmış olabilir)
+    for (final id in _eskiKanallar) {
+      await a.deleteNotificationChannel(channelId: id);
+    }
+
+    // Varsayılan (sistem sesi)
     await a.createNotificationChannel(const AndroidNotificationChannel(
       _kanalVarsayilan, 'Varsayılan',
       description: 'Yeni mesaj bildirimleri',
       importance: Importance.high,
     ));
-    await a.createNotificationChannel(const AndroidNotificationChannel(
-      _kanalSessiz, 'Sessiz',
+    // Sessiz
+    await a.createNotificationChannel(AndroidNotificationChannel(
+      _kanalIdFor('sessiz'), 'Sessiz',
       importance: Importance.high,
       playSound: false,
     ));
-    await a.createNotificationChannel(const AndroidNotificationChannel(
-      _kanalKedi, 'Yavru Kedi',
+    // Kedi sesleri (4 adet)
+    for (final e in _kediSesleri.entries) {
+      await a.createNotificationChannel(AndroidNotificationChannel(
+        _kanalIdFor(e.key), e.value,
+        importance: Importance.high,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound(e.key),
+      ));
+    }
+    // Çıngırak
+    await a.createNotificationChannel(AndroidNotificationChannel(
+      _kanalIdFor('cingirak'), 'Çıngırak',
       importance: Importance.high,
-      sound: RawResourceAndroidNotificationSound('kedi'),
-    ));
-    await a.createNotificationChannel(const AndroidNotificationChannel(
-      _kanalCingirak, 'Çıngırak',
-      importance: Importance.high,
-      sound: RawResourceAndroidNotificationSound('cingirak'),
+      playSound: true,
+      sound: const RawResourceAndroidNotificationSound('cingirak'),
     ));
     await _ozelKanaliKur();
   }
@@ -146,11 +183,11 @@ class BildirimServisi {
   Future<void> _ozelKanaliKur() async {
     final a = _android;
     if (a == null) return;
-    await a.deleteNotificationChannel(channelId: _kanalOzel);
+    await a.deleteNotificationChannel(channelId: _kanalIdFor('ozel'));
     final uri = AyarServisi.instance.ozelSesUri.value;
     if (uri != null && uri.isNotEmpty) {
       await a.createNotificationChannel(AndroidNotificationChannel(
-        _kanalOzel, 'Özel Ses',
+        _kanalIdFor('ozel'), 'Özel Ses',
         importance: Importance.high,
         sound: UriAndroidNotificationSound(uri),
       ));
@@ -182,7 +219,8 @@ class BildirimServisi {
     final ayar = AyarServisi.instance;
     if (!ayar.bildirimAcik.value) return; // bildirim kapalıysa gösterme
 
-    // Ses, seçili kanaldan gelir (kedi/çıngırak/özel/sessiz/varsayılan).
+    // Ses hem kanaldan (Android 8+) hem detaydan (8 altı) gelir.
+    final secim = ayar.bildirimSesi.value;
     _yerel.show(
       id: bildirim.hashCode,
       title: bildirim.title,
@@ -194,6 +232,8 @@ class BildirimServisi {
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',
+          playSound: secim != 'sessiz',
+          sound: _sesFor(secim),
           enableVibration: ayar.titresimAcik.value,
         ),
       ),

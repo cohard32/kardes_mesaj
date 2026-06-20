@@ -45,12 +45,19 @@ void _callkitDinle() {
           final tip = aramaTipiCoz(bilgi?['tip'] as String?);
           final ok = await AramaServisi.instance.kabulEt(kanal, tip);
           if (ok) {
-            navigatorKey.currentState?.push(
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
-              ),
-            );
+            final nav = navigatorKey.currentState;
+            if (nav != null) {
+              nav.push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+                ),
+              );
+            } else {
+              // Soğuk başlangıç: navigator henüz yok → SohbetEkrani açınca açılır
+              AramaServisi.instance.bekleyenKanal = kanal;
+              AramaServisi.instance.bekleyenTip = tip;
+            }
           }
         } catch (e) {
           debugPrint('CallKit kabul hatası: $e');

@@ -100,8 +100,23 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
           _sesTile(deger: 'sessiz', baslik: 'Sessiz'),
           _sesTile(
             deger: 'kedi',
-            baslik: 'Yavru Kedi 🐱',
+            baslik: 'Yavru Kedi 1 🐱',
             onizlemeAsset: 'sesler/kedi.mp3',
+          ),
+          _sesTile(
+            deger: 'kedi2',
+            baslik: 'Yavru Kedi 2 😻',
+            onizlemeAsset: 'sesler/kedi2.mp3',
+          ),
+          _sesTile(
+            deger: 'kedi3',
+            baslik: 'Yavru Kedi 3 🐈',
+            onizlemeAsset: 'sesler/kedi3.mp3',
+          ),
+          _sesTile(
+            deger: 'kedi4',
+            baslik: 'Yavru Kedi 4 🐾',
+            onizlemeAsset: 'sesler/kedi4.mp3',
           ),
           _sesTile(
             deger: 'cingirak',
