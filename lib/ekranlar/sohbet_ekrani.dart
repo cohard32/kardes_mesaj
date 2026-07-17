@@ -62,10 +62,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // Emoji paneli
   bool _emojiAcik = false;
 
-  // Gelen arama dinleyicisi (uygulama açıkken)
-  StreamSubscription? _aramaSub;
-  String? _gelenAramaKanali; // o an gösterilen gelen-arama kanalı (dedupe)
-
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   @override
@@ -82,7 +78,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     });
     _guncellemeKontrol();
     AramaServisi.instance.eskiAramayiTemizle(); // kalmış stale aramayı temizle
-    _gelenAramaDinle();
     _aramaIzinleriniKontrolEt();
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
@@ -126,34 +121,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
   }
 
-  // Uygulama AÇIKKEN gelen aramayı yakalar → gelen arama ekranını açar.
-  void _gelenAramaDinle() {
-    _aramaSub = AramaServisi.instance.aramaDinle().listen((doc) {
-      if (!mounted) return;
-      final d = doc.data();
-      if (d == null) return;
-      final kanal = d['kanal'] as String?;
-      // Gelen arama: durum 'cagriliyor', arayan ben değilim, bu kanalı daha
-      // önce açmadım. (Saat-tabanlı tazelik kontrolü KALDIRILDI — telefon saati
-      // farklıysa gelen arama ekranını açmıyordu; stale kayıtlar
-      // eskiAramayiTemizle + dedup ile yönetiliyor.)
-      if (d['durum'] == 'cagriliyor' &&
-          d['arayan'] != _uid &&
-          kanal != null &&
-          _gelenAramaKanali != kanal) {
-        _gelenAramaKanali = kanal;
-        Navigator.of(context)
-            .push(MaterialPageRoute<void>(
-              builder: (_) => GelenAramaEkrani(
-                arayan: (d['arayanEposta'] ?? 'Kardeş').toString(),
-                kanal: kanal,
-                tip: aramaTipiCoz(d['tip'] as String?),
-              ),
-            ))
-            .then((_) => _gelenAramaKanali = null);
-      }
-    });
-  }
+  // NOT: Gelen arama ekranı ARTIK BURADA AÇILMIYOR.
+  // Tek akış: gelen arama HER durumda (açık/arka plan/kapalı) CallKit ile
+  // gösterilir (bkz. bildirim_servisi.gelenAramayiGoster). Eskiden buradaki
+  // Firestore dinleyicisi de bir ekran açıyordu ve CallKit'in tam ekran
+  // aktivitesiyle YARIŞIYORDU (yeşil ekran açılıp anında mavi CallKit'e
+  // dönmesinin sebebi buydu). Kabul edilince main.dart CallKit olayını
+  // yakalayıp AramaEkrani'nı açar.
 
   // Görüntülü/sesli arama başlat → arama ekranını aç. Hata olursa ekranda göster.
   Future<void> _aramaBaslat(AramaTipi tip) async {
@@ -185,7 +159,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _yaziyorTimer?.cancel();
     _kayitTimer?.cancel();
     _ampSub?.cancel();
-    _aramaSub?.cancel();
     _presence.cevrimdisiYap();
     _kayitci.dispose();
     _mesajCtrl.dispose();
@@ -880,15 +853,19 @@ class _MesajBalonu extends StatelessWidget {
                 bottom: mesaj.tepki != null ? 16 : 4,
               ),
               padding: EdgeInsets.all(medyaMi ? 5 : 12),
-              // Kendi balonun: neon gradient + glow. Karşı taraf: koyu cam yüzey.
-              // Organik köşe — dip köşe kısa.
+              // Kendi balonun: neon gradient + ÇOK HAFİF glow (göz yormasın).
+              // Karşı taraf: zeminden net ayrışan koyu yüzey, GLOW YOK.
+              // Organik köşe — dip köşe kısa. 3D his gradient + iç ışıktan gelir.
               decoration: benimMi
-                  ? Kutular.accent(kose: Kose.balonBen)
+                  ? Kutular.accent(
+                      kose: Kose.balonBen,
+                      golge: Golgeler.balonNeon,
+                    )
                   : BoxDecoration(
-                      color: Renkler.yuzey,
+                      gradient: Gradyanlar.balonGelen,
                       borderRadius: Kose.balonKarsi,
-                      border: Border.all(color: Renkler.kenarSolgun),
-                      boxShadow: Golgeler.balon,
+                      border: Border.all(color: Renkler.kenarGuclu),
+                      boxShadow: Golgeler.balonGelen,
                     ),
               child: Stack(
                 children: [
@@ -1564,18 +1541,37 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
 
   @override
   Widget build(BuildContext context) {
+    // Panel: sistem klavyesi gibi durmasın → tema yüzeyi, organik üst köşe,
+    // neon kenar ve tutamaç.
     return Container(
-      height: 256,
-      decoration: const BoxDecoration(
-        color: Renkler.yuzey,
+      height: 272,
+      decoration: BoxDecoration(
+        gradient: Gradyanlar.yuzey,
         borderRadius: Kose.panel,
+        border: Border(
+          top: BorderSide(color: Renkler.kenarGuclu),
+          left: BorderSide(color: Renkler.kenar),
+          right: BorderSide(color: Renkler.kenar),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
+          // Tutamaç
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 2),
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Renkler.kenarGuclu,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
           Expanded(
             child: GridView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 44,
                 mainAxisSpacing: 2,
@@ -1595,27 +1591,42 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
             ),
           ),
           Container(
-            height: 46,
+            height: 50,
             decoration: const BoxDecoration(
               color: Renkler.zeminDerin,
-              border: Border(top: BorderSide(color: Renkler.kenarSolgun)),
+              border: Border(top: BorderSide(color: Renkler.kenar)),
             ),
             child: Row(
               children: [
                 Expanded(
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
                     itemCount: _ikonlar.length,
                     itemBuilder: (_, i) {
                       final secili = i == _kategori;
-                      return IconButton(
-                        icon: Icon(
-                          _ikonlar[i],
-                          color:
-                              secili ? Renkler.neon : Renkler.metinSoluk,
-                          size: 22,
+                      // Seçili kategori: neon dolgu rozeti
+                      return GestureDetector(
+                        onTap: () => setState(() => _kategori = i),
+                        child: Container(
+                          width: 42,
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: secili ? Renkler.neonSis : null,
+                            borderRadius: Kose.dugme,
+                            border: Border.all(
+                              color: secili
+                                  ? Renkler.kenarGuclu
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: Icon(
+                            _ikonlar[i],
+                            color: secili ? Renkler.neon : Renkler.metinSoluk,
+                            size: 21,
+                          ),
                         ),
-                        onPressed: () => setState(() => _kategori = i),
                       );
                     },
                   ),

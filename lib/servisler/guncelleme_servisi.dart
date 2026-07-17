@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,29 +6,29 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// GitHub Releases üzerinden uygulama içi otomatik güncelleme.
-/// Ücretsiz: APK + sürüm bilgisi GitHub Releases'e yüklenir, uygulama
-/// her açılışta son sürümü kontrol eder.
+/// GitHub Releases Ã¼zerinden uygulama iÃ§i otomatik gÃ¼ncelleme.
+/// Ãœcretsiz: APK + sÃ¼rÃ¼m bilgisi GitHub Releases'e yÃ¼klenir, uygulama
+/// her aÃ§Ä±lÄ±ÅŸta son sÃ¼rÃ¼mÃ¼ kontrol eder.
 ///
-/// ⚠️ KULLANICI AYARI: Aşağıdaki repo bilgisini kendi GitHub reponla değiştir.
-/// Release tag'i sürüm olmalı (örn. "v1.2.0") ve release'e .apk dosyası eklenmeli.
+/// âš ï¸ KULLANICI AYARI: AÅŸaÄŸÄ±daki repo bilgisini kendi GitHub reponla deÄŸiÅŸtir.
+/// Release tag'i sÃ¼rÃ¼m olmalÄ± (Ã¶rn. "v1.2.0") ve release'e .apk dosyasÄ± eklenmeli.
 class GuncellemeServisi {
   GuncellemeServisi._();
   static final GuncellemeServisi instance = GuncellemeServisi._();
 
-  // GitHub repo bilgisi (otomatik güncelleme buradan release çeker)
+  // GitHub repo bilgisi (otomatik gÃ¼ncelleme buradan release Ã§eker)
   static const String _repoOwner = 'cohard32';
   static const String _repoName = 'kardes_mesaj';
 
-  // ⚠️ ÖNEMLİ: Bu sürüm pubspec.yaml'daki "version" ile AYNI olmalı.
-  // Her release'te ikisini birlikte yükselt. (package_info_plus, Agora ffi
-  // çakışması nedeniyle kaldırıldı; sürüm artık derleme-zamanı sabiti.)
-  static const String mevcutSurum = '1.5.0';
+  // âš ï¸ Ã–NEMLÄ°: Bu sÃ¼rÃ¼m pubspec.yaml'daki "version" ile AYNI olmalÄ±.
+  // Her release'te ikisini birlikte yÃ¼kselt. (package_info_plus, Agora ffi
+  // Ã§akÄ±ÅŸmasÄ± nedeniyle kaldÄ±rÄ±ldÄ±; sÃ¼rÃ¼m artÄ±k derleme-zamanÄ± sabiti.)
+  static const String mevcutSurum = '1.5.1';
 
-  /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
+  /// Repo bilgisi henÃ¼z ayarlanmadÄ±ysa kontrolÃ¼ atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';
 
-  /// Yeni sürüm var mı kontrol eder. Varsa bilgi döner, yoksa null.
+  /// Yeni sÃ¼rÃ¼m var mÄ± kontrol eder. Varsa bilgi dÃ¶ner, yoksa null.
   Future<GuncellemeBilgisi?> kontrolEt() async {
     if (!_ayarliMi) return null;
     try {
@@ -46,7 +46,7 @@ class GuncellemeServisi {
       final tag = (json['tag_name'] as String? ?? '').replaceAll('v', '');
       if (tag.isEmpty || !_yeniMi(mevcut, tag)) return null;
 
-      // .apk uzantılı ilk asset'i bul
+      // .apk uzantÄ±lÄ± ilk asset'i bul
       final assets = json['assets'] as List<dynamic>? ?? [];
       String? apkUrl;
       for (final a in assets) {
@@ -64,12 +64,12 @@ class GuncellemeServisi {
         notlar: json['body'] as String? ?? '',
       );
     } catch (e) {
-      debugPrint('Güncelleme kontrol hatası: $e');
+      debugPrint('GÃ¼ncelleme kontrol hatasÄ±: $e');
       return null;
     }
   }
 
-  /// Yeni sürüm mevcuttan büyük mü? (basit semver karşılaştırması)
+  /// Yeni sÃ¼rÃ¼m mevcuttan bÃ¼yÃ¼k mÃ¼? (basit semver karÅŸÄ±laÅŸtÄ±rmasÄ±)
   bool _yeniMi(String mevcut, String yeni) {
     final m = mevcut.split('.').map((e) => int.tryParse(e) ?? 0).toList();
     final y = yeni.split('.').map((e) => int.tryParse(e) ?? 0).toList();
@@ -82,7 +82,7 @@ class GuncellemeServisi {
     return false;
   }
 
-  /// APK'yı indirir (ilerleme bildirir) ve kurulumu başlatır.
+  /// APK'yÄ± indirir (ilerleme bildirir) ve kurulumu baÅŸlatÄ±r.
   Future<void> indirVeKur(
     String apkUrl,
     void Function(double yuzde) ilerleme,
@@ -96,8 +96,8 @@ class GuncellemeServisi {
       final yanit = await istemci.send(istek);
       final toplam = yanit.contentLength ?? 0;
 
-      // ÖNEMLİ: APK'yı RAM'de biriktirme (büyük APK'da "out of memory" verir),
-      // gelen parçaları doğrudan diske akıt.
+      // Ã–NEMLÄ°: APK'yÄ± RAM'de biriktirme (bÃ¼yÃ¼k APK'da "out of memory" verir),
+      // gelen parÃ§alarÄ± doÄŸrudan diske akÄ±t.
       final sink = dosya.openWrite();
       var indirilen = 0;
       try {
@@ -114,7 +114,7 @@ class GuncellemeServisi {
       istemci.close();
     }
 
-    // Android paket yükleyiciyi açar (REQUEST_INSTALL_PACKAGES izni gerekir)
+    // Android paket yÃ¼kleyiciyi aÃ§ar (REQUEST_INSTALL_PACKAGES izni gerekir)
     await OpenFilex.open(dosya.path);
   }
 }

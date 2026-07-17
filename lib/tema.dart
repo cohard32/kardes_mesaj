@@ -27,6 +27,11 @@ class Renkler {
   /// Yükseltilmiş yüzey (gradient üst tonu)
   static const Color yuzeyYuksek = Color(0xFF14301E);
 
+  /// Karşı tarafın mesaj balonu — zeminden NET ayrışsın diye yüzeyden
+  /// bir tık daha açık (cihazda balonlar zemine karışıyordu).
+  static const Color balonGelen = Color(0xFF16351F);
+  static const Color balonGelenUst = Color(0xFF1D4027); // gradient üst tonu
+
   // --- Kenarlıklar (neon'un düşük opaklıkları) ---
   static const Color kenar = Color(0x24B4FF3C); // ~%14
   static const Color kenarGuclu = Color(0x2EB4FF3C); // ~%18
@@ -68,6 +73,25 @@ class Renkler {
   static const Color cizgi = Color(0xFF14301E);
 }
 
+/// Native katmanlara (CallKit gelen arama ekranı gibi) verilecek renkler.
+/// Onlar `#RRGGBB` string ister → değerler yine [Renkler]'den türetilir,
+/// böylece hiçbir yerde hardcoded hex olmaz.
+class TemaHex {
+  TemaHex._();
+
+  static String _hex(Color c) =>
+      '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+
+  /// Gelen arama ekranı zemini
+  static String get zemin => _hex(Renkler.zemin);
+
+  /// Kabul/aksiyon rengi (neon)
+  static String get neon => _hex(Renkler.neon);
+
+  /// Metin rengi
+  static String get metin => _hex(Renkler.metin);
+}
+
 /// Gradientler. Tasarımdaki 145° ≈ topLeft → bottomRight.
 class Gradyanlar {
   Gradyanlar._();
@@ -101,6 +125,13 @@ class Gradyanlar {
     begin: _bas,
     end: _son,
     colors: [Renkler.yuzeyYuksek, Renkler.yuzey],
+  );
+
+  /// Karşı tarafın balonu — zeminden ayrışan, hafif hacimli koyu yüzey
+  static const LinearGradient balonGelen = LinearGradient(
+    begin: _bas,
+    end: _son,
+    colors: [Renkler.balonGelenUst, Renkler.balonGelen],
   );
 
   /// Ekran zemininin üstündeki yumuşak neon parlaması.
@@ -187,9 +218,22 @@ class Kose {
 class Golgeler {
   Golgeler._();
 
-  /// Neon glow (accent butonlar/balonlar)
+  /// Neon glow (accent BUTONLAR — eylem çağrısı)
   static const List<BoxShadow> neonGlow = [
-    BoxShadow(color: Color(0x59B4FF3C), blurRadius: 18, offset: Offset(0, 5)),
+    BoxShadow(color: Color(0x40B4FF3C), blurRadius: 14, offset: Offset(0, 4)),
+  ];
+
+  /// Mesaj balonu için ÇOK HAFİF glow.
+  /// Cihazda her balon ışık saçıp göz yoruyordu; balonlar sohbet listesinde
+  /// yan yana geldiği için buradaki parlama minimum tutulur.
+  /// (Gelen balonlarda glow YOK — bkz. [balonGelen].)
+  static const List<BoxShadow> balonNeon = [
+    BoxShadow(color: Color(0x1AB4FF3C), blurRadius: 8, offset: Offset(0, 2)),
+  ];
+
+  /// Gelen balon — neon glow YOK, sadece hafif derinlik gölgesi
+  static const List<BoxShadow> balonGelen = [
+    BoxShadow(color: Color(0x40000000), blurRadius: 10, offset: Offset(0, 3)),
   ];
 
   /// Basılıyken kısılmış glow (gömülme hissi)

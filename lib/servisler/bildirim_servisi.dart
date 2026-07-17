@@ -11,22 +11,42 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../tema.dart';
 import 'ayar_servisi.dart';
 
 /// Arka plan / uygulama kapalı mesaj handler'ı.
 /// Top-level (sınıf dışı) olmak ZORUNDA — Android arka planda izole çalıştırır.
 /// Normal mesaj `notification` payload'ı sistem tepsisinde otomatik gösterilir.
-/// Çağrı (data: tur=arama) gelirse uygulama KAPALI olsa bile tam ekran
-/// gelen-arama ekranını (CallKit) gösterir.
+///   data.tur == 'arama'       → tam ekran gelen arama (CallKit)
+///   data.tur == 'arama_iptal' → arayan kapattı, çalmayı DURDUR
 @pragma('vm:entry-point')
 Future<void> arkaplanMesajHandler(RemoteMessage message) async {
-  if (message.data['tur'] == 'arama') {
-    await gelenAramayiGoster(message.data);
+  await aramaMesajiIsle(message.data);
+}
+
+/// Çağrı ile ilgili FCM verisini işler. Hem arka plan handler'ı hem de
+/// uygulama açıkken (onMessage) AYNI yolu kullanır → tek tutarlı akış.
+/// İşlendiyse true döner.
+Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
+  switch (data['tur']) {
+    case 'arama':
+      await gelenAramayiGoster(data);
+      return true;
+    case 'arama_iptal':
+      // Arayan kapattı/vazgeçti → zil sussun, ekran kapansın.
+      try {
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (_) {}
+      return true;
+    default:
+      return false;
   }
 }
 
-/// FCM çağrı verisinden tam ekran "gelen arama" bildirimini gösterir.
-/// Hem arka plan handler'ı hem de uygulama açıkken kullanılır.
+/// GELEN ARAMA — uygulamanın TEK gelen arama ekranı (her durumda bu çalışır:
+/// açık / arka plan / tamamen kapalı). Zil, tam ekran ve kilit ekranı
+/// desteğini işletim sisteminden alır.
+/// Renkler `tema.dart`'tan gelir (native katman hex string ister).
 Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   final kanal = (data['kanal'] ?? 'arama').toString();
   final arayan = (data['arayan'] ?? 'Kardeş').toString();
@@ -38,20 +58,22 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
     handle: video ? 'Görüntülü arama' : 'Sesli arama',
     type: video ? 1 : 0,
     // Zil süresi: arayan tarafın 45 sn zaman aşımıyla uyumlu.
-    // (verilmezse süre belirsiz kalıp erken kesiliyordu)
     duration: 45000,
     extra: <String, dynamic>{'kanal': kanal, 'tip': data['tip']},
-    android: const AndroidParams(
+    android: AndroidParams(
       isCustomNotification: true,
-      // TAM EKRAN AKTİVİTE olarak göster (sadece bildirim değil) → ekran
-      // kapalı/kilitliyken bile gelen arama ekranı açılır. KRİTİK.
+      // TAM EKRAN AKTİVİTE (sadece bildirim değil) → ekran kapalı/kilitliyken
+      // bile gelen arama ekranı açılır ve ekran uyanır.
       isFullScreen: true,
       isShowFullLockedScreen: true,
       isShowCallID: false,
       isImportant: true,
-      // Paketin res/raw içindeki kendi zili. 'system_ringtone_default' GEÇERSİZDİ
-      // (dosya adı bekleniyor) → zil 1 kez çalıp kesiliyordu.
+      // Paketin res/raw içindeki kendi zili (loop'lu çalar).
       ringtonePath: 'ringtone_default',
+      // TEMA: varsayılan MAVİ (#0955fa) yerine uygulamanın neon-yeşil dili
+      backgroundColor: TemaHex.zemin,
+      actionColor: TemaHex.neon,
+      textColor: TemaHex.metin,
       textAccept: 'Kabul Et',
       textDecline: 'Reddet',
     ),
@@ -169,7 +191,15 @@ class BildirimServisi {
 
     // 3) Uygulama AÇIKKEN gelen mesajı elle göster (foreground'da sistem
     //    otomatik göstermez)
-    FirebaseMessaging.onMessage.listen(_foregroundGoster);
+    FirebaseMessaging.onMessage.listen(_gelenMesaj);
+  }
+
+  /// Foreground mesaj yönlendiricisi.
+  /// Çağrı mesajları arka planla AYNI yoldan geçer (CallKit) → uygulama açıkken
+  /// de zil çalar, tek tutarlı akış olur.
+  Future<void> _gelenMesaj(RemoteMessage message) async {
+    if (await aramaMesajiIsle(message.data)) return; // çağrı/iptal ise bitti
+    _foregroundGoster(message); // normal mesaj bildirimi
   }
 
   AndroidFlutterLocalNotificationsPlugin? get _android =>
@@ -358,7 +388,21 @@ class BildirimServisi {
         'tip': tip,
         'kanal': kanal,
       },
-      'android': {'priority': 'high'},
+      'android': {
+        'priority': 'high',
+        // Çağrı anlıktır; gecikirse anlamsız → kuyrukta bekletme.
+        'ttl': '45s',
+      },
+    });
+  }
+
+  /// ARAMA İPTAL push'u — arayan kapatınca/vazgeçince karşı tarafın ZİLİNİ
+  /// susturur. Firestore dinleyicisi karşı taraf KAPALIYKEN çalışmadığı için
+  /// bu push olmadan CallKit çalmaya devam ediyordu (kritik hata).
+  Future<void> karsiTarafaAramaIptal({required String kanal}) async {
+    await _push(kur: (_) => {
+      'data': {'tur': 'arama_iptal', 'kanal': kanal},
+      'android': {'priority': 'high', 'ttl': '45s'},
     });
   }
 

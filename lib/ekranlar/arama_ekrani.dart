@@ -109,32 +109,83 @@ class _AramaEkraniState extends State<AramaEkrani> {
       },
       child: Scaffold(
         backgroundColor: Renkler.zeminDerin,
-        body: Stack(
-          children: [
-            Positioned.fill(child: _uzakGorunum()),
-            // Kendi görüntün — organik köşe + neon kenar
-            if (_video && !_kameraKapali)
-              Positioned(
-                top: 44,
-                right: 16,
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: Kose.kartKose,
-                    border: Border.all(color: Renkler.kenarGuclu),
-                    boxShadow: Golgeler.yuzey,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: SizedBox(
-                    width: 110,
-                    height: 160,
-                    child: _yerelGorunum(),
-                  ),
-                ),
+        // Sesli aramada video yok → dengeli dikey düzen.
+        // Görüntülü aramada video tam ekran → üstü/altı bindirmeli.
+        body: _video ? _videoDuzeni() : _sesliDuzen(),
+      ),
+    );
+  }
+
+  /// Görüntülü arama: uzak görüntü tam ekran, üstte bilgi, altta kontroller.
+  Widget _videoDuzeni() {
+    return Stack(
+      children: [
+        Positioned.fill(child: _uzakGorunum()),
+        // Kendi görüntün — organik köşe + neon kenar
+        if (!_kameraKapali)
+          Positioned(
+            top: 44,
+            right: 16,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: Kose.kartKose,
+                border: Border.all(color: Renkler.kenarGuclu),
+                boxShadow: Golgeler.yuzey,
               ),
-            Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
-            Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: 110,
+                height: 160,
+                child: _yerelGorunum(),
+              ),
+            ),
+          ),
+        Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
+        Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
+      ],
+    );
+  }
+
+  /// Sesli arama: ortada avatar + isim + süre, altta kontroller.
+  /// (Eskiden tek büyük avatar ortada duruyor, üstü/altı boş kalıyordu.)
+  Widget _sesliDuzen() {
+    return Zemin(
+      parlama: const Alignment(0, -0.75),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const Spacer(flex: 3),
+            _avatar(cap: 104),
+            const SizedBox(height: 24),
+            _ustBilgi(),
+            const Spacer(flex: 4),
+            _kontroller(),
+            const SizedBox(height: 24),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Sesli aramada gösterilen gradient avatar.
+  Widget _avatar({required double cap}) {
+    return Container(
+      width: cap,
+      height: cap,
+      decoration: BoxDecoration(
+        gradient: Gradyanlar.yesil,
+        borderRadius: Kose.kartKose,
+        boxShadow: Golgeler.yuzey,
+      ),
+      child: Stack(
+        children: [
+          const Positioned.fill(
+            child: IcIsik(kose: Kose.kartKose, guclu: false),
+          ),
+          Center(
+            child: Icon(Icons.person, size: cap * 0.5, color: Renkler.metinKoyu),
+          ),
+        ],
       ),
     );
   }
@@ -143,63 +194,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
     return ValueListenableBuilder<int?>(
       valueListenable: _arama.karsiUid,
       builder: (_, uid, _) {
-        if (uid == null) {
-          return Zemin(
-            child: Container(
-              alignment: Alignment.center,
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircularProgressIndicator(color: Renkler.neon),
-                  const SizedBox(height: 16),
-                  Text('Bağlanıyor…', style: Yazi.kucuk),
-                  // Agora bağlantı/token hatası varsa göster (tanı için).
-                  ValueListenableBuilder<String?>(
-                    valueListenable: _arama.sonHata,
-                    builder: (_, hata, _) => hata == null
-                        ? const SizedBox.shrink()
-                        : Padding(
-                            padding: const EdgeInsets.only(top: 14),
-                            child: Text(
-                              'Bağlantı hatası: $hata',
-                              textAlign: TextAlign.center,
-                              style: Yazi.stil(
-                                  13, FontWeight.w600, Renkler.tehlike),
-                            ),
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
         final e = _arama.engine;
-        if (!_video || e == null) {
-          // Sesli arama: video yok → neon gradient avatar
+        // Karşı taraf henüz katılmadı → bekleme + avatar (görüntülü aramada)
+        if (uid == null || e == null) {
           return Zemin(
-            child: Center(
-              child: Container(
-                width: 132,
-                height: 132,
-                decoration: BoxDecoration(
-                  gradient: Gradyanlar.yesil,
-                  borderRadius: Kose.kartKose,
-                  boxShadow: Golgeler.yuzey,
-                ),
-                child: Stack(
-                  children: [
-                    const Positioned.fill(
-                      child: IcIsik(kose: Kose.kartKose, guclu: false),
-                    ),
-                    const Center(
-                      child: Icon(Icons.person,
-                          size: 68, color: Renkler.metinKoyu),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            child: Center(child: _avatar(cap: 132)),
           );
         }
         return AgoraVideoView(
@@ -224,24 +223,64 @@ class _AramaEkraniState extends State<AramaEkrani> {
     );
   }
 
+  /// İsim + durum rozeti (bağlanıyor / süre) + varsa Agora hatası.
+  /// Hem görüntülü hem sesli düzende kullanılır.
   Widget _ustBilgi() {
-    final bagli = _arama.karsiUid.value != null;
-    return Column(
-      children: [
-        Text(widget.baslik, style: Yazi.baslik),
-        const SizedBox(height: 8),
-        // Süre / durum — cam rozet
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
-          child: Text(
-            bagli ? _sure : (_video ? 'Görüntülü arama' : 'Sesli arama'),
-            style: bagli
-                ? Yazi.stil(14, FontWeight.w700, Renkler.neon)
-                : Yazi.kucuk,
-          ),
-        ),
-      ],
+    return ValueListenableBuilder<int?>(
+      valueListenable: _arama.karsiUid,
+      builder: (_, uid, _) {
+        final bagli = uid != null;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.baslik, style: Yazi.baslik),
+            const SizedBox(height: 10),
+            // Durum rozeti — cam yüzey
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+              decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (bagli) ...[
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: Kutular.neonNokta(),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(_sure,
+                        style: Yazi.stil(14, FontWeight.w700, Renkler.neon)),
+                  ] else ...[
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Renkler.neon),
+                    ),
+                    const SizedBox(width: 10),
+                    Text('Bağlanıyor…', style: Yazi.kucuk),
+                  ],
+                ],
+              ),
+            ),
+            // Agora bağlantı/token hatası (tanı için)
+            ValueListenableBuilder<String?>(
+              valueListenable: _arama.sonHata,
+              builder: (_, hata, _) => hata == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+                      child: Text(
+                        'Bağlantı hatası: $hata',
+                        textAlign: TextAlign.center,
+                        style: Yazi.stil(12, FontWeight.w600, Renkler.tehlike),
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -315,183 +354,6 @@ class _AramaEkraniState extends State<AramaEkrani> {
           size: 24,
         ),
       ),
-    );
-  }
-}
-
-/// Gelen arama ekranı (uygulama AÇIKKEN Firestore dinleyicisinden açılır).
-/// Kabul → kanala katılır ve [AramaEkrani]'na geçer. Reddet → kapatır.
-class GelenAramaEkrani extends StatefulWidget {
-  final String arayan;
-  final String kanal;
-  final AramaTipi tip;
-
-  const GelenAramaEkrani({
-    super.key,
-    required this.arayan,
-    required this.kanal,
-    required this.tip,
-  });
-
-  @override
-  State<GelenAramaEkrani> createState() => _GelenAramaEkraniState();
-}
-
-class _GelenAramaEkraniState extends State<GelenAramaEkrani> {
-  final _arama = AramaServisi.instance;
-  StreamSubscription? _sub;
-  bool _islemde = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // Arayan vazgeç/iptal ederse (durum bitti/red) ekranı kapat
-    _sub = _arama.aramaDinle().listen((doc) {
-      final durum = doc.data()?['durum'];
-      if (!_islemde && (durum == 'bitti' || durum == 'red')) {
-        if (mounted) Navigator.of(context).pop();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _kabul() async {
-    setState(() => _islemde = true);
-    try {
-      final ok = await _arama.kabulEt(widget.kanal, widget.tip);
-      if (!mounted) return;
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
-        );
-        Navigator.of(context).pop();
-        return;
-      }
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => AramaEkrani(
-            kanal: widget.kanal,
-            tip: widget.tip,
-            baslik: widget.arayan,
-          ),
-        ),
-      );
-    } catch (e) {
-      // kabulEt hata fırlatırsa (Agora) ekran takılı kalmasın, hatayı göster.
-      if (!mounted) return;
-      setState(() => _islemde = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Kabul edilemedi: $e')),
-      );
-    }
-  }
-
-  Future<void> _reddet() async {
-    setState(() => _islemde = true);
-    await _arama.reddet();
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final video = widget.tip == AramaTipi.video;
-    return Scaffold(
-      body: Zemin(
-        parlama: const Alignment(0, -0.7),
-        child: SafeArea(
-          child: Column(
-            children: [
-              const Spacer(),
-              // Arayan avatarı — gradient + glow, organik köşe
-              Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  gradient: Gradyanlar.yesil,
-                  borderRadius: Kose.kartKose,
-                  boxShadow: Golgeler.yuzey,
-                ),
-                child: Stack(
-                  children: [
-                    const Positioned.fill(
-                      child: IcIsik(kose: Kose.kartKose, guclu: false),
-                    ),
-                    const Center(
-                      child: Icon(Icons.person,
-                          size: 62, color: Renkler.metinKoyu),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 26),
-              Text(widget.arayan, style: Yazi.baslik),
-              const SizedBox(height: 10),
-              // Yanıp sönen neon nokta + durum
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(width: 7, height: 7, decoration: Kutular.neonNokta()),
-                  const SizedBox(width: 7),
-                  Text(
-                    video ? 'Görüntülü arama…' : 'Sesli arama…',
-                    style: Yazi.stil(14, FontWeight.w600, Renkler.neon),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _aramaDugme(
-                    ikon: Icons.call_end,
-                    tehlike: true,
-                    etiket: 'Reddet',
-                    onTap: _islemde ? null : _reddet,
-                  ),
-                  _aramaDugme(
-                    ikon: video ? Icons.videocam : Icons.call,
-                    tehlike: false,
-                    etiket: 'Kabul Et',
-                    onTap: _islemde ? null : _kabul,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 48),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _aramaDugme({
-    required IconData ikon,
-    required bool tehlike,
-    required String etiket,
-    required VoidCallback? onTap,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Uc3DDugme(
-          tehlike: tehlike,
-          kose: Kose.kartKose,
-          padding: const EdgeInsets.all(24),
-          onTap: onTap,
-          cocuk: Icon(
-            ikon,
-            color: tehlike ? Renkler.metinTehlikeUstu : Renkler.metinKoyu,
-            size: 32,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(etiket, style: Yazi.kucuk),
-      ],
     );
   }
 }

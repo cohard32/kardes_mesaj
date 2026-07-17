@@ -38,6 +38,10 @@ class AramaServisi {
   RtcEngine? _engine;
   RtcEngine? get engine => _engine;
 
+  /// Şu an katılınan kanal — arama bitince karşı tarafa iptal push'u
+  /// gönderebilmek için tutulur.
+  String? _aktifKanal;
+
   final DocumentReference<Map<String, dynamic>> _aramaDoc =
       FirebaseFirestore.instance.collection('aramalar').doc('aktif');
 
@@ -151,6 +155,7 @@ class AramaServisi {
       uid: 0,
       options: const ChannelMediaOptions(),
     );
+    _aktifKanal = kanal;
   }
 
   String _kanalUret() => 'k_${DateTime.now().millisecondsSinceEpoch}';
@@ -230,19 +235,30 @@ class AramaServisi {
     await _aramaDoc.set({'durum': 'red'}, SetOptions(merge: true));
   }
 
-  /// Aramayı bitirir: Firestore'u günceller + Agora'dan ayrılır + motoru bırakır.
+  /// Aramayı bitirir: karşı tarafın zilini susturur + Firestore'u günceller +
+  /// Agora'dan ayrılır + motoru bırakır.
   Future<void> bitir() async {
+    // 1) KARŞI TARAFIN ZİLİNİ SUSTUR (kritik).
+    // Firestore dinleyicisi karşı taraf kapalıyken çalışmaz; iptal push'u
+    // olmadan CallKit çalmaya devam ediyordu.
+    try {
+      final kanal = _aktifKanal;
+      if (kanal != null) {
+        await BildirimServisi.instance.karsiTarafaAramaIptal(kanal: kanal);
+      }
+    } catch (_) {}
     try {
       await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
     } catch (_) {}
     try {
-      await FlutterCallkitIncoming.endAllCalls(); // varsa CallKit'i kapat
+      await FlutterCallkitIncoming.endAllCalls(); // kendi CallKit'imi kapat
     } catch (_) {}
     try {
       await _engine?.leaveChannel();
       await _engine?.release();
     } catch (_) {}
     _engine = null;
+    _aktifKanal = null;
     karsiUid.value = null;
     katildi.value = false;
     bekleyenKanal = null;
