@@ -108,16 +108,22 @@ class _AramaEkraniState extends State<AramaEkrani> {
         if (!didPop) _kapat();
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: Renkler.zeminDerin,
         body: Stack(
           children: [
             Positioned.fill(child: _uzakGorunum()),
+            // Kendi görüntün — organik köşe + neon kenar
             if (_video && !_kameraKapali)
               Positioned(
                 top: 44,
                 right: 16,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: Kose.kartKose,
+                    border: Border.all(color: Renkler.kenarGuclu),
+                    boxShadow: Golgeler.yuzey,
+                  ),
+                  clipBehavior: Clip.antiAlias,
                   child: SizedBox(
                     width: 110,
                     height: 160,
@@ -138,46 +144,61 @@ class _AramaEkraniState extends State<AramaEkrani> {
       valueListenable: _arama.karsiUid,
       builder: (_, uid, _) {
         if (uid == null) {
-          return Container(
-            color: Renkler.zemin,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(color: Renkler.accent),
-                const SizedBox(height: 16),
-                const Text('Bağlanıyor...',
-                    style: TextStyle(color: Renkler.metinSoluk)),
-                // Agora bağlantı/token hatası varsa göster (tanı için).
-                ValueListenableBuilder<String?>(
-                  valueListenable: _arama.sonHata,
-                  builder: (_, hata, _) => hata == null
-                      ? const SizedBox.shrink()
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: Text(
-                            'Bağlantı hatası: $hata',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                color: Colors.redAccent, fontSize: 13),
+          return Zemin(
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(color: Renkler.neon),
+                  const SizedBox(height: 16),
+                  Text('Bağlanıyor…', style: Yazi.kucuk),
+                  // Agora bağlantı/token hatası varsa göster (tanı için).
+                  ValueListenableBuilder<String?>(
+                    valueListenable: _arama.sonHata,
+                    builder: (_, hata, _) => hata == null
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Text(
+                              'Bağlantı hatası: $hata',
+                              textAlign: TextAlign.center,
+                              style: Yazi.stil(
+                                  13, FontWeight.w600, Renkler.tehlike),
+                            ),
                           ),
-                        ),
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           );
         }
         final e = _arama.engine;
         if (!_video || e == null) {
-          // Sesli arama: video yok → avatar
-          return Container(
-            color: Renkler.zemin,
-            alignment: Alignment.center,
-            child: const CircleAvatar(
-              radius: 60,
-              backgroundColor: Renkler.kardesBalon,
-              child: Icon(Icons.person, size: 70, color: Renkler.metinSoluk),
+          // Sesli arama: video yok → neon gradient avatar
+          return Zemin(
+            child: Center(
+              child: Container(
+                width: 132,
+                height: 132,
+                decoration: BoxDecoration(
+                  gradient: Gradyanlar.yesil,
+                  borderRadius: Kose.kartKose,
+                  boxShadow: Golgeler.yuzey,
+                ),
+                child: Stack(
+                  children: [
+                    const Positioned.fill(
+                      child: IcIsik(kose: Kose.kartKose, guclu: false),
+                    ),
+                    const Center(
+                      child: Icon(Icons.person,
+                          size: 68, color: Renkler.metinKoyu),
+                    ),
+                  ],
+                ),
+              ),
             ),
           );
         }
@@ -194,7 +215,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   Widget _yerelGorunum() {
     final e = _arama.engine;
-    if (e == null) return const ColoredBox(color: Renkler.kardesBalon);
+    if (e == null) return const ColoredBox(color: Renkler.yuzey);
     return AgoraVideoView(
       controller: VideoViewController(
         rtcEngine: e,
@@ -207,15 +228,18 @@ class _AramaEkraniState extends State<AramaEkrani> {
     final bagli = _arama.karsiUid.value != null;
     return Column(
       children: [
-        Text(
-          widget.baslik,
-          style: const TextStyle(
-              color: Colors.white, fontSize: 20, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          bagli ? _sure : (_video ? 'Görüntülü arama' : 'Sesli arama'),
-          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        Text(widget.baslik, style: Yazi.baslik),
+        const SizedBox(height: 8),
+        // Süre / durum — cam rozet
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+          child: Text(
+            bagli ? _sure : (_video ? 'Görüntülü arama' : 'Sesli arama'),
+            style: bagli
+                ? Yazi.stil(14, FontWeight.w700, Renkler.neon)
+                : Yazi.kucuk,
+          ),
         ),
       ],
     );
@@ -227,7 +251,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
       children: [
         _dugme(
           ikon: _micKapali ? Icons.mic_off : Icons.mic,
-          arka: _micKapali ? Colors.white24 : Colors.white10,
+          aktif: !_micKapali,
           onTap: () {
             setState(() => _micKapali = !_micKapali);
             _arama.mikrofonKapat(_micKapali);
@@ -236,7 +260,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
         if (_video) ...[
           _dugme(
             ikon: _kameraKapali ? Icons.videocam_off : Icons.videocam,
-            arka: _kameraKapali ? Colors.white24 : Colors.white10,
+            aktif: !_kameraKapali,
             onTap: () {
               setState(() => _kameraKapali = !_kameraKapali);
               _arama.kameraKapat(_kameraKapali);
@@ -244,48 +268,51 @@ class _AramaEkraniState extends State<AramaEkrani> {
           ),
           _dugme(
             ikon: Icons.cameraswitch,
-            arka: Colors.white10,
+            aktif: false,
             onTap: _arama.kameraDegistir,
           ),
         ],
         _dugme(
           ikon: _hoparlor ? Icons.volume_up : Icons.volume_down,
-          arka: _hoparlor ? Colors.white24 : Colors.white10,
+          aktif: _hoparlor,
           onTap: () {
             setState(() => _hoparlor = !_hoparlor);
             _arama.hoparlor(_hoparlor);
           },
         ),
-        _dugme(
-          ikon: Icons.call_end,
-          arka: Colors.red,
-          buyuk: true,
-          onTap: _kapat,
+        // Kapat — kırmızı 3D
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Uc3DDugme(
+            tehlike: true,
+            kose: Kose.dugme,
+            padding: const EdgeInsets.all(19),
+            onTap: _kapat,
+            cocuk: const Icon(Icons.call_end,
+                color: Renkler.metinTehlikeUstu, size: 28),
+          ),
         ),
       ],
     );
   }
 
+  /// Arama içi kontrol: aktifken neon (3D), kapalıyken koyu cam.
   Widget _dugme({
     required IconData ikon,
-    required Color arka,
+    required bool aktif,
     required VoidCallback onTap,
-    bool buyuk = false,
   }) {
-    final cap = buyuk ? 64.0 : 56.0;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Material(
-        color: arka,
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: SizedBox(
-            width: cap,
-            height: cap,
-            child: Icon(ikon, color: Colors.white, size: buyuk ? 30 : 26),
-          ),
+      child: Uc3DDugme(
+        ikincil: !aktif,
+        kose: Kose.dugme,
+        padding: const EdgeInsets.all(16),
+        onTap: onTap,
+        cocuk: Icon(
+          ikon,
+          color: aktif ? Renkler.metinKoyu : Renkler.metin,
+          size: 24,
         ),
       ),
     );
@@ -374,49 +401,69 @@ class _GelenAramaEkraniState extends State<GelenAramaEkrani> {
   Widget build(BuildContext context) {
     final video = widget.tip == AramaTipi.video;
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            const Spacer(),
-            const CircleAvatar(
-              radius: 56,
-              backgroundColor: Renkler.kardesBalon,
-              child: Icon(Icons.person, size: 64, color: Renkler.metinSoluk),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              widget.arayan,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              video ? 'Görüntülü arama...' : 'Sesli arama...',
-              style: const TextStyle(color: Colors.white70, fontSize: 15),
-            ),
-            const Spacer(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _aramaDugme(
-                  ikon: Icons.call_end,
-                  renk: Colors.red,
-                  etiket: 'Reddet',
-                  onTap: _islemde ? null : _reddet,
+      body: Zemin(
+        parlama: const Alignment(0, -0.7),
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Spacer(),
+              // Arayan avatarı — gradient + glow, organik köşe
+              Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  gradient: Gradyanlar.yesil,
+                  borderRadius: Kose.kartKose,
+                  boxShadow: Golgeler.yuzey,
                 ),
-                _aramaDugme(
-                  ikon: video ? Icons.videocam : Icons.call,
-                  renk: Colors.green,
-                  etiket: 'Kabul Et',
-                  onTap: _islemde ? null : _kabul,
+                child: Stack(
+                  children: [
+                    const Positioned.fill(
+                      child: IcIsik(kose: Kose.kartKose, guclu: false),
+                    ),
+                    const Center(
+                      child: Icon(Icons.person,
+                          size: 62, color: Renkler.metinKoyu),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 48),
-          ],
+              ),
+              const SizedBox(height: 26),
+              Text(widget.arayan, style: Yazi.baslik),
+              const SizedBox(height: 10),
+              // Yanıp sönen neon nokta + durum
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(width: 7, height: 7, decoration: Kutular.neonNokta()),
+                  const SizedBox(width: 7),
+                  Text(
+                    video ? 'Görüntülü arama…' : 'Sesli arama…',
+                    style: Yazi.stil(14, FontWeight.w600, Renkler.neon),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _aramaDugme(
+                    ikon: Icons.call_end,
+                    tehlike: true,
+                    etiket: 'Reddet',
+                    onTap: _islemde ? null : _reddet,
+                  ),
+                  _aramaDugme(
+                    ikon: video ? Icons.videocam : Icons.call,
+                    tehlike: false,
+                    etiket: 'Kabul Et',
+                    onTap: _islemde ? null : _kabul,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 48),
+            ],
+          ),
         ),
       ),
     );
@@ -424,28 +471,26 @@ class _GelenAramaEkraniState extends State<GelenAramaEkrani> {
 
   Widget _aramaDugme({
     required IconData ikon,
-    required Color renk,
+    required bool tehlike,
     required String etiket,
     required VoidCallback? onTap,
   }) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Material(
-          color: renk,
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onTap,
-            child: SizedBox(
-              width: 72,
-              height: 72,
-              child: Icon(ikon, color: Colors.white, size: 32),
-            ),
+        Uc3DDugme(
+          tehlike: tehlike,
+          kose: Kose.kartKose,
+          padding: const EdgeInsets.all(24),
+          onTap: onTap,
+          cocuk: Icon(
+            ikon,
+            color: tehlike ? Renkler.metinTehlikeUstu : Renkler.metinKoyu,
+            size: 32,
           ),
         ),
-        const SizedBox(height: 10),
-        Text(etiket, style: const TextStyle(color: Colors.white70)),
+        const SizedBox(height: 12),
+        Text(etiket, style: Yazi.kucuk),
       ],
     );
   }

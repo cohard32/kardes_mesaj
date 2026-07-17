@@ -67,33 +67,39 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Ayarlar')),
-      body: ListView(
+      body: Zemin(
+        child: ListView(
+        padding: const EdgeInsets.only(bottom: 24),
         children: [
           const _BolumBaslik('Bildirimler'),
 
           ValueListenableBuilder<bool>(
             valueListenable: _ayar.bildirimAcik,
-            builder: (context, acik, _) => SwitchListTile(
-              activeThumbColor: Renkler.accent,
-              title: const Text('Bildirimler'),
-              subtitle: const Text('Yeni mesaj geldiğinde bildirim göster'),
-              value: acik,
-              onChanged: _ayar.bildirimAcikAyarla,
+            builder: (context, acik, _) => _Kart(
+              child: SwitchListTile(
+                activeThumbColor: Renkler.neon,
+                title: Text('Bildirimler', style: Yazi.isim),
+                subtitle: Text('Yeni mesaj geldiğinde bildirim göster',
+                    style: Yazi.kucuk),
+                value: acik,
+                onChanged: _ayar.bildirimAcikAyarla,
+              ),
             ),
           ),
 
           ValueListenableBuilder<bool>(
             valueListenable: _ayar.titresimAcik,
-            builder: (context, acik, _) => SwitchListTile(
-              activeThumbColor: Renkler.accent,
-              title: const Text('Titreşim'),
-              subtitle: const Text('Bildirimde titreşim'),
-              value: acik,
-              onChanged: _ayar.titresimAcikAyarla,
+            builder: (context, acik, _) => _Kart(
+              child: SwitchListTile(
+                activeThumbColor: Renkler.neon,
+                title: Text('Titreşim', style: Yazi.isim),
+                subtitle: Text('Bildirimde titreşim', style: Yazi.kucuk),
+                value: acik,
+                onChanged: _ayar.titresimAcikAyarla,
+              ),
             ),
           ),
 
-          const Divider(height: 1),
           const _BolumBaslik('Bildirim Sesi'),
 
           _sesTile(deger: 'varsayilan', baslik: 'Varsayılan'),
@@ -132,41 +138,40 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
               builder: (context, secili, _) {
                 final aktif = secili == 'ozel';
                 final var_ = _ayar.ozelSesUri.value != null;
-                return ListTile(
-                  leading: Icon(
-                    aktif
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                    color: aktif ? Renkler.accent : Renkler.metinSoluk,
+                return _Kart(
+                  secili: aktif,
+                  child: ListTile(
+                    leading: _SecimIsareti(aktif: aktif),
+                    title: Text('Telefondan özel ses', style: Yazi.isim),
+                    subtitle: Text(
+                      var_ ? (ad ?? 'Özel ses') : 'Telefondaki bir sesi seç',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Yazi.kucuk,
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.folder_open, color: Renkler.neon),
+                      tooltip: 'Ses seç',
+                      onPressed: _telefondanSec,
+                    ),
+                    onTap: var_ ? () => _sesSec('ozel') : _telefondanSec,
                   ),
-                  title: const Text('Telefondan özel ses'),
-                  subtitle: Text(
-                    var_ ? (ad ?? 'Özel ses') : 'Telefondaki bir sesi seç',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Renkler.metinSoluk),
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.folder_open, color: Renkler.accent),
-                    tooltip: 'Ses seç',
-                    onPressed: _telefondanSec,
-                  ),
-                  onTap: var_ ? () => _sesSec('ozel') : _telefondanSec,
                 );
               },
             ),
           ),
 
-          const Padding(
-            padding: EdgeInsets.all(16),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
             child: Text(
               'Önizlemek için ▶ düğmesine dokun. "Telefondan özel ses" ile '
               'cihazındaki herhangi bir bildirim sesini seçebilirsin. Seçtiğin '
               'ses, sana mesaj/arama geldiğinde çalar (uygulama kapalıyken bile).',
-              style: TextStyle(color: Renkler.metinSoluk, fontSize: 12),
+              style: Yazi.zaman,
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -180,23 +185,74 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
       valueListenable: _ayar.bildirimSesi,
       builder: (context, secili, _) {
         final aktif = secili == deger;
-        return ListTile(
-          leading: Icon(
-            aktif ? Icons.radio_button_checked : Icons.radio_button_off,
-            color: aktif ? Renkler.accent : Renkler.metinSoluk,
+        return _Kart(
+          secili: aktif,
+          child: ListTile(
+            leading: _SecimIsareti(aktif: aktif),
+            title: Text(baslik, style: Yazi.isim),
+            trailing: onizlemeAsset == null
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.play_circle_outline,
+                        color: Renkler.neon),
+                    tooltip: 'Önizle',
+                    onPressed: () => _onizle(onizlemeAsset),
+                  ),
+            onTap: () => _sesSec(deger),
           ),
-          title: Text(baslik),
-          trailing: onizlemeAsset == null
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.play_circle_outline,
-                      color: Renkler.accent),
-                  tooltip: 'Önizle',
-                  onPressed: () => _onizle(onizlemeAsset),
-                ),
-          onTap: () => _sesSec(deger),
         );
       },
+    );
+  }
+}
+
+/// Seçili satırın neon işareti (radyo yerine tasarım dilinde nokta).
+class _SecimIsareti extends StatelessWidget {
+  final bool aktif;
+  const _SecimIsareti({required this.aktif});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        color: aktif ? null : Renkler.zeminDerin,
+        gradient: aktif ? Gradyanlar.accent : null,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: aktif ? Colors.transparent : Renkler.kenarGuclu,
+        ),
+        boxShadow: aktif ? Golgeler.neonGlow : null,
+      ),
+      child: aktif
+          ? const Icon(Icons.check, size: 14, color: Renkler.metinKoyu)
+          : null,
+    );
+  }
+}
+
+/// Ayarlar satır kartı — organik köşe, seçiliyken neon kenar.
+class _Kart extends StatelessWidget {
+  final Widget child;
+  final bool secili;
+  const _Kart({required this.child, this.secili = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: Gradyanlar.yuzey,
+          borderRadius: Kose.kartKose,
+          border: Border.all(
+            color: secili ? Renkler.neon.withValues(alpha: 0.45) : Renkler.kenar,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      ),
     );
   }
 }
@@ -208,15 +264,10 @@ class _BolumBaslik extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 10),
       child: Text(
         yazi.toUpperCase(),
-        style: const TextStyle(
-          color: Renkler.accent,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.5,
-        ),
+        style: Yazi.stil(12, FontWeight.w800, Renkler.neon, aralik: 0.8),
       ),
     );
   }

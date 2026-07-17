@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Acilis (splash) / pencere zemini icin tema renkleri.
+  lib/tema.dart Renkler.zemin (#071A10) ile AYNI olmali.
+-->
+<resources>
+    <color name="km_zemin">#071A10</color>
+    <color name="km_zemin_derin">#050F0A</color>
+</resources>

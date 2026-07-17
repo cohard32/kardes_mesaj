@@ -23,7 +23,8 @@ import 'ayarlar_ekrani.dart';
 import 'gif_secici.dart';
 
 /// Ana sohbet ekranı. İki kişilik tek sohbet.
-/// Kendi mesajların sağda mavi (#00b0ff), kardeşininki solda gri (#1c1c1c).
+/// Kendi mesajların sağda neon gradient balonda, kardeşininki solda koyu cam
+/// balonda. Tüm renk/stil değerleri `tema.dart`'tan gelir (bkz. Renkler/Kose/…).
 class SohbetEkrani extends StatefulWidget {
   const SohbetEkrani({super.key});
 
@@ -82,8 +83,32 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _guncellemeKontrol();
     AramaServisi.instance.eskiAramayiTemizle(); // kalmış stale aramayı temizle
     _gelenAramaDinle();
+    _aramaIzinleriniKontrolEt();
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
+  }
+
+  // Ekran KAPALIYKEN aramanın çalışması için gereken izinler:
+  // (1) pil optimizasyonu muafiyeti (Doze uyutmasın),
+  // (2) Android 14+ tam ekran bildirim izni (yoksa arama tam ekran açılmaz).
+  Future<void> _aramaIzinleriniKontrolEt() async {
+    final b = BildirimServisi.instance;
+    await b.pilOptimizasyonuIste();
+    if (!mounted) return;
+    if (await b.tamEkranIzniVarMi()) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 12),
+        content: const Text(
+          'Ekran kapalıyken arama gelmesi için "tam ekran bildirim" izni gerekli.',
+        ),
+        action: SnackBarAction(
+          label: 'İzin ver',
+          onPressed: b.tamEkranAyarlariniAc,
+        ),
+      ),
+    );
   }
 
   void _bekleyenAramayiAc() {
@@ -190,20 +215,25 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        backgroundColor: Renkler.yuzey,
-        title: Text('Güncelleme indiriliyor (v${bilgi.surum})'),
+        title: Text('Güncelleme indiriliyor (v${bilgi.surum})',
+            style: Yazi.baslikOrta),
         content: ValueListenableBuilder<double>(
           valueListenable: ilerleme,
           builder: (_, yuzde, _) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              LinearProgressIndicator(
-                value: yuzde > 0 ? yuzde : null,
-                color: Renkler.accent,
-                backgroundColor: Renkler.giris,
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: yuzde > 0 ? yuzde : null,
+                  minHeight: 8,
+                  color: Renkler.neon,
+                  backgroundColor: Renkler.zeminDerin,
+                ),
               ),
               const SizedBox(height: 12),
-              Text('%${(yuzde * 100).toStringAsFixed(0)}'),
+              Text('%${(yuzde * 100).toStringAsFixed(0)}',
+                  style: Yazi.etiket),
             ],
           ),
         ),
@@ -247,7 +277,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _yaziyorGonderildi = false;
     _presence.yaziyorAyarla(false);
     _zorlaKaydir = true;
-    await _servis.gonder(metin);
+    try {
+      await _servis.gonder(metin);
+    } catch (e) {
+      // Firestore çevrimdışıyken kuyruğa alır; yine de hata olursa kullanıcıya
+      // bildir ve metni kaybetme.
+      if (!mounted) return;
+      _mesajCtrl.text = metin;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mesaj gönderilemedi. Tekrar dene.')),
+      );
+    }
   }
 
   // Sadece yeni mesaj geldiğinde (ya da kullanıcı en alttayken) kaydırır.
@@ -323,15 +363,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Renkler.yuzey,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo, color: Renkler.accent),
+              leading: const Icon(Icons.photo, color: Renkler.neon),
               title: const Text('Fotoğraf'),
               onTap: () {
                 Navigator.pop(context);
@@ -339,7 +377,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.videocam, color: Renkler.accent),
+              leading: const Icon(Icons.videocam, color: Renkler.neon),
               title: const Text('Video'),
               onTap: () {
                 Navigator.pop(context);
@@ -347,7 +385,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.gif_box_outlined, color: Renkler.accent),
+              leading: const Icon(Icons.gif_box_outlined, color: Renkler.neon),
               title: const Text('GIF / Sticker'),
               onTap: () {
                 Navigator.pop(context);
@@ -366,9 +404,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       context: context,
       isScrollControlled: true,
       backgroundColor: Renkler.yuzey,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
       builder: (_) => const GifSecici(),
     );
     if (url != null && url.isNotEmpty) {
@@ -504,11 +540,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
         ],
       ),
-      body: Column(
+      body: Zemin(
+        parlama: const Alignment(0.6, -1),
+        child: Column(
         children: [
           if (_yukleniyor)
             const LinearProgressIndicator(
-              color: Renkler.accent,
+              color: Renkler.neon,
               backgroundColor: Renkler.yuzey,
             ),
           Expanded(
@@ -517,7 +555,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(
-                    child: CircularProgressIndicator(color: Renkler.accent),
+                    child: CircularProgressIndicator(color: Renkler.neon),
                   );
                 }
                 if (snapshot.hasError) {
@@ -577,6 +615,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil),
           ],
         ],
+        ),
       ),
     );
   }
@@ -586,9 +625,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Renkler.yuzey,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
       builder: (_) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
@@ -641,20 +678,65 @@ class _AppBarBaslik extends StatelessWidget {
       builder: (context, snap) {
         final durum = _sonGorulmeMetni(snap.data);
         final yaziyor = snap.data?['yaziyor'] == true;
-        return Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        final online = snap.data?['online'] == true;
+        final eposta = (snap.data?['eposta'] ?? 'K').toString();
+        final harf = eposta.isEmpty ? 'K' : eposta[0].toUpperCase();
+        // Neon vurgulu durum: çevrimiçi veya yazıyor
+        final vurgulu = yaziyor || online;
+
+        return Row(
           children: [
-            const Text('Kardeş Mesaj', style: TextStyle(fontSize: 18)),
-            if (durum.isNotEmpty)
-              Text(
-                durum,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: yaziyor ? Renkler.accent : Renkler.metinSoluk,
-                  fontWeight: yaziyor ? FontWeight.w600 : FontWeight.normal,
-                ),
+            // Gradient avatar — organik köşe
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: Gradyanlar.yesil,
+                borderRadius: Kose.dugme,
               ),
+              child: Stack(
+                children: [
+                  const Positioned.fill(
+                    child: IcIsik(kose: Kose.dugme, guclu: false),
+                  ),
+                  Center(
+                    child: Text(harf,
+                        style: Yazi.stil(
+                            15, FontWeight.w800, Renkler.metinKoyu)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Kardeş Mesaj', style: Yazi.isim),
+                  if (durum.isNotEmpty)
+                    Row(
+                      children: [
+                        if (vurgulu) ...[
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: Kutular.neonNokta(),
+                          ),
+                          const SizedBox(width: 5),
+                        ],
+                        Flexible(
+                          child: Text(
+                            durum,
+                            overflow: TextOverflow.ellipsis,
+                            style: vurgulu ? Yazi.neonKucuk : Yazi.zaman,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
           ],
         );
       },
@@ -681,6 +763,9 @@ class _MesajBalonu extends StatelessWidget {
     return '$s:$d';
   }
 
+  /// Balon içindeki medyanın organik köşesi (balonla uyumlu, bir köşe kısa).
+  BorderRadius get _medyaKose => benimMi ? Kose.medyaBen : Kose.medyaKarsi;
+
   // Mesaj türüne göre içerik
   Widget _icerik(BuildContext context) {
     switch (mesaj.tip) {
@@ -689,7 +774,7 @@ class _MesajBalonu extends StatelessWidget {
         return GestureDetector(
           onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: _medyaKose,
             child: Image.network(
               mesaj.medyaUrl!,
               width: 220,
@@ -702,7 +787,7 @@ class _MesajBalonu extends StatelessWidget {
                       alignment: Alignment.center,
                       color: Renkler.zemin,
                       child: const CircularProgressIndicator(
-                          color: Renkler.accent),
+                          color: Renkler.neon),
                     ),
               errorBuilder: (c, e, s) => const SizedBox(
                 width: 220,
@@ -714,7 +799,7 @@ class _MesajBalonu extends StatelessWidget {
         );
       case MesajTipi.video:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
-        return _VideoOynatici(url: mesaj.medyaUrl!);
+        return _VideoOynatici(url: mesaj.medyaUrl!, kose: _medyaKose);
       case MesajTipi.ses:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return _SesOynatici(
@@ -728,7 +813,7 @@ class _MesajBalonu extends StatelessWidget {
         return GestureDetector(
           onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: _medyaKose,
             child: Image.network(
               mesaj.medyaUrl!,
               width: 170,
@@ -741,7 +826,7 @@ class _MesajBalonu extends StatelessWidget {
                       alignment: Alignment.center,
                       color: Renkler.zemin,
                       child: const CircularProgressIndicator(
-                          color: Renkler.accent),
+                          color: Renkler.neon),
                     ),
               errorBuilder: (c, e, s) => const SizedBox(
                 width: 170,
@@ -752,12 +837,10 @@ class _MesajBalonu extends StatelessWidget {
           ),
         );
       case MesajTipi.metin:
+        // Neon balon üstünde koyu, karşı tarafın koyu balonunda açık metin
         return Text(
           mesaj.metin,
-          style: TextStyle(
-            color: benimMi ? Colors.white : Renkler.metin,
-            fontSize: 15,
-          ),
+          style: benimMi ? Yazi.govdeAccent : Yazi.govde,
         );
     }
   }
@@ -770,7 +853,7 @@ class _MesajBalonu extends StatelessWidget {
         insetPadding: const EdgeInsets.all(12),
         child: InteractiveViewer(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Kose.kartKose,
             child: Image.network(url),
           ),
         ),
@@ -797,66 +880,70 @@ class _MesajBalonu extends StatelessWidget {
                 bottom: mesaj.tepki != null ? 16 : 4,
               ),
               padding: EdgeInsets.all(medyaMi ? 5 : 12),
-              decoration: BoxDecoration(
-                color: benimMi ? Renkler.benimBalon : Renkler.kardesBalon,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(benimMi ? 16 : 4),
-                  bottomRight: Radius.circular(benimMi ? 4 : 16),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _icerik(context),
-                  Padding(
-                    padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Karşı taraftan gelen, henüz dinlenmemiş sesli mesaj → mavi nokta
-                        if (mesaj.tip == MesajTipi.ses &&
-                            !benimMi &&
-                            !mesaj.sesDinlendi) ...[
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: Renkler.accent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                        ],
-                        Text(
-                          _saat(mesaj.zaman),
-                          style: TextStyle(
-                            color: benimMi
-                                ? Colors.white.withValues(alpha: 0.7)
-                                : Renkler.metinSoluk,
-                            fontSize: 11,
-                          ),
-                        ),
-                        if (benimMi) ...[
-                          const SizedBox(width: 4),
-                          Icon(
-                            mesaj.goruldu ? Icons.done_all : Icons.done,
-                            size: 15,
-                            color: mesaj.goruldu
-                                ? Colors.white
-                                : Colors.white.withValues(alpha: 0.7),
-                          ),
-                          // Gönderdiğim sesli mesaj karşı tarafça dinlendiyse kulaklık
-                          if (mesaj.tip == MesajTipi.ses &&
-                              mesaj.sesDinlendi) ...[
-                            const SizedBox(width: 4),
-                            const Icon(Icons.headset_rounded,
-                                size: 13, color: Colors.white),
-                          ],
-                        ],
-                      ],
+              // Kendi balonun: neon gradient + glow. Karşı taraf: koyu cam yüzey.
+              // Organik köşe — dip köşe kısa.
+              decoration: benimMi
+                  ? Kutular.accent(kose: Kose.balonBen)
+                  : BoxDecoration(
+                      color: Renkler.yuzey,
+                      borderRadius: Kose.balonKarsi,
+                      border: Border.all(color: Renkler.kenarSolgun),
+                      boxShadow: Golgeler.balon,
                     ),
+              child: Stack(
+                children: [
+                  // Neon balonda iç highlight/gölge (3D hacim)
+                  if (benimMi)
+                    const Positioned.fill(
+                      child: IcIsik(kose: Kose.balonBen),
+                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _icerik(context),
+                      Padding(
+                        padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Gelen, henüz dinlenmemiş sesli mesaj → neon nokta
+                            if (mesaj.tip == MesajTipi.ses &&
+                                !benimMi &&
+                                !mesaj.sesDinlendi) ...[
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: Kutular.neonNokta(),
+                              ),
+                              const SizedBox(width: 5),
+                            ],
+                            Text(
+                              _saat(mesaj.zaman),
+                              style:
+                                  benimMi ? Yazi.zamanAccent : Yazi.zaman,
+                            ),
+                            if (benimMi) ...[
+                              const SizedBox(width: 4),
+                              Icon(
+                                mesaj.goruldu ? Icons.done_all : Icons.done,
+                                size: 15,
+                                color: mesaj.goruldu
+                                    ? Renkler.metinKoyu
+                                    : Renkler.metinKoyuYumusak,
+                              ),
+                              // Gönderdiğim ses dinlendiyse kulaklık
+                              if (mesaj.tip == MesajTipi.ses &&
+                                  mesaj.sesDinlendi) ...[
+                                const SizedBox(width: 4),
+                                const Icon(Icons.headset_rounded,
+                                    size: 13, color: Renkler.metinKoyu),
+                              ],
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -870,9 +957,10 @@ class _MesajBalonu extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
-                    color: Renkler.yuzey,
+                    color: Renkler.yuzeyYuksek,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Renkler.zemin, width: 1.5),
+                    border: Border.all(color: Renkler.kenarGuclu, width: 1.5),
+                    boxShadow: Golgeler.balon,
                   ),
                   child:
                       Text(mesaj.tepki!, style: const TextStyle(fontSize: 13)),
@@ -888,7 +976,10 @@ class _MesajBalonu extends StatelessWidget {
 /// İnline video oynatıcı (dokununca oynat/duraklat).
 class _VideoOynatici extends StatefulWidget {
   final String url;
-  const _VideoOynatici({required this.url});
+
+  /// Balonun organik köşesiyle uyumlu medya köşesi
+  final BorderRadius kose;
+  const _VideoOynatici({required this.url, required this.kose});
 
   @override
   State<_VideoOynatici> createState() => _VideoOynaticiState();
@@ -920,8 +1011,11 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
         width: 220,
         height: 160,
         alignment: Alignment.center,
-        color: Renkler.zemin,
-        child: const CircularProgressIndicator(color: Renkler.accent),
+        decoration: BoxDecoration(
+          color: Renkler.zeminDerin,
+          borderRadius: widget.kose,
+        ),
+        child: const CircularProgressIndicator(color: Renkler.neon),
       );
     }
     return GestureDetector(
@@ -929,7 +1023,7 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
         _ctrl!.value.isPlaying ? _ctrl!.pause() : _ctrl!.play();
       }),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: widget.kose,
         child: SizedBox(
           width: 220,
           child: AspectRatio(
@@ -938,15 +1032,17 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
               alignment: Alignment.center,
               children: [
                 VideoPlayer(_ctrl!),
+                // Neon 3D oynat rozeti
                 if (!_ctrl!.value.isPlaying)
                   Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.black38,
+                    decoration: BoxDecoration(
+                      gradient: Gradyanlar.accent,
                       shape: BoxShape.circle,
+                      boxShadow: Golgeler.neonGlow,
                     ),
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(10),
                     child: const Icon(Icons.play_arrow,
-                        color: Colors.white, size: 36),
+                        color: Renkler.metinKoyu, size: 32),
                   ),
               ],
             ),
@@ -982,29 +1078,34 @@ class _SesOynaticiState extends State<_SesOynatici> {
   double _hiz = 1.0;
   late final List<double> _dalga;
 
+  final List<StreamSubscription> _abonelikler = [];
+
   @override
   void initState() {
     super.initState();
     // Ağ dosyası için gerçek dalga çıkarmak ağırdır → URL'den sabit dekoratif dalga.
     _dalga = _dalgaUret(widget.url);
-    _player.onDurationChanged.listen((d) {
+    _abonelikler.add(_player.onDurationChanged.listen((d) {
       if (mounted) setState(() => _sure = d);
-    });
-    _player.onPositionChanged.listen((p) {
+    }));
+    _abonelikler.add(_player.onPositionChanged.listen((p) {
       if (mounted) setState(() => _konum = p);
-    });
-    _player.onPlayerComplete.listen((_) {
+    }));
+    _abonelikler.add(_player.onPlayerComplete.listen((_) {
       if (mounted) {
         setState(() {
           _caliyor = false;
           _konum = Duration.zero;
         });
       }
-    });
+    }));
   }
 
   @override
   void dispose() {
+    for (final a in _abonelikler) {
+      a.cancel();
+    }
     _player.dispose();
     super.dispose();
   }
@@ -1050,7 +1151,8 @@ class _SesOynaticiState extends State<_SesOynatici> {
 
   @override
   Widget build(BuildContext context) {
-    final renk = widget.benimMi ? Colors.white : Renkler.metin;
+    // Neon balonda koyu, karşı tarafın koyu balonunda neon renk
+    final renk = widget.benimMi ? Renkler.metinKoyu : Renkler.neon;
     final oran = _sure.inMilliseconds == 0
         ? 0.0
         : (_konum.inMilliseconds / _sure.inMilliseconds).clamp(0.0, 1.0);
@@ -1155,8 +1257,8 @@ class _YazmaAlani extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(2, 6, 8, 6),
-        color: Renkler.yuzey,
+        padding: const EdgeInsets.fromLTRB(6, 8, 10, 10),
+        color: Renkler.zemin,
         child: Row(
           children: [
             IconButton(
@@ -1165,7 +1267,7 @@ class _YazmaAlani extends StatelessWidget {
                 emojiAcik
                     ? Icons.keyboard_outlined
                     : Icons.emoji_emotions_outlined,
-                color: Renkler.accent,
+                color: Renkler.neon,
               ),
               onPressed: onEmoji,
             ),
@@ -1173,47 +1275,54 @@ class _YazmaAlani extends StatelessWidget {
               tooltip: 'Ekle',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              icon: const Icon(Icons.add_circle_outline, color: Renkler.accent),
+              icon: const Icon(Icons.add_circle_outline, color: Renkler.neon),
               onPressed: onEk,
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
             Expanded(
               child: ValueListenableBuilder<TextEditingValue>(
                 valueListenable: controller,
                 builder: (context, deger, _) {
                   final bos = deger.text.trim().isEmpty;
                   return Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Expanded(
-                        child: TextField(
-                          controller: controller,
-                          focusNode: odak,
-                          minLines: 1,
-                          maxLines: 5,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => onGonder(),
-                          decoration: const InputDecoration(
-                            hintText: 'Mesaj yaz...',
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 10),
+                        child: Container(
+                          decoration: Kutular.duzYuzey(
+                            kose: Kose.alan,
+                            kenarli: true,
+                          ),
+                          child: TextField(
+                            controller: controller,
+                            focusNode: odak,
+                            minLines: 1,
+                            maxLines: 5,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => onGonder(),
+                            style: Yazi.govde,
+                            decoration: const InputDecoration(
+                              hintText: 'Mesaj yaz…',
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 18, vertical: 13),
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
-                      Material(
-                        color: Renkler.accent,
-                        shape: const CircleBorder(),
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: bos ? onMikrofon : onGonder,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Icon(
-                              bos ? Icons.mic : Icons.send_rounded,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                          ),
+                      const SizedBox(width: 8),
+                      // 3D gönder / mikrofon butonu
+                      Uc3DDugme(
+                        kose: Kose.dugme,
+                        padding: const EdgeInsets.all(13),
+                        onTap: bos ? onMikrofon : onGonder,
+                        cocuk: Icon(
+                          bos ? Icons.mic : Icons.send_rounded,
+                          color: Renkler.metinKoyu,
+                          size: 22,
                         ),
                       ),
                     ],
@@ -1276,54 +1385,62 @@ class _KayitCubuguState extends State<_KayitCubugu>
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
-        color: Renkler.yuzey,
+        padding: const EdgeInsets.fromLTRB(8, 8, 10, 10),
+        color: Renkler.zemin,
         child: Row(
           children: [
             IconButton(
               tooltip: 'İptal',
-              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              icon: const Icon(Icons.delete_outline, color: Renkler.tehlike),
               onPressed: widget.onIptal,
             ),
-            FadeTransition(
-              opacity: _yanip,
-              child: const Icon(Icons.fiber_manual_record,
-                  color: Colors.red, size: 14),
+            // Kayıt göstergesi + süre + canlı dalga — cam yüzey içinde
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration:
+                    Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                child: Row(
+                  children: [
+                    FadeTransition(
+                      opacity: _yanip,
+                      child: const Icon(Icons.fiber_manual_record,
+                          color: Renkler.tehlike, size: 12),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 44,
+                      child: Text(
+                        _sure,
+                        style: Yazi.stil(13, FontWeight.w700, Renkler.metin)
+                            .copyWith(
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: SizedBox(
+                        height: 24,
+                        child: CustomPaint(
+                          painter: _DalgaPainter(widget.dalga, Renkler.neon,
+                              canli: true),
+                          size: Size.infinite,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 46,
-              child: Text(
-                _sure,
-                style: const TextStyle(
-                  color: Renkler.metin,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-            Expanded(
-              child: SizedBox(
-                height: 28,
-                child: CustomPaint(
-                  painter: _DalgaPainter(widget.dalga, Renkler.accent,
-                      canli: true),
-                  size: Size.infinite,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Material(
-              color: Renkler.accent,
-              shape: const CircleBorder(),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: widget.onGonder,
-                child: const Padding(
-                  padding: EdgeInsets.all(12),
-                  child:
-                      Icon(Icons.send_rounded, color: Colors.white, size: 22),
-                ),
-              ),
+            // 3D gönder butonu
+            Uc3DDugme(
+              kose: Kose.dugme,
+              padding: const EdgeInsets.all(13),
+              onTap: widget.onGonder,
+              cocuk: const Icon(Icons.send_rounded,
+                  color: Renkler.metinKoyu, size: 22),
             ),
           ],
         ),
@@ -1449,12 +1566,16 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
   Widget build(BuildContext context) {
     return Container(
       height: 256,
-      color: Renkler.yuzey,
+      decoration: const BoxDecoration(
+        color: Renkler.yuzey,
+        borderRadius: Kose.panel,
+      ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
           Expanded(
             child: GridView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 44,
                 mainAxisSpacing: 2,
@@ -1464,7 +1585,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
               itemBuilder: (_, i) {
                 final e = _gruplar[_kategori][i];
                 return InkWell(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                   onTap: () => widget.onEmoji(e),
                   child: Center(
                     child: Text(e, style: const TextStyle(fontSize: 26)),
@@ -1476,8 +1597,8 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
           Container(
             height: 46,
             decoration: const BoxDecoration(
-              color: Renkler.zemin,
-              border: Border(top: BorderSide(color: Colors.black26)),
+              color: Renkler.zeminDerin,
+              border: Border(top: BorderSide(color: Renkler.kenarSolgun)),
             ),
             child: Row(
               children: [
@@ -1491,7 +1612,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
                         icon: Icon(
                           _ikonlar[i],
                           color:
-                              secili ? Renkler.accent : Renkler.metinSoluk,
+                              secili ? Renkler.neon : Renkler.metinSoluk,
                           size: 22,
                         ),
                         onPressed: () => setState(() => _kategori = i),
@@ -1527,13 +1648,19 @@ class _BosDurum extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(ikon, size: 56, color: Renkler.metinSoluk),
-          const SizedBox(height: 12),
-          Text(
-            yazi,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Renkler.metinSoluk),
+          // Neon sisli ikon kutusu — organik köşe
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              color: Renkler.neonSis,
+              borderRadius: Kose.kartKose,
+              border: Border.all(color: Renkler.kenar),
+            ),
+            child: Icon(ikon, size: 38, color: Renkler.neon),
           ),
+          const SizedBox(height: 16),
+          Text(yazi, textAlign: TextAlign.center, style: Yazi.kucuk),
         ],
       ),
     );

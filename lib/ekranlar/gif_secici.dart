@@ -113,11 +113,9 @@ class _GifSeciciState extends State<GifSecici> {
                     onTap: () => _turDegistir(true),
                   ),
                   const Spacer(),
-                  const Text('GIPHY',
-                      style: TextStyle(
-                          color: Renkler.metinSoluk,
-                          fontSize: 11,
-                          letterSpacing: 1)),
+                  Text('GIPHY',
+                      style: Yazi.stil(11, FontWeight.w700, Renkler.metinSoluk,
+                          aralik: 1)),
                 ],
               ),
             ),
@@ -131,36 +129,33 @@ class _GifSeciciState extends State<GifSecici> {
 
   Widget _govde() {
     if (!GifServisi.instance.ayarliMi) {
-      return const Padding(
-        padding: EdgeInsets.all(24),
+      return Padding(
+        padding: const EdgeInsets.all(24),
         child: Center(
           child: Text(
             'GIF için GIPHY API anahtarı gerekli.\n'
             'developers.giphy.com → Create an App → API Key\n'
             'Anahtarı lib/servisler/gif_servisi.dart içine yapıştır.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Renkler.metinSoluk),
+            style: Yazi.kucuk,
           ),
         ),
       );
     }
     if (_yukleniyor) {
       return const Center(
-        child: CircularProgressIndicator(color: Renkler.accent),
+        child: CircularProgressIndicator(color: Renkler.neon),
       );
     }
     if (_sonuclar.isEmpty) {
-      return const Center(
-        child: Text('Sonuç bulunamadı',
-            style: TextStyle(color: Renkler.metinSoluk)),
-      );
+      return Center(child: Text('Sonuç bulunamadı', style: Yazi.kucuk));
     }
     return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        mainAxisSpacing: 6,
-        crossAxisSpacing: 6,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
       ),
       itemCount: _sonuclar.length,
       itemBuilder: (_, i) {
@@ -168,16 +163,17 @@ class _GifSeciciState extends State<GifSecici> {
         return GestureDetector(
           onTap: () => Navigator.pop(context, g.gonder),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            // Organik köşe — tasarım imzası
+            borderRadius: Kose.dugme,
             child: Container(
-              color: Renkler.giris,
+              color: Renkler.yuzeyYuksek,
               child: Image.network(
                 g.onizleme,
                 fit: BoxFit.cover,
                 loadingBuilder: (c, w, p) =>
                     p == null ? w : const SizedBox.shrink(),
-                errorBuilder: (c, e, s) => const Icon(
-                    Icons.broken_image, color: Renkler.metinSoluk),
+                errorBuilder: (c, e, s) => const Icon(Icons.broken_image,
+                    color: Renkler.metinSoluk),
               ),
             ),
           ),
@@ -187,6 +183,7 @@ class _GifSeciciState extends State<GifSecici> {
   }
 }
 
+/// GIF / Sticker sekmesi — seçiliyken 3D neon.
 class _TurDugme extends StatelessWidget {
   final bool secili;
   final String etiket;
@@ -199,21 +196,17 @@ class _TurDugme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return Uc3DDugme(
+      ikincil: !secili,
+      kose: Kose.alan,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-        decoration: BoxDecoration(
-          color: secili ? Renkler.accent : Renkler.giris,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          etiket,
-          style: TextStyle(
-            color: secili ? Colors.white : Renkler.metinSoluk,
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-          ),
+      cocuk: Text(
+        etiket,
+        style: Yazi.stil(
+          13,
+          FontWeight.w800,
+          secili ? Renkler.metinKoyu : Renkler.metinSoluk,
         ),
       ),
     );

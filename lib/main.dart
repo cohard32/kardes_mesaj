@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
@@ -28,6 +29,8 @@ void main() async {
   await BildirimServisi.instance.baslat();
   // CallKit (gelen arama ekranı) olaylarını dinle
   _callkitDinle();
+  // Sistem çubukları temaya uysun (AppBar'ı olmayan ekranlar dahil)
+  SystemChrome.setSystemUIOverlayStyle(AppTema.sistemCubuklari);
   runApp(const KardesMesajApp());
 }
 

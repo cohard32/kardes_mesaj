@@ -20,8 +20,10 @@ class AuthGate extends StatelessWidget {
         // Firebase ilk durumu çözerken kısa bir bekleme
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(color: Renkler.accent),
+            body: Zemin(
+              child: Center(
+                child: CircularProgressIndicator(color: Renkler.neon),
+              ),
             ),
           );
         }

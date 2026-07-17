@@ -4,11 +4,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, MethodChannel;
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:googleapis_auth/auth_io.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'ayar_servisi.dart';
 
@@ -36,13 +37,21 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
     appName: 'Kardeş Mesaj',
     handle: video ? 'Görüntülü arama' : 'Sesli arama',
     type: video ? 1 : 0,
+    // Zil süresi: arayan tarafın 45 sn zaman aşımıyla uyumlu.
+    // (verilmezse süre belirsiz kalıp erken kesiliyordu)
+    duration: 45000,
     extra: <String, dynamic>{'kanal': kanal, 'tip': data['tip']},
     android: const AndroidParams(
       isCustomNotification: true,
+      // TAM EKRAN AKTİVİTE olarak göster (sadece bildirim değil) → ekran
+      // kapalı/kilitliyken bile gelen arama ekranı açılır. KRİTİK.
+      isFullScreen: true,
       isShowFullLockedScreen: true,
       isShowCallID: false,
       isImportant: true,
-      ringtonePath: 'system_ringtone_default',
+      // Paketin res/raw içindeki kendi zili. 'system_ringtone_default' GEÇERSİZDİ
+      // (dosya adı bekleniyor) → zil 1 kez çalıp kesiliyordu.
+      ringtonePath: 'ringtone_default',
       textAccept: 'Kabul Et',
       textDecline: 'Reddet',
     ),
@@ -102,6 +111,36 @@ class BildirimServisi {
     return null; // varsayilan (sistem) / sessiz
   }
 
+  // Native izin/ses kontrolleri (MainActivity.kt ile aynı kanal adı)
+  static const MethodChannel _native = MethodChannel('kardes_mesaj/sesler');
+
+  /// Android 14+ tam ekran bildirim izni var mı? (yoksa ekran kapalıyken
+  /// gelen arama tam ekran açılmaz, sadece bildirime düşer)
+  Future<bool> tamEkranIzniVarMi() async {
+    try {
+      return await _native.invokeMethod<bool>('tamEkranIzniVarMi') ?? true;
+    } catch (_) {
+      return true; // kontrol edilemiyorsa engelleme
+    }
+  }
+
+  /// Tam ekran bildirim izni ayar ekranını açar.
+  Future<void> tamEkranAyarlariniAc() async {
+    try {
+      await _native.invokeMethod<void>('tamEkranAyarlariniAc');
+    } catch (_) {}
+  }
+
+  /// Pil optimizasyonu muafiyeti ister (Doze uygulamayı uyutup aramayı/
+  /// bildirimi geciktirmesin). Zaten verilmişse tekrar sormaz.
+  Future<void> pilOptimizasyonuIste() async {
+    try {
+      if (!await Permission.ignoreBatteryOptimizations.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (_) {}
+  }
+
   final FirebaseMessaging _mesajlasma = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _yerel =
       FlutterLocalNotificationsPlugin();
@@ -109,6 +148,7 @@ class BildirimServisi {
       FirebaseFirestore.instance.collection('kullanicilar');
 
   bool _kuruldu = false;
+  bool _tokenDinleyiciKuruldu = false;
 
   /// Uygulama açılışında bir kez çağrılır (main.dart, Firebase init sonrası).
   /// İzin ister, yerel bildirim kanalını kurar, foreground dinleyicisini açar.
@@ -235,6 +275,13 @@ class BildirimServisi {
           playSound: secim != 'sessiz',
           sound: _sesFor(secim),
           enableVibration: ayar.titresimAcik.value,
+          // Kilit ekranında içerik GİZLENMESİN (yarım görünme sorunu)
+          visibility: NotificationVisibility.public,
+          // Uzun mesaj tek satıra kırpılmasın, açılabilir olsun
+          styleInformation: BigTextStyleInformation(
+            bildirim.body ?? '',
+            contentTitle: bildirim.title,
+          ),
         ),
       ),
     );
@@ -258,13 +305,20 @@ class BildirimServisi {
     // Seçili bildirim kanalını da yayınla (karşı taraf push'ta kullanır)
     await kanalYayinla();
 
-    // Token zamanla yenilenebilir — değişince güncelle
-    _mesajlasma.onTokenRefresh.listen((yeniToken) {
-      _kullanicilar.doc(kullanici.uid).set(
-        {'fcmToken': yeniToken},
-        SetOptions(merge: true),
-      );
-    });
+    // Token zamanla yenilenebilir — değişince güncelle.
+    // tokenKaydet() sohbet ekranı her açıldığında çağrılıyor; dinleyici
+    // birikmesin diye SADECE BİR KEZ kur.
+    if (!_tokenDinleyiciKuruldu) {
+      _tokenDinleyiciKuruldu = true;
+      _mesajlasma.onTokenRefresh.listen((yeniToken) {
+        final u = FirebaseAuth.instance.currentUser;
+        if (u == null) return;
+        _kullanicilar.doc(u.uid).set(
+          {'fcmToken': yeniToken},
+          SetOptions(merge: true),
+        );
+      });
+    }
   }
 
   /// Karşı tarafa (iki kişilik: benim dışımdaki kullanıcı) bildirim gönderir.
@@ -278,8 +332,14 @@ class BildirimServisi {
       'notification': {'title': baslik, 'body': govde},
       'android': {
         'priority': 'high',
-        // Karşı tarafın SEÇTİĞİ kanal → kendi sesini duyar (kapalıyken bile)
-        'notification': {'channel_id': hedefKanal},
+        'notification': {
+          // Karşı tarafın SEÇTİĞİ kanal → kendi sesini duyar (kapalıyken bile)
+          'channel_id': hedefKanal,
+          // Kilit ekranında içerik gizlenmesin/yarım görünmesin
+          'visibility': 'PUBLIC',
+          // Aynı sohbet tek bildirimde toplansın
+          'tag': 'kardes_mesaj',
+        },
       },
     });
   }
