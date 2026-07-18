@@ -212,6 +212,9 @@ class BildirimServisi {
       FlutterLocalNotificationsPlugin();
   final CollectionReference<Map<String, dynamic>> _kullanicilar =
       FirebaseFirestore.instance.collection('kullanicilar');
+  // FAZ 4: profiller + token'lar buraya taşınıyor (hedefli bildirim için)
+  final CollectionReference<Map<String, dynamic>> _users =
+      FirebaseFirestore.instance.collection('users');
 
   bool _kuruldu = false;
   bool _tokenDinleyiciKuruldu = false;
@@ -317,14 +320,16 @@ class BildirimServisi {
     await kanalYayinla();
   }
 
-  /// Aktif kanal id'sini Firestore'a yazar.
+  /// Aktif kanal id'sini Firestore'a yazar (hem eski `kullanicilar` hem
+  /// FAZ 4 `users` — geçiş dönemi çift yazım).
   Future<void> kanalYayinla() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    await _kullanicilar.doc(uid).set(
-      {'bildirimKanali': aktifKanalId},
-      SetOptions(merge: true),
-    );
+    final veri = {'bildirimKanali': aktifKanalId};
+    await _kullanicilar.doc(uid).set(veri, SetOptions(merge: true));
+    try {
+      await _users.doc(uid).set(veri, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   void _foregroundGoster(RemoteMessage message) {
@@ -371,11 +376,16 @@ class BildirimServisi {
 
     final token = await _mesajlasma.getToken();
     if (token != null) {
-      await _kullanicilar.doc(kullanici.uid).set({
+      final veri = {
         'fcmToken': token,
-        'eposta': kullanici.email,
         'guncelleme': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      await _kullanicilar.doc(kullanici.uid)
+          .set({...veri, 'eposta': kullanici.email}, SetOptions(merge: true));
+      // FAZ 4: hedefli bildirim token'ı users'tan okuyor → oraya da yaz.
+      try {
+        await _users.doc(kullanici.uid).set(veri, SetOptions(merge: true));
+      } catch (_) {}
     }
 
     // Seçili bildirim kanalını da yayınla (karşı taraf push'ta kullanır)
@@ -393,6 +403,10 @@ class BildirimServisi {
           {'fcmToken': yeniToken},
           SetOptions(merge: true),
         );
+        _users.doc(u.uid).set(
+          {'fcmToken': yeniToken},
+          SetOptions(merge: true),
+        ).catchError((_) {});
       });
     }
   }
@@ -455,52 +469,93 @@ class BildirimServisi {
     });
   }
 
-  /// FCM HTTP v1 ortak gönderim: karşı tarafın token'ını + seçtiği bildirim
-  /// kanalını bulur, service account ile OAuth2 alır, [kur](hedefKanal) ile
-  /// `message` gövdesini oluşturup yollar.
+  /// (2 kişilik — eski akış) Karşı tarafın token'ını + kanalını bulur, yollar.
+  /// FAZ 4'te yerini [hedefeBildirimGonder] / [hedefeVeriGonder] alacak.
   Future<void> _push({
     required Map<String, dynamic> Function(String hedefKanal) kur,
   }) async {
-    try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null) return;
-
-      // Karşı tarafın token'ı + seçtiği bildirim kanalı
-      final snap = await _kullanicilar.get();
-      String? hedefToken;
-      var hedefKanal = _kanalVarsayilan;
-      for (final doc in snap.docs) {
-        if (doc.id != uid) {
-          final d = doc.data();
-          hedefToken = d['fcmToken'] as String?;
-          hedefKanal = (d['bildirimKanali'] as String?) ?? _kanalVarsayilan;
-          if (hedefToken != null) break;
-        }
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final snap = await _kullanicilar.get();
+    String? hedefToken;
+    var hedefKanal = _kanalVarsayilan;
+    for (final doc in snap.docs) {
+      if (doc.id != uid) {
+        final d = doc.data();
+        hedefToken = d['fcmToken'] as String?;
+        hedefKanal = (d['bildirimKanali'] as String?) ?? _kanalVarsayilan;
+        if (hedefToken != null) break;
       }
-      if (hedefToken == null) return;
+    }
+    if (hedefToken == null) return;
+    await _gonderMesaj(hedefToken, kur(hedefKanal));
+  }
 
-      // Service account ile OAuth2 erişim token'ı al
+  /// FAZ 4: BELİRLİ bir kullanıcıya (uid) mesaj bildirimi gönderir.
+  /// [ekstraData] verilirse data payload olarak eklenir (sohbet açma vb.).
+  Future<void> hedefeBildirimGonder({
+    required String hedefUid,
+    required String baslik,
+    required String govde,
+    Map<String, String>? ekstraData,
+  }) async {
+    final d = (await _users.doc(hedefUid).get()).data();
+    final token = d?['fcmToken'] as String?;
+    if (token == null) return;
+    final kanal = (d?['bildirimKanali'] as String?) ?? _kanalVarsayilan;
+    await _gonderMesaj(token, {
+      'notification': {'title': baslik, 'body': govde},
+      'data': ?ekstraData,
+      'android': {
+        'priority': 'high',
+        'notification': {
+          'channel_id': kanal,
+          'visibility': 'PUBLIC',
+          'tag': 'km_$hedefUid',
+        },
+      },
+    });
+  }
+
+  /// FAZ 4: BELİRLİ bir kullanıcıya data-only push (arama/iptal gibi).
+  Future<void> hedefeVeriGonder({
+    required String hedefUid,
+    required Map<String, String> veri,
+  }) async {
+    final token = (await _users.doc(hedefUid).get()).data()?['fcmToken']
+        as String?;
+    if (token == null) return;
+    await _gonderMesaj(token, {
+      'data': veri,
+      'android': {'priority': 'HIGH', 'ttl': '45s'},
+    });
+  }
+
+  /// DÜŞÜK SEVİYE: verilen token'a, service account OAuth2 ile FCM HTTP v1 gönderir.
+  Future<void> _gonderMesaj(
+    String hedefToken,
+    Map<String, dynamic> mesajAlanlari,
+  ) async {
+    try {
       final saJson =
           await rootBundle.loadString('assets/service_account.json');
       final saMap = jsonDecode(saJson) as Map<String, dynamic>;
       final projectId = saMap['project_id'] as String?;
-      if (projectId == null) return; // placeholder dosya → henüz hazır değil
+      if (projectId == null) return;
 
       final credentials = ServiceAccountCredentials.fromJson(saMap);
       final client = await clientViaServiceAccount(
         credentials,
         ['https://www.googleapis.com/auth/firebase.messaging'],
       );
-
       try {
-        final url = Uri.parse(
-          'https://fcm.googleapis.com/v1/projects/$projectId/messages:send',
-        );
         final yanit = await client.post(
-          url,
+          Uri.parse(
+            'https://fcm.googleapis.com/v1/projects/$projectId/messages:send',
+          ),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'message': {'token': hedefToken, ...kur(hedefKanal)},
+            'message': {'token': hedefToken, ...mesajAlanlari},
           }),
         );
         if (yanit.statusCode != 200) {

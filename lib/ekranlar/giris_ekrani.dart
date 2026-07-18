@@ -1,10 +1,11 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
+import 'kayit_ekrani.dart';
 
-/// Tek ekran: e-posta + şifre + "Giriş yap".
-/// Kayıt ekranı YOK — hesaplar Firebase panelinden elle açılır.
+/// Giriş ekranı: e-posta + şifre + "Giriş yap" + "Kayıt ol" + "Şifremi unuttum".
 class GirisEkrani extends StatefulWidget {
   const GirisEkrani({super.key});
 
@@ -174,6 +175,33 @@ class _GirisEkraniState extends State<GirisEkrani> {
                           )
                         : Text('Giriş yap', style: Yazi.dugme),
                   ),
+
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _yukleniyor ? null : _sifremiUnuttum,
+                    child: Text('Şifremi unuttum',
+                        style: Yazi.stil(13, FontWeight.w600, Renkler.metinSoluk)),
+                  ),
+                  const SizedBox(height: 6),
+                  // Kayıt ol
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Hesabın yok mu?', style: Yazi.kucuk),
+                      TextButton(
+                        onPressed: _yukleniyor
+                            ? null
+                            : () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => const KayitEkrani(),
+                                  ),
+                                ),
+                        child: Text('Kayıt ol',
+                            style:
+                                Yazi.stil(14, FontWeight.w800, Renkler.neon)),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -181,5 +209,22 @@ class _GirisEkraniState extends State<GirisEkrani> {
         ),
       ),
     );
+  }
+
+  Future<void> _sifremiUnuttum() async {
+    final eposta = _epostaCtrl.text.trim();
+    if (eposta.isEmpty) {
+      setState(() => _hata = 'Önce e-posta adresini yaz.');
+      return;
+    }
+    try {
+      await KullaniciServisi.instance.sifreSifirla(eposta);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Şifre sıfırlama e-postası gönderildi.')),
+      );
+    } on KullaniciHatasi catch (e) {
+      if (mounted) setState(() => _hata = e.mesaj);
+    }
   }
 }
