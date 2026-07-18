@@ -156,6 +156,7 @@ class AramaServisi {
       options: const ChannelMediaOptions(),
     );
     _aktifKanal = kanal;
+    aktifAramaVar = true; // meşgul bayrağı (bildirim_servisi top-level)
   }
 
   String _kanalUret() => 'k_${DateTime.now().millisecondsSinceEpoch}';
@@ -259,6 +260,7 @@ class AramaServisi {
     } catch (_) {}
     _engine = null;
     _aktifKanal = null;
+    aktifAramaVar = false; // meşgul bayrağını temizle
     karsiUid.value = null;
     katildi.value = false;
     bekleyenKanal = null;

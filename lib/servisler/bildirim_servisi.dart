@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle, MethodChannel;
@@ -21,8 +22,18 @@ import 'ayar_servisi.dart';
 ///   data.tur == 'arama_iptal' → arayan kapattı, çalmayı DURDUR
 @pragma('vm:entry-point')
 Future<void> arkaplanMesajHandler(RemoteMessage message) async {
+  // Arka plan izole edilmiş bir isolate'te çalışır — Firebase burada da
+  // başlatılmalı, yoksa eklenti çağrıları çökebilir ve CallKit hiç açılmaz.
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
   await aramaMesajiIsle(message.data);
 }
+
+/// Şu an aktif bir aramada mıyım? AramaServisi katılınca/bitince günceller.
+/// (Aynı isolate'te) meşgulken gelen yeni çağrının CallKit'i açmasını engeller.
+/// Dairesel import olmasın diye burada top-level tutulur.
+bool aktifAramaVar = false;
 
 /// Çağrı ile ilgili FCM verisini işler. Hem arka plan handler'ı hem de
 /// uygulama açıkken (onMessage) AYNI yolu kullanır → tek tutarlı akış.
@@ -30,7 +41,13 @@ Future<void> arkaplanMesajHandler(RemoteMessage message) async {
 Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
   switch (data['tur']) {
     case 'arama':
+      // Önce zil çalsın (gecikme olmasın)...
       await gelenAramayiGoster(data);
+      // ...sonra TEŞHİS (fire-and-forget): handler'ın GERÇEKTEN çalıştığını
+      // Firestore'a işaretle. "Kapalıyken hiç gelmiyor"un sebebi böyle ayrışır:
+      //  - Bu zaman damgası güncellendiyse → FCM ULAŞTI (sorun CallKit/kod).
+      //  - Güncellenmediyse → FCM cihaza HİÇ ulaşmadı (autostart/pil = cihaz ayarı).
+      _cagriPushTeshisYaz(data['kanal']?.toString());
       return true;
     case 'arama_iptal':
       // Arayan kapattı/vazgeçti → zil sussun, ekran kapansın.
@@ -41,6 +58,33 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
     default:
       return false;
   }
+}
+
+/// Çağrı push'unun alındığını (handler çalıştığını) Firestore'a yazar.
+/// Arka plan izolatında da çalışır (Firebase init edilmiş + oturum diskten geri
+/// yüklenmiş olur).
+Future<void> _cagriPushTeshisYaz(String? kanal) async {
+  try {
+    // Arka plan izolatında oturum diskten geç yüklenebilir → kısa süre bekle.
+    var uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      try {
+        final u = await FirebaseAuth.instance
+            .authStateChanges()
+            .firstWhere((u) => u != null)
+            .timeout(const Duration(seconds: 3));
+        uid = u?.uid;
+      } catch (_) {}
+    }
+    if (uid == null) return;
+    await FirebaseFirestore.instance
+        .collection('kullanicilar')
+        .doc(uid)
+        .set({
+      'sonCagriPush': FieldValue.serverTimestamp(),
+      'sonCagriPushKanal': kanal,
+    }, SetOptions(merge: true));
+  } catch (_) {}
 }
 
 /// GELEN ARAMA — uygulamanın TEK gelen arama ekranı (her durumda bu çalışır:
@@ -198,6 +242,8 @@ class BildirimServisi {
   /// Çağrı mesajları arka planla AYNI yoldan geçer (CallKit) → uygulama açıkken
   /// de zil çalar, tek tutarlı akış olur.
   Future<void> _gelenMesaj(RemoteMessage message) async {
+    // MEŞGUL: zaten bir aramadayken yeni gelen çağrıyı gösterme (üstüne binmesin).
+    if (message.data['tur'] == 'arama' && aktifAramaVar) return;
     if (await aramaMesajiIsle(message.data)) return; // çağrı/iptal ise bitti
     _foregroundGoster(message); // normal mesaj bildirimi
   }
@@ -389,7 +435,10 @@ class BildirimServisi {
         'kanal': kanal,
       },
       'android': {
-        'priority': 'high',
+        // HTTP v1 kanonik değer BÜYÜK harf 'HIGH'. Data-only mesajın
+        // ÖLDÜRÜLMÜŞ uygulamayı uyandırması için priority HIGH ŞART
+        // (küçük harf 'high' düşük önceliğe düşebiliyordu → çağrı hiç gelmiyordu).
+        'priority': 'HIGH',
         // Çağrı anlıktır; gecikirse anlamsız → kuyrukta bekletme.
         'ttl': '45s',
       },
@@ -402,7 +451,7 @@ class BildirimServisi {
   Future<void> karsiTarafaAramaIptal({required String kanal}) async {
     await _push(kur: (_) => {
       'data': {'tur': 'arama_iptal', 'kanal': kanal},
-      'android': {'priority': 'high', 'ttl': '45s'},
+      'android': {'priority': 'HIGH', 'ttl': '45s'},
     });
   }
 
