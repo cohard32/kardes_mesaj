@@ -16,7 +16,6 @@ import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
-import '../servisler/guncelleme_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
@@ -111,7 +110,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         setState(() => _emojiAcik = false);
       }
     });
-    _guncellemeKontrol();
+    // NOT: güncelleme kontrolü artık AnaKabuk'ta (açılışta) yapılıyor.
     // kalmış stale aramayı temizle
     AramaServisi.instance.eskiAramayiTemizle(widget.chatId);
     _aramaIzinleriniKontrolEt();
@@ -222,58 +221,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _presence.cevrimdisiYap();
-    }
-  }
-
-  // GitHub'da yeni sürüm varsa otomatik indirip kurulumu başlatır.
-  Future<void> _guncellemeKontrol() async {
-    final bilgi = await GuncellemeServisi.instance.kontrolEt();
-    if (bilgi == null || !mounted) return;
-
-    final ilerleme = ValueNotifier<double>(0);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Text(
-          'Güncelleme indiriliyor (v${bilgi.surum})',
-          style: Yazi.baslikOrta,
-        ),
-        content: ValueListenableBuilder<double>(
-          valueListenable: ilerleme,
-          builder: (_, yuzde, _) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: yuzde > 0 ? yuzde : null,
-                  minHeight: 8,
-                  color: Renkler.neon,
-                  backgroundColor: Renkler.zeminDerin,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text('%${(yuzde * 100).toStringAsFixed(0)}', style: Yazi.etiket),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    try {
-      await GuncellemeServisi.instance.indirVeKur(
-        bilgi.apkUrl,
-        (y) => ilerleme.value = y,
-      );
-      if (mounted) Navigator.of(context, rootNavigator: true).pop();
-    } catch (e) {
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Güncelleme indirilemedi: $e')));
-      }
     }
   }
 

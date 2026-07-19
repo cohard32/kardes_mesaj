@@ -2,8 +2,10 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../parcalar/guncelleme_akisi.dart';
 import '../servisler/ayar_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/guncelleme_servisi.dart';
 import '../tema.dart';
 
 /// Ayarlar ekranı: bildirim aç/kapa, titreşim, bildirim sesi
@@ -168,6 +170,20 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
               'cihazındaki herhangi bir bildirim sesini seçebilirsin. Seçtiğin '
               'ses, sana mesaj/arama geldiğinde çalar (uygulama kapalıyken bile).',
               style: Yazi.zaman,
+            ),
+          ),
+
+          const _BolumBaslik('Uygulama'),
+
+          _Kart(
+            child: ListTile(
+              leading: const Icon(Icons.system_update, color: Renkler.neon),
+              title: Text('Güncellemeleri kontrol et', style: Yazi.isim),
+              subtitle: Text('Yüklü sürüm: v${GuncellemeServisi.mevcutSurum}',
+                  style: Yazi.kucuk),
+              trailing:
+                  const Icon(Icons.chevron_right, color: Renkler.metinSoluk),
+              onTap: () => guncellemeAkisi(context, sessiz: false),
             ),
           ),
         ],

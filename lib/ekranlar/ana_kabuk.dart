@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../main.dart' show bekleyenSohbetiAc;
+import '../parcalar/guncelleme_akisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/presence_servisi.dart';
@@ -35,6 +36,9 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bekleyenAramayiAc();
       bekleyenSohbetiAc();
+      // Açılışta güncelleme kontrolü (eskiden SohbetEkrani'ndaydı; FAZ 4'te
+      // ana ekran AnaKabuk olduğu için buraya taşındı → her açılışta çalışır).
+      if (mounted) guncellemeAkisi(context, sessiz: true);
     });
   }
 
