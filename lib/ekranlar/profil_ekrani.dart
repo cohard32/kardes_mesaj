@@ -43,6 +43,15 @@ class ProfilEkrani extends StatelessWidget {
             : StreamBuilder<Kullanici>(
                 stream: akis,
                 builder: (context, snap) {
+                  if (snap.hasError) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('Profil yüklenemedi. Bağlantını kontrol et.',
+                            textAlign: TextAlign.center),
+                      ),
+                    );
+                  }
                   if (!snap.hasData) {
                     return const Center(
                         child: CircularProgressIndicator(color: Renkler.neon));

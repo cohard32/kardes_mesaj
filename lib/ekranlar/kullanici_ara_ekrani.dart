@@ -9,6 +9,7 @@ import '../servisler/arkadas_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
 import 'profil_goruntule_ekrani.dart';
+import 'qr_tarayici_ekrani.dart';
 
 /// Kullanıcı adıyla (@) arama + arkadaş ekleme (FAZ 4.2).
 class KullaniciAraEkrani extends StatefulWidget {
@@ -59,7 +60,20 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Kullanıcı bul')),
+      appBar: AppBar(
+        title: const Text('Kullanıcı bul'),
+        actions: [
+          IconButton(
+            tooltip: 'QR ile ekle',
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const QrTarayiciEkrani(),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: Zemin(
         child: Column(
           children: [
@@ -148,8 +162,13 @@ class _SonucSatiriState extends State<_SonucSatiri> {
   }
 
   Future<void> _durumYukle() async {
-    final d = await _arkadas.iliskiDurumu(widget.kullanici.uid);
-    if (mounted) setState(() => _durum = d);
+    try {
+      final d = await _arkadas.iliskiDurumu(widget.kullanici.uid);
+      if (mounted) setState(() => _durum = d);
+    } catch (_) {
+      // Beklenmeyen hata → dönmeyi durdur, "Ekle" göster (sonsuz loading olmasın)
+      if (mounted) setState(() => _durum = IliskiDurumu.yok);
+    }
   }
 
   Future<void> _istekGonder() async {

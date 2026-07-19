@@ -59,8 +59,11 @@ service cloud.firestore {
 
     // ---- ARKADAŞLIK İSTEKLERİ ----
     // Sadece gönderen ve alan görebilir/yönetebilir.
+    // resource == null → VAR OLMAYAN doküman: varlık kontrolü (iliskiDurumu)
+    // reddedilmesin (yoksa sonsuz loading olur). Var olan isteği yalnız taraflar okur.
     match /friend_requests/{id} {
       allow read: if girisli() && (
+        resource == null ||
         resource.data.gonderenUid == request.auth.uid ||
         resource.data.alanUid == request.auth.uid);
       allow create: if girisli()
@@ -76,7 +79,10 @@ service cloud.firestore {
     // ⚠️ Oluşturma: karşı taraftan BANA bekleyen istek OLMALI (banaIstekVar) —
     //    yoksa biri kendini onaysız başkasına arkadaş yapabilirdi (rules testi T8).
     match /friendships/{id} {
-      allow read: if girisli() && request.auth.uid in resource.data.uidler;
+      // resource == null → var olmayan doküman: arkadasMi varlık kontrolü
+      // reddedilmesin (sonsuz loading engeli). Var olanı yalnız taraflar okur.
+      allow read: if girisli() &&
+        (resource == null || request.auth.uid in resource.data.uidler);
       allow create: if girisli()
         && request.auth.uid in request.resource.data.uidler
         && request.resource.data.uidler.size() == 2

@@ -31,8 +31,13 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
   }
 
   Future<void> _durumYukle() async {
-    final d = await _arkadas.iliskiDurumu(widget.kullanici.uid);
-    if (mounted) setState(() => _durum = d);
+    try {
+      final d = await _arkadas.iliskiDurumu(widget.kullanici.uid);
+      if (mounted) setState(() => _durum = d);
+    } catch (_) {
+      // Hata → dönmeyi durdur, "Arkadaş ekle" göster (sonsuz loading olmasın)
+      if (mounted) setState(() => _durum = IliskiDurumu.yok);
+    }
   }
 
   Future<void> _istekGonder() async {

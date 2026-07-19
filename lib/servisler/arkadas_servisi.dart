@@ -26,25 +26,40 @@ class ArkadasServisi {
 
   String _istekId(String gonderen, String alan) => '${gonderen}_$alan';
 
+  /// Bir dokümanın var olup olmadığını GÜVENLE döndürür.
+  /// Var olmayan dokümanın okuması kural gereği permission-denied verebilir;
+  /// bu bizim için "yok" demektir → hatayı yutup false döneriz (sonsuz loading
+  /// yerine). Bkz. iliskiDurumu.
+  Future<bool> _belgeVarMi(
+      DocumentReference<Map<String, dynamic>> ref) async {
+    try {
+      return (await ref.get()).exists;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// İki kişi arkadaş mı?
   Future<bool> arkadasMi(String digerUid) async {
     final me = _uid;
     if (me == null) return false;
-    return (await _friendships.doc(ciftKimligi(me, digerUid)).get()).exists;
+    return _belgeVarMi(_friendships.doc(ciftKimligi(me, digerUid)));
   }
 
   /// Bir kullanıcıyla ilişki durumumu (buton metni için) hesaplar.
+  /// Tüm okumalar [_belgeVarMi] ile güvenli — var olmayan doküman / izin hatası
+  /// "ilişki yok" olarak ele alınır (asla exception fırlatıp UI'ı dondurmaz).
   Future<IliskiDurumu> iliskiDurumu(String digerUid) async {
     final me = _uid;
     if (me == null) return IliskiDurumu.yok;
     if (me == digerUid) return IliskiDurumu.benim;
     if (await arkadasMi(digerUid)) return IliskiDurumu.arkadas;
     // Ben gönderdim mi?
-    if ((await _istekler.doc(_istekId(me, digerUid)).get()).exists) {
+    if (await _belgeVarMi(_istekler.doc(_istekId(me, digerUid)))) {
       return IliskiDurumu.istekGonderdim;
     }
     // Bana geldi mi?
-    if ((await _istekler.doc(_istekId(digerUid, me)).get()).exists) {
+    if (await _belgeVarMi(_istekler.doc(_istekId(digerUid, me)))) {
       return IliskiDurumu.istekGeldi;
     }
     return IliskiDurumu.yok;

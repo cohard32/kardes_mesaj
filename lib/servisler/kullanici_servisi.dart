@@ -172,6 +172,17 @@ class KullaniciServisi {
     return doc.exists ? Kullanici.firestoreDan(doc) : null;
   }
 
+  /// Tam @kullanıcı adından profili bulur (QR tarama / doğrudan giriş için).
+  /// usernames/{ad} → uid → users/{uid}. Bulunamazsa null.
+  Future<Kullanici?> kullaniciAdindanBul(String ad) async {
+    final a = ad.trim().toLowerCase().replaceAll('@', '');
+    if (a.isEmpty) return null;
+    final doc = await _usernames.doc(a).get();
+    final uid = doc.data()?['uid'] as String?;
+    if (uid == null) return null;
+    return profilGetir(uid);
+  }
+
   /// Kendi profilim (canlı).
   Stream<Kullanici>? benimProfilim() {
     final uid = _uid;
