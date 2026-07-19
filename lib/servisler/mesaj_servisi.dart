@@ -5,62 +5,70 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/mesaj.dart';
 import 'bildirim_servisi.dart';
+import 'kullanici_servisi.dart';
 import 'medya_servisi.dart';
 
-/// Firestore üzerinde mesaj okuma/yazma işlemlerini yöneten servis.
-/// İki kişilik tek sohbet olduğu için tek bir `mesajlar` koleksiyonu yeter.
+/// Sohbet bazlı mesaj okuma/yazma (FAZ 4.6).
+/// Mesajlar `chats/{chatId}/messages` altında. Gönderimde sohbet meta'sı
+/// (sonMesaj/okunmamış) güncellenir ve karşı tarafa hedefli bildirim gider.
 class MesajServisi {
   MesajServisi._();
   static final MesajServisi instance = MesajServisi._();
 
-  final CollectionReference<Map<String, dynamic>> _koleksiyon =
-      FirebaseFirestore.instance.collection('mesajlar');
+  final _db = FirebaseFirestore.instance;
+
+  DocumentReference<Map<String, dynamic>> _chat(String chatId) =>
+      _db.collection('chats').doc(chatId);
+  CollectionReference<Map<String, dynamic>> _mesajlar(String chatId) =>
+      _chat(chatId).collection('messages');
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  /// Tüm mesajları zaman sırasına göre (eski → yeni) canlı dinler.
-  Stream<List<Mesaj>> mesajlariDinle() {
-    return _koleksiyon
-        .orderBy('zaman', descending: false)
-        .snapshots()
-        .map((anlik) =>
-            anlik.docs.map((doc) => Mesaj.firestoreDan(doc)).toList());
+  String? _benimAdimCache;
+  Future<String> _benimAdim() async {
+    if (_benimAdimCache != null) return _benimAdimCache!;
+    final uid = _uid;
+    if (uid == null) return 'Mesaj';
+    final k = await KullaniciServisi.instance.profilGetir(uid);
+    _benimAdimCache = (k?.ad.isNotEmpty ?? false) ? k!.ad : 'Mesaj';
+    return _benimAdimCache!;
   }
 
-  /// Yeni mesaj gönderir (Firestore'a ekler). Boş mesaj gönderilmez.
-  /// Gönderim sonrası karşı tarafa push bildirim tetikler.
-  Future<void> gonder(String metin) async {
+  /// Bir sohbetin SON [limit] mesajını zaman sırasına göre (eski → yeni) dinler.
+  /// [limit] artırılınca daha eski mesajlar yüklenir (sohbet ekranı yukarı
+  /// kaydırınca artırır) — tüm geçmişi tek seferde çekmez (pil/kota/bellek).
+  Stream<List<Mesaj>> mesajlariDinle(String chatId, {int limit = 50}) {
+    return _mesajlar(chatId)
+        .orderBy('zaman', descending: false)
+        .limitToLast(limit)
+        .snapshots()
+        .map((s) => s.docs.map(Mesaj.firestoreDan).toList());
+  }
+
+  /// Metin mesajı gönderir + sohbet meta güncelle + karşı tarafa bildirim.
+  Future<void> gonder(String chatId, String alanUid, String metin) async {
     final temiz = metin.trim();
     final uid = _uid;
     if (temiz.isEmpty || uid == null) return;
 
-    await _koleksiyon.add(
+    await _mesajlar(chatId).add(
       Mesaj.yeniMesajVerisi(gonderen: uid, metin: temiz),
     );
-
-    // Karşı tarafa bildirim (fire-and-forget; mesaj zaten gitti, beklemeyiz)
-    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
-    BildirimServisi.instance.karsiTarafaBildirimGonder(
-      baslik: eposta,
-      govde: temiz,
-    );
+    await _metaGuncelle(chatId, alanUid, temiz);
+    _bildir(alanUid, chatId, temiz);
   }
 
-  /// Medya (resim/video/ses) gönderir: önce Cloudinary'ye yükler,
-  /// sonra Firestore'a medya mesajı ekler ve karşı tarafa bildirim atar.
-  /// Yükleme başarısızsa false döner.
-  Future<bool> medyaGonder(File dosya, MesajTipi tip) async {
+  /// Medya (resim/video/ses) gönderir (Cloudinary'ye yükler).
+  Future<bool> medyaGonder(String chatId, String alanUid, File dosya,
+      MesajTipi tip) async {
     final uid = _uid;
     if (uid == null) return false;
-
     final url = await MedyaServisi.instance.yukle(dosya, tip);
     if (url == null) return false;
 
-    await _koleksiyon.add(
+    await _mesajlar(chatId).add(
       Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),
     );
-
-    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
     final etiket = switch (tip) {
       MesajTipi.resim => '📷 Fotoğraf',
       MesajTipi.video => '🎥 Video',
@@ -68,64 +76,84 @@ class MesajServisi {
       MesajTipi.gif => '🎞️ GIF',
       MesajTipi.metin => 'Mesaj',
     };
-    BildirimServisi.instance.karsiTarafaBildirimGonder(
-      baslik: eposta,
-      govde: etiket,
-    );
+    await _metaGuncelle(chatId, alanUid, etiket);
+    _bildir(alanUid, chatId, etiket);
     return true;
   }
 
-  /// GIF/sticker gönderir. GIPHY URL'i doğrudan Firestore'a yazılır
-  /// (Cloudinary'ye yükleme gerekmez — GIF zaten internette barınıyor).
-  Future<void> gifGonder(String url) async {
+  /// GIF gönderir (GIPHY URL doğrudan yazılır).
+  Future<void> gifGonder(String chatId, String alanUid, String url) async {
     final uid = _uid;
     if (uid == null) return;
-
-    await _koleksiyon.add(
+    await _mesajlar(chatId).add(
       Mesaj.yeniMedyaVerisi(gonderen: uid, tip: MesajTipi.gif, medyaUrl: url),
     );
-
-    final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
-    BildirimServisi.instance.karsiTarafaBildirimGonder(
-      baslik: eposta,
-      govde: '🎞️ GIF',
-    );
+    await _metaGuncelle(chatId, alanUid, '🎞️ GIF');
+    _bildir(alanUid, chatId, '🎞️ GIF');
   }
 
-  /// Karşı taraftan gelen bir sesli mesajı "dinlendi" işaretler.
-  Future<void> sesDinlendiIsaretle(String mesajId) async {
+  /// Karşı taraftan gelen sesli mesajı "dinlendi" işaretler.
+  Future<void> sesDinlendiIsaretle(String chatId, String mesajId) async {
     try {
-      await _koleksiyon.doc(mesajId).update({'sesDinlendi': true});
-    } catch (_) {
-      // mesaj silinmiş olabilir; sessizce geç
-    }
+      await _mesajlar(chatId).doc(mesajId).update({'sesDinlendi': true});
+    } catch (_) {}
   }
 
-  /// Bir mesaja emoji tepkisi ekler/kaldırır. Aynı emoji tekrar seçilirse
-  /// tepki kaldırılır (toggle).
-  Future<void> tepkiDegistir(String mesajId, String emoji) async {
-    final doc = _koleksiyon.doc(mesajId);
+  /// Bir mesaja emoji tepkisi ekler/kaldırır (toggle).
+  Future<void> tepkiDegistir(
+      String chatId, String mesajId, String emoji) async {
+    final doc = _mesajlar(chatId).doc(mesajId);
     final mevcut = await doc.get();
     final eskiTepki = mevcut.data()?['tepki'] as String?;
     await doc.update({'tepki': eskiTepki == emoji ? null : emoji});
   }
 
-  /// Karşı taraftan gelen, henüz görülmemiş mesajları "görüldü" işaretler.
-  /// (Kendi mesajlarımı değil, karşı tarafınkileri.)
-  Future<void> gorulduIsaretle(List<Mesaj> mesajlar) async {
+  /// Karşı taraftan gelen görülmemiş mesajları "görüldü" işaretler + okundu.
+  Future<void> gorulduIsaretle(String chatId, List<Mesaj> mesajlar) async {
     final uid = _uid;
     if (uid == null) return;
 
-    final toplu = FirebaseFirestore.instance.batch();
+    final toplu = _db.batch();
     var degisiklikVar = false;
-
     for (final m in mesajlar) {
       if (m.gonderen != uid && !m.goruldu) {
-        toplu.update(_koleksiyon.doc(m.id), {'goruldu': true});
+        toplu.update(_mesajlar(chatId).doc(m.id), {'goruldu': true});
         degisiklikVar = true;
       }
     }
-
     if (degisiklikVar) await toplu.commit();
+  }
+
+  // ---- yardımcılar ----
+
+  /// Sohbet meta'sını güncelle: son mesaj + karşı tarafın okunmamışını +1.
+  Future<void> _metaGuncelle(
+      String chatId, String alanUid, String onizleme) async {
+    final uid = _uid;
+    if (uid == null) return;
+    try {
+      await _chat(chatId).set({
+        'sonMesaj': onizleme,
+        'sonMesajZamani': FieldValue.serverTimestamp(),
+        'sonMesajGonderen': uid,
+        'okunmamis': {alanUid: FieldValue.increment(1)},
+      }, SetOptions(merge: true));
+    } catch (_) {}
+  }
+
+  /// Karşı tarafa hedefli bildirim (fire-and-forget). Bildirime tıklanınca
+  /// doğru sohbet açılsın diye chatId/gönderen data'da taşınır.
+  void _bildir(String alanUid, String chatId, String onizleme) async {
+    final ad = await _benimAdim();
+    BildirimServisi.instance.hedefeBildirimGonder(
+      hedefUid: alanUid,
+      baslik: ad,
+      govde: onizleme,
+      ekstraData: {
+        'tur': 'mesaj',
+        'chatId': chatId,
+        'gonderenUid': _uid ?? '',
+      },
+    );
   }
 }

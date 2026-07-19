@@ -92,18 +92,23 @@ Future<void> _cagriPushTeshisYaz(String? kanal) async {
 /// desteğini işletim sisteminden alır.
 /// Renkler `tema.dart`'tan gelir (native katman hex string ister).
 Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
-  final kanal = (data['kanal'] ?? 'arama').toString();
+  // FAZ 4: CallKit id = chatId → kabul olayı hangi sohbet olduğunu bilir.
+  final chatId = (data['chatId'] ?? data['kanal'] ?? 'arama').toString();
   final arayan = (data['arayan'] ?? 'Kardeş').toString();
   final video = data['tip'] == 'video';
   final params = CallKitParams(
-    id: kanal,
+    id: chatId,
     nameCaller: arayan,
     appName: 'Kardeş Mesaj',
     handle: video ? 'Görüntülü arama' : 'Sesli arama',
     type: video ? 1 : 0,
     // Zil süresi: arayan tarafın 45 sn zaman aşımıyla uyumlu.
     duration: 45000,
-    extra: <String, dynamic>{'kanal': kanal, 'tip': data['tip']},
+    extra: <String, dynamic>{
+      'chatId': chatId,
+      'tip': data['tip'],
+      'arayan': arayan,
+    },
     android: AndroidParams(
       isCustomNotification: true,
       // TAM EKRAN AKTİVİTE (sadece bildirim değil) → ekran kapalı/kilitliyken

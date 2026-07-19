@@ -58,8 +58,9 @@ class KullaniciAvatar extends StatelessWidget {
               color: Renkler.neon,
               shape: BoxShape.circle,
               border: Border.all(color: Renkler.zemin, width: 2),
-              boxShadow: const [
-                BoxShadow(color: Color(0x99B4FF3C), blurRadius: 6),
+              boxShadow: [
+                BoxShadow(
+                    color: Renkler.neon.withValues(alpha: 0.6), blurRadius: 6),
               ],
             ),
           ),

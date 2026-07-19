@@ -8,13 +8,14 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'bildirim_servisi.dart';
+import 'kullanici_servisi.dart';
 
 enum AramaTipi { video, ses }
 
 AramaTipi aramaTipiCoz(String? s) =>
     s == 'video' ? AramaTipi.video : AramaTipi.ses;
 
-/// Arama başlatma/katılma sırasında oluşan, kullanıcıya gösterilecek hata.
+/// Arama başlatma/katılma hatası (kullanıcıya gösterilir).
 class AramaHatasi implements Exception {
   final String mesaj;
   AramaHatasi(this.mesaj);
@@ -23,53 +24,45 @@ class AramaHatasi implements Exception {
 }
 
 /// Görüntülü/sesli arama servisi — Agora (medya) + Firestore (sinyalleşme).
-///
-/// KARTSIZ: Agora "testing mode" (App Certificate kapalı) → token gerekmez,
-/// `token: ''` ile katılınır. App ID istemci kimliğidir, gizli değildir.
-/// İki kişilik tek aktif arama olduğu için sinyalleşme tek Firestore
-/// dokümanında tutulur: `aramalar/aktif`.
+/// FAZ 4: arama artık SOHBET (chatId) bazlı; sinyal `aramalar/{chatId}`,
+/// bildirim ilgili KULLANICIYA hedefli gider.
 class AramaServisi {
   AramaServisi._();
   static final AramaServisi instance = AramaServisi._();
 
-  /// Agora App ID (console.agora.io → proje → Testing mode).
+  /// Agora App ID (console.agora.io → Testing mode).
   static const String appId = 'c2bf944aa30a48bcaad7f1be6694949e';
 
   RtcEngine? _engine;
   RtcEngine? get engine => _engine;
 
-  /// Şu an katılınan kanal — arama bitince karşı tarafa iptal push'u
-  /// gönderebilmek için tutulur.
-  String? _aktifKanal;
+  /// Aktif Agora kanalı (arama ekranındaki uzak video bağlantısı için).
+  String? get aktifKanal => _aktifKanal;
 
-  final DocumentReference<Map<String, dynamic>> _aramaDoc =
-      FirebaseFirestore.instance.collection('aramalar').doc('aktif');
+  final _db = FirebaseFirestore.instance;
+  DocumentReference<Map<String, dynamic>> _aramaDoc(String chatId) =>
+      _db.collection('aramalar').doc(chatId);
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  /// Karşı tarafın (uzak) Agora uid'i — katılınca dolar, ayrılınca boşalır.
+  // Aktif arama bağlamı (bitirince iptal push'u + temizlik için)
+  String? _aktifKarsiUid;
+  String? _aktifKanal;
+
   final ValueNotifier<int?> karsiUid = ValueNotifier<int?>(null);
-
-  /// Kanala başarıyla katıldım mı (yerel önizleme/medya hazır).
   final ValueNotifier<bool> katildi = ValueNotifier<bool>(false);
-
-  // CallKit ile (uygulama KAPALIYKEN) kabul edilip henüz ekranı açılmamış arama.
-  // Soğuk başlangıçta navigator hazır olmayabilir → SohbetEkrani açılınca işler.
-  String? bekleyenKanal;
-  AramaTipi? bekleyenTip;
-
-  /// Son Agora hatası (bağlantı/token/sertifika vb.) — UI'da göstermek için.
   final ValueNotifier<String?> sonHata = ValueNotifier<String?>(null);
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>> aramaDinle() =>
-      _aramaDoc.snapshots();
+  // CallKit ile (kapalıyken) kabul edilip henüz ekranı açılmamış arama.
+  String? bekleyenChatId;
+  AramaTipi? bekleyenTip;
+  String? bekleyenBaslik;
 
-  /// Aktif arama bilgisini (kanal, tip, durum...) bir kez okur.
-  /// CallKit'ten kabul edilince kanal/tip'i öğrenmek için kullanılır.
-  Future<Map<String, dynamic>?> aktifArama() async {
-    final doc = await _aramaDoc.get();
-    return doc.data();
-  }
+  Stream<DocumentSnapshot<Map<String, dynamic>>> aramaDinle(String chatId) =>
+      _aramaDoc(chatId).snapshots();
+
+  Future<Map<String, dynamic>?> aktifArama(String chatId) async =>
+      (await _aramaDoc(chatId).get()).data();
 
   Future<bool> _izinIste(AramaTipi tip) async {
     final izinler = <Permission>[
@@ -82,8 +75,6 @@ class AramaServisi {
 
   Future<void> _engineHazirla(AramaTipi tip) async {
     sonHata.value = null;
-    // Önceki motor kalmışsa (yarım kalan/çift tıklama) önce temizle —
-    // iki RtcEngine aynı anda olursa Agora hata verir.
     if (_engine != null) {
       try {
         await _engine?.release();
@@ -97,36 +88,24 @@ class AramaServisi {
       appId: appId,
       channelProfile: ChannelProfileType.channelProfileCommunication,
     ));
-
     e.registerEventHandler(RtcEngineEventHandler(
       onJoinChannelSuccess: (connection, elapsed) {
-        debugPrint('Agora: kanala katıldım → ${connection.channelId}');
         katildi.value = true;
-        // Hoparlör yönlendirmesi ANCAK kanala katıldıktan sonra ayarlanabilir;
-        // önce çağrılırsa ERR_NOT_READY (-3) verir. Hata olursa yok say.
         e.setEnableSpeakerphone(tip == AramaTipi.video).catchError((_) {});
       },
-      onUserJoined: (connection, remoteUid, elapsed) {
-        debugPrint('Agora: karşı taraf katıldı → uid=$remoteUid');
-        karsiUid.value = remoteUid;
-      },
-      onUserOffline: (connection, remoteUid, reason) {
-        debugPrint('Agora: karşı taraf ayrıldı → $reason');
-        karsiUid.value = null;
-      },
+      onUserJoined: (connection, remoteUid, elapsed) =>
+          karsiUid.value = remoteUid,
+      onUserOffline: (connection, remoteUid, reason) => karsiUid.value = null,
       onError: (err, msg) {
         debugPrint('Agora HATA: $err — $msg');
-        // Token/sertifika hatası (en olası kök neden) burada görünür.
         sonHata.value = '$err: $msg';
       },
       onConnectionStateChanged: (connection, state, reason) {
-        debugPrint('Agora bağlantı durumu: $state ($reason)');
         if (state == ConnectionStateType.connectionStateFailed) {
           sonHata.value = 'Bağlantı başarısız ($reason)';
         }
       },
     ));
-
     await e.enableAudio();
     if (tip == AramaTipi.video) {
       await e.enableVideo();
@@ -137,17 +116,14 @@ class AramaServisi {
     _engine = e;
   }
 
-  Future<void> _katil(String kanal) async {
-    // Projede App Certificate açık → token ZORUNLU. Token'ı uygulama içinde
-    // üretiyoruz (kartsız, backend yok). uid '0' = herhangi bir uid'e izin verir.
+  Future<void> _katil(String kanal, String karsiUid_) async {
     final token = RtcTokenBuilder.build(
       appId: appId,
       appCertificate: agoraSertifika,
       channelName: kanal,
       uid: '0',
       role: RtcRole.publisher,
-      expireTimestamp:
-          DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400, // 24 saat
+      expireTimestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
     );
     await _engine?.joinChannel(
       token: token,
@@ -155,116 +131,127 @@ class AramaServisi {
       uid: 0,
       options: const ChannelMediaOptions(),
     );
+    _aktifKarsiUid = karsiUid_;
     _aktifKanal = kanal;
-    aktifAramaVar = true; // meşgul bayrağı (bildirim_servisi top-level)
+    aktifAramaVar = true;
   }
 
   String _kanalUret() => 'k_${DateTime.now().millisecondsSinceEpoch}';
 
-  /// ARAYAN: arama başlatır. İzin yoksa null, başlarsa katılınan kanalı döner.
-  /// Agora/Firestore hatası olursa temizleyip [AramaHatasi] fırlatır.
-  Future<String?> aramaBaslat(AramaTipi tip) async {
+  /// ARAYAN: [chatId]'de [alanUid]'i arar. Kanal döner (ekran için).
+  Future<String?> aramaBaslat(
+      String chatId, String alanUid, AramaTipi tip) async {
     if (!await _izinIste(tip)) return null;
     final kanal = _kanalUret();
     try {
       await _engineHazirla(tip);
-      await _katil(kanal);
+      await _katil(kanal, alanUid);
 
-      final eposta = FirebaseAuth.instance.currentUser?.email ?? 'Kardeş';
-      await _aramaDoc.set({
-        'arayan': _uid,
-        'arayanEposta': eposta,
+      final me = _uid;
+      final ben = me == null
+          ? null
+          : await KullaniciServisi.instance.profilGetir(me);
+      final ad = ben?.ad ?? 'Arayan';
+
+      await _aramaDoc(chatId).set({
+        'arayanUid': me,
+        'arayan': ad,
         'tip': tip.name,
         'kanal': kanal,
         'durum': 'cagriliyor',
         'zaman': FieldValue.serverTimestamp(),
       });
 
-      // Karşı tarafı çaldır (uygulama kapalıyken bile → CallKit)
-      BildirimServisi.instance.karsiTarafaAramaGonder(
-        arayan: eposta,
-        tip: tip.name,
-        kanal: kanal,
-      );
+      BildirimServisi.instance.hedefeVeriGonder(hedefUid: alanUid, veri: {
+        'tur': 'arama',
+        'chatId': chatId,
+        'arayan': ad,
+        'arayanUid': me ?? '',
+        'tip': tip.name,
+        'kanal': kanal,
+      });
       return kanal;
     } catch (e) {
-      await bitir(); // motoru ve yarım kalan Firestore dokümanını temizle
+      await bitir(chatId);
       throw AramaHatasi('Arama başlatılamadı: $e');
     }
   }
 
-  /// ARANAN: gelen aramayı kabul eder ve aynı kanala katılır.
-  Future<bool> kabulEt(String kanal, AramaTipi tip) async {
+  /// ARANAN: [chatId]'deki aramayı kabul eder (kanalı Firestore'dan okur).
+  Future<bool> kabulEt(String chatId, AramaTipi tip) async {
     if (!await _izinIste(tip)) return false;
     try {
-      // Varsa CallKit gelen-arama bildirimini kapat (çift UI olmasın).
       try {
         await FlutterCallkitIncoming.endAllCalls();
       } catch (_) {}
+      final bilgi = await aktifArama(chatId);
+      final kanal = bilgi?['kanal'] as String?;
+      final karsi = bilgi?['arayanUid'] as String?;
+      if (kanal == null) return false;
       await _engineHazirla(tip);
-      await _katil(kanal);
-      await _aramaDoc.set({'durum': 'kabul'}, SetOptions(merge: true));
+      await _katil(kanal, karsi ?? '');
+      await _aramaDoc(chatId).set({'durum': 'kabul'}, SetOptions(merge: true));
       return true;
     } catch (e) {
-      await bitir();
+      await bitir(chatId);
       throw AramaHatasi('Aramaya katılınamadı: $e');
     }
   }
 
-  /// Açılışta kalmış (stale) arama dokümanını temizler. Eski bir 'cagriliyor'
-  /// kaydı, gelen-arama ekranının durmadan açılmasına/siyah ekran titremesine
-  /// yol açabilir; 90 sn'den eski kayıtları 'bitti' yapar.
-  Future<void> eskiAramayiTemizle() async {
+  /// Açılışta kalmış (stale) arama kaydını temizler (>90 sn).
+  Future<void> eskiAramayiTemizle(String chatId) async {
     try {
-      final d = await aktifArama();
+      final d = await aktifArama(chatId);
       if (d == null) return;
       final durum = d['durum'];
       if (durum != 'cagriliyor' && durum != 'kabul') return;
-      final benimki = d['arayan'] == _uid; // kendi yarım kalan aramam
+      final benimki = d['arayanUid'] == _uid;
       final ts = d['zaman'];
       final eski = ts is! Timestamp ||
           DateTime.now().difference(ts.toDate()).inSeconds.abs() > 90;
-      // Kendi yarım kalan aramam VEYA 90 sn'den eski herhangi bir arama → temizle.
       if (benimki || eski) {
-        await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
+        await _aramaDoc(chatId).set({'durum': 'bitti'}, SetOptions(merge: true));
       }
     } catch (_) {}
   }
 
-  /// ARANAN: gelen aramayı reddeder.
-  Future<void> reddet() async {
-    await _aramaDoc.set({'durum': 'red'}, SetOptions(merge: true));
+  /// ARANAN reddeder.
+  Future<void> reddet(String chatId) async {
+    await _aramaDoc(chatId).set({'durum': 'red'}, SetOptions(merge: true));
   }
 
-  /// Aramayı bitirir: karşı tarafın zilini susturur + Firestore'u günceller +
-  /// Agora'dan ayrılır + motoru bırakır.
-  Future<void> bitir() async {
-    // 1) KARŞI TARAFIN ZİLİNİ SUSTUR (kritik).
-    // Firestore dinleyicisi karşı taraf kapalıyken çalışmaz; iptal push'u
-    // olmadan CallKit çalmaya devam ediyordu.
+  /// Aramayı bitirir: karşı tarafın zilini sustur + Firestore + Agora temizle.
+  Future<void> bitir(String chatId) async {
+    // 1) Karşı tarafın zilini sustur (iptal push).
     try {
-      final kanal = _aktifKanal;
-      if (kanal != null) {
-        await BildirimServisi.instance.karsiTarafaAramaIptal(kanal: kanal);
+      final karsi = _aktifKarsiUid;
+      if (karsi != null && karsi.isNotEmpty) {
+        await BildirimServisi.instance
+            .hedefeVeriGonder(hedefUid: karsi, veri: {
+          'tur': 'arama_iptal',
+          'chatId': chatId,
+        });
       }
     } catch (_) {}
     try {
-      await _aramaDoc.set({'durum': 'bitti'}, SetOptions(merge: true));
+      await _aramaDoc(chatId).set({'durum': 'bitti'}, SetOptions(merge: true));
     } catch (_) {}
     try {
-      await FlutterCallkitIncoming.endAllCalls(); // kendi CallKit'imi kapat
+      await FlutterCallkitIncoming.endAllCalls();
     } catch (_) {}
     try {
       await _engine?.leaveChannel();
       await _engine?.release();
     } catch (_) {}
     _engine = null;
+    _aktifKarsiUid = null;
     _aktifKanal = null;
-    aktifAramaVar = false; // meşgul bayrağını temizle
+    aktifAramaVar = false;
     karsiUid.value = null;
     katildi.value = false;
-    bekleyenKanal = null;
+    bekleyenChatId = null;
     bekleyenTip = null;
+    bekleyenBaslik = null;
   }
 
   // ---- Arama içi kontroller ----

@@ -10,13 +10,13 @@ import '../tema.dart';
 /// Bu ekrana gelindiğinde Agora kanalına ZATEN katılınmış olur
 /// (arayan `aramaBaslat`, aranan `kabulEt` çağırmış olur).
 class AramaEkrani extends StatefulWidget {
-  final String kanal;
+  final String chatId;
   final AramaTipi tip;
   final String baslik; // karşı tarafın adı/e-postası
 
   const AramaEkrani({
     super.key,
-    required this.kanal,
+    required this.chatId,
     required this.tip,
     required this.baslik,
   });
@@ -43,7 +43,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     super.initState();
     _hoparlor = _video;
     _arama.karsiUid.addListener(_baglantiKontrol);
-    _sub = _arama.aramaDinle().listen((doc) {
+    _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
       final durum = doc.data()?['durum'];
       if (durum == 'red') {
         _kapat(mesaj: 'Arama reddedildi');
@@ -74,7 +74,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     _sub?.cancel();
-    if (!_kapandi) _arama.bitir();
+    if (!_kapandi) _arama.bitir(widget.chatId);
     super.dispose();
   }
 
@@ -85,7 +85,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     await _sub?.cancel();
-    await _arama.bitir();
+    await _arama.bitir(widget.chatId);
     if (!mounted) return;
     if (mesaj != null) {
       ScaffoldMessenger.of(context)
@@ -205,7 +205,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
           controller: VideoViewController.remote(
             rtcEngine: e,
             canvas: VideoCanvas(uid: uid),
-            connection: RtcConnection(channelId: widget.kanal),
+            connection: RtcConnection(channelId: _arama.aktifKanal ?? ''),
           ),
         );
       },

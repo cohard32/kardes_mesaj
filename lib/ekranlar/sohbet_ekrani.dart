@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,22 +10,49 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:video_player/video_player.dart';
 
+import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
+import '../modeller/sohbet.dart';
+import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/guncelleme_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
+import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
 import 'arama_ekrani.dart';
-import 'ayarlar_ekrani.dart';
 import 'gif_secici.dart';
+import 'profil_goruntule_ekrani.dart';
 
-/// Ana sohbet ekranı. İki kişilik tek sohbet.
-/// Kendi mesajların sağda neon gradient balonda, kardeşininki solda koyu cam
+/// Bir arkadaşla sohbeti açar (yoksa oluşturur) ve ekranı push eder.
+/// Arkadaş listesi / sohbet listesi / profil bu ortak yolu kullanır.
+Future<void> sohbetiAc(BuildContext context, Kullanici karsi) async {
+  final nav = Navigator.of(context);
+  try {
+    final chatId = await SohbetServisi.instance.sohbetAcOrGetir(karsi.uid);
+    if (!context.mounted) return;
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (_) => SohbetEkrani(chatId: chatId, karsi: karsi),
+      ),
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Sohbet açılamadı: $e')));
+  }
+}
+
+/// Bir arkadaşla sohbet ekranı (FAZ 4). [chatId] = ciftKimligi(ben, karşı).
+/// Kendi mesajların sağda neon gradient balonda, karşınınki solda koyu cam
 /// balonda. Tüm renk/stil değerleri `tema.dart`'tan gelir (bkz. Renkler/Kose/…).
 class SohbetEkrani extends StatefulWidget {
-  const SohbetEkrani({super.key});
+  final String chatId;
+  final Kullanici karsi;
+
+  const SohbetEkrani({super.key, required this.chatId, required this.karsi});
 
   @override
   State<SohbetEkrani> createState() => _SohbetEkraniState();
@@ -38,6 +64,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   final _scrollCtrl = ScrollController();
   final _servis = MesajServisi.instance;
   final _presence = PresenceServisi.instance;
+  final _sohbetServis = SohbetServisi.instance;
   final _resimSecici = ImagePicker();
   final _kayitci = AudioRecorder();
 
@@ -52,6 +79,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   int _oncekiMesajSayisi = 0;
   bool _ilkKaydirma = true;
   bool _zorlaKaydir = false;
+
+  // Sayfalama: başta son 50 mesaj; yukarı kaydırınca 50'şer artar.
+  static const int _sayfaBoyu = 50;
+  int _mesajLimit = _sayfaBoyu;
+  bool _hepsiYuklendi = false;
+  bool _eskiYukleniyor = false;
 
   // Sesli mesaj kaydı durumu
   Timer? _kayitTimer;
@@ -70,14 +103,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     WidgetsBinding.instance.addObserver(this);
     BildirimServisi.instance.tokenKaydet();
     _presence.cevrimiciYap();
+    _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
     _mesajCtrl.addListener(_yaziyorDinle);
+    _scrollCtrl.addListener(_eskiMesajKontrol);
     _odak.addListener(() {
       if (_odak.hasFocus && _emojiAcik) {
         setState(() => _emojiAcik = false);
       }
     });
     _guncellemeKontrol();
-    AramaServisi.instance.eskiAramayiTemizle(); // kalmış stale aramayı temizle
+    // kalmış stale aramayı temizle
+    AramaServisi.instance.eskiAramayiTemizle(widget.chatId);
     _aramaIzinleriniKontrolEt();
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
@@ -108,14 +144,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   void _bekleyenAramayiAc() {
     final s = AramaServisi.instance;
-    final kanal = s.bekleyenKanal;
+    final chatId = s.bekleyenChatId;
     final tip = s.bekleyenTip;
-    if (kanal != null && tip != null && mounted) {
-      s.bekleyenKanal = null;
+    if (chatId != null && tip != null && mounted) {
+      final baslik = s.bekleyenBaslik ?? widget.karsi.ad;
+      s.bekleyenChatId = null;
       s.bekleyenTip = null;
+      s.bekleyenBaslik = null;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+          builder: (_) => AramaEkrani(chatId: chatId, tip: tip, baslik: baslik),
         ),
       );
     }
@@ -132,7 +170,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // Görüntülü/sesli arama başlat → arama ekranını aç. Hata olursa ekranda göster.
   Future<void> _aramaBaslat(AramaTipi tip) async {
     try {
-      final kanal = await AramaServisi.instance.aramaBaslat(tip);
+      final kanal = await AramaServisi.instance.aramaBaslat(
+        widget.chatId,
+        widget.karsi.uid,
+        tip,
+      );
       if (!mounted) return;
       if (kanal == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -142,13 +184,18 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       }
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => AramaEkrani(kanal: kanal, tip: tip, baslik: 'Kardeş'),
+          builder: (_) => AramaEkrani(
+            chatId: widget.chatId,
+            tip: tip,
+            baslik: widget.karsi.ad,
+          ),
         ),
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
   }
@@ -188,8 +235,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: Text('Güncelleme indiriliyor (v${bilgi.surum})',
-            style: Yazi.baslikOrta),
+        title: Text(
+          'Güncelleme indiriliyor (v${bilgi.surum})',
+          style: Yazi.baslikOrta,
+        ),
         content: ValueListenableBuilder<double>(
           valueListenable: ilerleme,
           builder: (_, yuzde, _) => Column(
@@ -205,8 +254,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 ),
               ),
               const SizedBox(height: 12),
-              Text('%${(yuzde * 100).toStringAsFixed(0)}',
-                  style: Yazi.etiket),
+              Text('%${(yuzde * 100).toStringAsFixed(0)}', style: Yazi.etiket),
             ],
           ),
         ),
@@ -222,9 +270,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     } catch (e) {
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Güncelleme indirilemedi: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Güncelleme indirilemedi: $e')));
       }
     }
   }
@@ -233,12 +281,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final bos = _mesajCtrl.text.trim().isEmpty;
     if (!bos && !_yaziyorGonderildi) {
       _yaziyorGonderildi = true;
-      _presence.yaziyorAyarla(true);
+      _presence.yaziyorAyarla(widget.chatId, true);
     }
     _yaziyorTimer?.cancel();
     _yaziyorTimer = Timer(const Duration(seconds: 2), () {
       _yaziyorGonderildi = false;
-      _presence.yaziyorAyarla(false);
+      _presence.yaziyorAyarla(widget.chatId, false);
     });
   }
 
@@ -248,10 +296,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _mesajCtrl.clear();
     _yaziyorTimer?.cancel();
     _yaziyorGonderildi = false;
-    _presence.yaziyorAyarla(false);
+    _presence.yaziyorAyarla(widget.chatId, false);
     _zorlaKaydir = true;
     try {
-      await _servis.gonder(metin);
+      await _servis.gonder(widget.chatId, widget.karsi.uid, metin);
     } catch (e) {
       // Firestore çevrimdışıyken kuyruğa alır; yine de hata olursa kullanıcıya
       // bildir ve metni kaybetme.
@@ -260,6 +308,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Mesaj gönderilemedi. Tekrar dene.')),
       );
+    }
+  }
+
+  // Kullanıcı en üste yaklaşınca daha eski mesajları yükle (sayfalama).
+  void _eskiMesajKontrol() {
+    if (_hepsiYuklendi || _eskiYukleniyor) return;
+    if (!_scrollCtrl.hasClients) return;
+    if (_scrollCtrl.position.pixels <= 120) {
+      _eskiYukleniyor = true;
+      setState(() => _mesajLimit += _sayfaBoyu);
     }
   }
 
@@ -382,7 +440,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
     if (url != null && url.isNotEmpty) {
       _zorlaKaydir = true;
-      await _servis.gifGonder(url);
+      await _servis.gifGonder(widget.chatId, widget.karsi.uid, url);
     }
   }
 
@@ -403,9 +461,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _kayitBaslat() async {
     if (!await _kayitci.hasPermission()) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mikrofon izni gerekli')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Mikrofon izni gerekli')));
       }
       return;
     }
@@ -421,15 +479,15 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _ampSub = _kayitci
         .onAmplitudeChanged(const Duration(milliseconds: 120))
         .listen((amp) {
-      // dBFS (-45..0) → 0..1 ölçek (konuşurken dalga oynar)
-      final normal = ((amp.current + 45) / 45).clamp(0.0, 1.0);
-      if (mounted) {
-        setState(() {
-          _dalga.add(normal.toDouble());
-          if (_dalga.length > 50) _dalga.removeAt(0);
+          // dBFS (-45..0) → 0..1 ölçek (konuşurken dalga oynar)
+          final normal = ((amp.current + 45) / 45).clamp(0.0, 1.0);
+          if (mounted) {
+            setState(() {
+              _dalga.add(normal.toDouble());
+              if (_dalga.length > 50) _dalga.removeAt(0);
+            });
+          }
         });
-      }
-    });
     setState(() => _kayitYapiliyor = true);
   }
 
@@ -462,7 +520,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   Future<void> _medyaGonder(File dosya, MesajTipi tip) async {
     setState(() => _yukleniyor = true);
-    final ok = await _servis.medyaGonder(dosya, tip);
+    final ok = await _servis.medyaGonder(
+      widget.chatId,
+      widget.karsi.uid,
+      dosya,
+      tip,
+    );
     if (!mounted) return;
     setState(() => _yukleniyor = false);
     if (!ok) {
@@ -483,7 +546,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: _AppBarBaslik(presence: _presence),
+        title: GestureDetector(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => ProfilGoruntuleEkrani(kullanici: widget.karsi),
+            ),
+          ),
+          child: _AppBarBaslik(chatId: widget.chatId, karsi: widget.karsi),
+        ),
         actions: [
           IconButton(
             tooltip: 'Sesli ara',
@@ -495,99 +565,94 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             icon: const Icon(Icons.videocam_outlined),
             onPressed: () => _aramaBaslat(AramaTipi.video),
           ),
-          IconButton(
-            tooltip: 'Ayarlar',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(builder: (_) => const AyarlarEkrani()),
-            ),
-          ),
-          IconButton(
-            tooltip: 'Çıkış yap',
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await _presence.cevrimdisiYap();
-              await FirebaseAuth.instance.signOut();
-            },
-          ),
         ],
       ),
       body: Zemin(
         parlama: const Alignment(0.6, -1),
         child: Column(
-        children: [
-          if (_yukleniyor)
-            const LinearProgressIndicator(
-              color: Renkler.neon,
-              backgroundColor: Renkler.yuzey,
-            ),
-          Expanded(
-            child: StreamBuilder<List<Mesaj>>(
-              stream: _servis.mesajlariDinle(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: Renkler.neon),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return const _BosDurum(
-                    ikon: Icons.error_outline,
-                    yazi: 'Mesajlar yüklenemedi',
-                  );
-                }
-
-                final mesajlar = snapshot.data ?? [];
-                if (mesajlar.isEmpty) {
-                  return const _BosDurum(
-                    ikon: Icons.chat_bubble_outline_rounded,
-                    yazi: 'Henüz mesaj yok.\nİlk mesajı sen yaz 👋',
-                  );
-                }
-
-                _servis.gorulduIsaretle(mesajlar);
-                _yeniMesajKaydir(mesajlar.length);
-
-                return ListView.builder(
-                  controller: _scrollCtrl,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  itemCount: mesajlar.length,
-                  itemBuilder: (context, i) {
-                    final m = mesajlar[i];
-                    return _MesajBalonu(
-                      mesaj: m,
-                      benimMi: m.gonderen == _uid,
-                      onUzunBas: () => _tepkiSec(m),
+          children: [
+            if (_yukleniyor)
+              const LinearProgressIndicator(
+                color: Renkler.neon,
+                backgroundColor: Renkler.yuzey,
+              ),
+            Expanded(
+              child: StreamBuilder<List<Mesaj>>(
+                stream: _servis.mesajlariDinle(
+                  widget.chatId,
+                  limit: _mesajLimit,
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: Renkler.neon),
                     );
-                  },
-                );
-              },
+                  }
+                  if (snapshot.hasError) {
+                    return const _BosDurum(
+                      ikon: Icons.error_outline,
+                      yazi: 'Mesajlar yüklenemedi',
+                    );
+                  }
+
+                  final mesajlar = snapshot.data ?? [];
+                  // Sayfalama durumunu güncelle: gelen sayı istenen limitten azsa
+                  // en eski mesaja ulaşılmıştır (daha fazla yükleme yok).
+                  _eskiYukleniyor = false;
+                  _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                  if (mesajlar.isEmpty) {
+                    return const _BosDurum(
+                      ikon: Icons.chat_bubble_outline_rounded,
+                      yazi: 'Henüz mesaj yok.\nİlk mesajı sen yaz 👋',
+                    );
+                  }
+
+                  _servis.gorulduIsaretle(widget.chatId, mesajlar);
+                  _sohbetServis.okunduIsaretle(widget.chatId);
+                  _yeniMesajKaydir(mesajlar.length);
+
+                  return ListView.builder(
+                    controller: _scrollCtrl,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    itemCount: mesajlar.length,
+                    itemBuilder: (context, i) {
+                      final m = mesajlar[i];
+                      return _MesajBalonu(
+                        mesaj: m,
+                        benimMi: m.gonderen == _uid,
+                        chatId: widget.chatId,
+                        onUzunBas: () => _tepkiSec(m),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
-          ),
-          // Kayıt sırasında kayıt çubuğu, değilse yazma alanı (+ emoji paneli)
-          if (_kayitYapiliyor)
-            _KayitCubugu(
-              saniye: _kayitSaniye,
-              dalga: _dalga,
-              onIptal: _kayitIptal,
-              onGonder: _kayitGonder,
-            )
-          else ...[
-            _YazmaAlani(
-              controller: _mesajCtrl,
-              odak: _odak,
-              emojiAcik: _emojiAcik,
-              onGonder: _gonder,
-              onEk: _ekMenu,
-              onMikrofon: _kayitBaslat,
-              onEmoji: _emojiToggle,
-            ),
-            if (_emojiAcik)
-              _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil),
+            // Kayıt sırasında kayıt çubuğu, değilse yazma alanı (+ emoji paneli)
+            if (_kayitYapiliyor)
+              _KayitCubugu(
+                saniye: _kayitSaniye,
+                dalga: _dalga,
+                onIptal: _kayitIptal,
+                onGonder: _kayitGonder,
+              )
+            else ...[
+              _YazmaAlani(
+                controller: _mesajCtrl,
+                odak: _odak,
+                emojiAcik: _emojiAcik,
+                onGonder: _gonder,
+                onEk: _ekMenu,
+                onMikrofon: _kayitBaslat,
+                onEmoji: _emojiToggle,
+              ),
+              if (_emojiAcik)
+                _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil),
+            ],
           ],
-        ],
         ),
       ),
     );
@@ -610,7 +675,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   borderRadius: BorderRadius.circular(30),
                   onTap: () {
                     Navigator.pop(context);
-                    _servis.tepkiDegistir(mesaj.id, e);
+                    _servis.tepkiDegistir(widget.chatId, mesaj.id, e);
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -625,18 +690,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 }
 
-/// AppBar başlığı: isim + altında çevrimiçi/yazıyor/son görülme durumu.
+/// AppBar başlığı: karşı tarafın avatarı + adı + altında
+/// yazıyor / çevrimiçi / son görülme durumu.
+/// İki canlı kaynak: users/{karsi} (çevrimiçi/son görülme) ve
+/// chats/{chatId}.yaziyor (anlık yazıyor).
 class _AppBarBaslik extends StatelessWidget {
-  final PresenceServisi presence;
-  const _AppBarBaslik({required this.presence});
+  final String chatId;
+  final Kullanici karsi;
+  const _AppBarBaslik({required this.chatId, required this.karsi});
 
-  String _sonGorulmeMetni(Map<String, dynamic>? veri) {
-    if (veri == null) return '';
-    if (veri['yaziyor'] == true) return 'yazıyor...';
-    if (veri['online'] == true) return 'çevrimiçi';
-    final ts = veri['sonGorulme'];
-    if (ts is Timestamp) {
-      final t = ts.toDate();
+  String _sonGorulmeMetni(Kullanici k) {
+    if (k.cevrimici) return 'çevrimiçi';
+    final t = k.sonGorulme;
+    if (t != null) {
       final s = t.hour.toString().padLeft(2, '0');
       final d = t.minute.toString().padLeft(2, '0');
       return 'son görülme $s:$d';
@@ -646,71 +712,62 @@ class _AppBarBaslik extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<Map<String, dynamic>?>(
-      stream: presence.karsiTarafiDinle(),
+    return StreamBuilder<Kullanici>(
+      stream: PresenceServisi.instance.kullaniciDinle(karsi.uid),
+      initialData: karsi,
       builder: (context, snap) {
-        final durum = _sonGorulmeMetni(snap.data);
-        final yaziyor = snap.data?['yaziyor'] == true;
-        final online = snap.data?['online'] == true;
-        final eposta = (snap.data?['eposta'] ?? 'K').toString();
-        final harf = eposta.isEmpty ? 'K' : eposta[0].toUpperCase();
-        // Neon vurgulu durum: çevrimiçi veya yazıyor
-        final vurgulu = yaziyor || online;
+        final k = snap.data ?? karsi;
+        return StreamBuilder<Sohbet>(
+          stream: SohbetServisi.instance.sohbetDinle(chatId),
+          builder: (context, sohbetSnap) {
+            final yaziyor =
+                sohbetSnap.data?.digerYaziyor(
+                  FirebaseAuth.instance.currentUser?.uid ?? '',
+                ) ??
+                false;
+            final durum = yaziyor ? 'yazıyor...' : _sonGorulmeMetni(k);
+            final vurgulu = yaziyor || k.cevrimici;
 
-        return Row(
-          children: [
-            // Gradient avatar — organik köşe
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                gradient: Gradyanlar.yesil,
-                borderRadius: Kose.dugme,
-              ),
-              child: Stack(
-                children: [
-                  const Positioned.fill(
-                    child: IcIsik(kose: Kose.dugme, guclu: false),
-                  ),
-                  Center(
-                    child: Text(harf,
-                        style: Yazi.stil(
-                            15, FontWeight.w800, Renkler.metinKoyu)),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Kardeş Mesaj', style: Yazi.isim),
-                  if (durum.isNotEmpty)
-                    Row(
-                      children: [
-                        if (vurgulu) ...[
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: Kutular.neonNokta(),
-                          ),
-                          const SizedBox(width: 5),
-                        ],
-                        Flexible(
-                          child: Text(
-                            durum,
-                            overflow: TextOverflow.ellipsis,
-                            style: vurgulu ? Yazi.neonKucuk : Yazi.zaman,
-                          ),
+            return Row(
+              children: [
+                KullaniciAvatar(kullanici: k, boyut: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        k.ad,
+                        overflow: TextOverflow.ellipsis,
+                        style: Yazi.isim,
+                      ),
+                      if (durum.isNotEmpty)
+                        Row(
+                          children: [
+                            if (vurgulu) ...[
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: Kutular.neonNokta(),
+                              ),
+                              const SizedBox(width: 5),
+                            ],
+                            Flexible(
+                              child: Text(
+                                durum,
+                                overflow: TextOverflow.ellipsis,
+                                style: vurgulu ? Yazi.neonKucuk : Yazi.zaman,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          ],
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -721,11 +778,13 @@ class _AppBarBaslik extends StatelessWidget {
 class _MesajBalonu extends StatelessWidget {
   final Mesaj mesaj;
   final bool benimMi;
+  final String chatId;
   final VoidCallback onUzunBas;
 
   const _MesajBalonu({
     required this.mesaj,
     required this.benimMi,
+    required this.chatId,
     required this.onUzunBas,
   });
 
@@ -760,7 +819,8 @@ class _MesajBalonu extends StatelessWidget {
                       alignment: Alignment.center,
                       color: Renkler.zemin,
                       child: const CircularProgressIndicator(
-                          color: Renkler.neon),
+                        color: Renkler.neon,
+                      ),
                     ),
               errorBuilder: (c, e, s) => const SizedBox(
                 width: 220,
@@ -778,6 +838,7 @@ class _MesajBalonu extends StatelessWidget {
         return _SesOynatici(
           url: mesaj.medyaUrl!,
           benimMi: benimMi,
+          chatId: chatId,
           mesajId: mesaj.id,
           dinlendi: mesaj.sesDinlendi,
         );
@@ -799,7 +860,8 @@ class _MesajBalonu extends StatelessWidget {
                       alignment: Alignment.center,
                       color: Renkler.zemin,
                       child: const CircularProgressIndicator(
-                          color: Renkler.neon),
+                        color: Renkler.neon,
+                      ),
                     ),
               errorBuilder: (c, e, s) => const SizedBox(
                 width: 170,
@@ -871,9 +933,7 @@ class _MesajBalonu extends StatelessWidget {
                 children: [
                   // Neon balonda iç highlight/gölge (3D hacim)
                   if (benimMi)
-                    const Positioned.fill(
-                      child: IcIsik(kose: Kose.balonBen),
-                    ),
+                    const Positioned.fill(child: IcIsik(kose: Kose.balonBen)),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
@@ -897,8 +957,7 @@ class _MesajBalonu extends StatelessWidget {
                             ],
                             Text(
                               _saat(mesaj.zaman),
-                              style:
-                                  benimMi ? Yazi.zamanAccent : Yazi.zaman,
+                              style: benimMi ? Yazi.zamanAccent : Yazi.zaman,
                             ),
                             if (benimMi) ...[
                               const SizedBox(width: 4),
@@ -913,8 +972,11 @@ class _MesajBalonu extends StatelessWidget {
                               if (mesaj.tip == MesajTipi.ses &&
                                   mesaj.sesDinlendi) ...[
                                 const SizedBox(width: 4),
-                                const Icon(Icons.headset_rounded,
-                                    size: 13, color: Renkler.metinKoyu),
+                                const Icon(
+                                  Icons.headset_rounded,
+                                  size: 13,
+                                  color: Renkler.metinKoyu,
+                                ),
                               ],
                             ],
                           ],
@@ -931,16 +993,20 @@ class _MesajBalonu extends StatelessWidget {
                 right: benimMi ? 8 : null,
                 left: benimMi ? null : 8,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Renkler.yuzeyYuksek,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Renkler.kenarGuclu, width: 1.5),
                     boxShadow: Golgeler.balon,
                   ),
-                  child:
-                      Text(mesaj.tepki!, style: const TextStyle(fontSize: 13)),
+                  child: Text(
+                    mesaj.tepki!,
+                    style: const TextStyle(fontSize: 13),
+                  ),
                 ),
               ),
           ],
@@ -1018,8 +1084,11 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
                       boxShadow: Golgeler.neonGlow,
                     ),
                     padding: const EdgeInsets.all(10),
-                    child: const Icon(Icons.play_arrow,
-                        color: Renkler.metinKoyu, size: 32),
+                    child: const Icon(
+                      Icons.play_arrow,
+                      color: Renkler.metinKoyu,
+                      size: 32,
+                    ),
                   ),
               ],
             ),
@@ -1034,11 +1103,13 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
 class _SesOynatici extends StatefulWidget {
   final String url;
   final bool benimMi;
+  final String chatId;
   final String mesajId;
   final bool dinlendi;
   const _SesOynatici({
     required this.url,
     required this.benimMi,
+    required this.chatId,
     required this.mesajId,
     required this.dinlendi,
   });
@@ -1062,20 +1133,26 @@ class _SesOynaticiState extends State<_SesOynatici> {
     super.initState();
     // Ağ dosyası için gerçek dalga çıkarmak ağırdır → URL'den sabit dekoratif dalga.
     _dalga = _dalgaUret(widget.url);
-    _abonelikler.add(_player.onDurationChanged.listen((d) {
-      if (mounted) setState(() => _sure = d);
-    }));
-    _abonelikler.add(_player.onPositionChanged.listen((p) {
-      if (mounted) setState(() => _konum = p);
-    }));
-    _abonelikler.add(_player.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() {
-          _caliyor = false;
-          _konum = Duration.zero;
-        });
-      }
-    }));
+    _abonelikler.add(
+      _player.onDurationChanged.listen((d) {
+        if (mounted) setState(() => _sure = d);
+      }),
+    );
+    _abonelikler.add(
+      _player.onPositionChanged.listen((p) {
+        if (mounted) setState(() => _konum = p);
+      }),
+    );
+    _abonelikler.add(
+      _player.onPlayerComplete.listen((_) {
+        if (mounted) {
+          setState(() {
+            _caliyor = false;
+            _konum = Duration.zero;
+          });
+        }
+      }),
+    );
   }
 
   @override
@@ -1102,7 +1179,10 @@ class _SesOynaticiState extends State<_SesOynatici> {
       setState(() => _caliyor = true);
       // Karşı tarafın sesli mesajıysa ve henüz dinlenmediyse "dinlendi" işaretle
       if (!widget.benimMi && !widget.dinlendi) {
-        MesajServisi.instance.sesDinlendiIsaretle(widget.mesajId);
+        MesajServisi.instance.sesDinlendiIsaretle(
+          widget.chatId,
+          widget.mesajId,
+        );
       }
     }
   }
@@ -1114,8 +1194,7 @@ class _SesOynaticiState extends State<_SesOynatici> {
 
   Future<void> _seek(double oran) async {
     if (_sure.inMilliseconds == 0) return;
-    final hedef =
-        Duration(milliseconds: (_sure.inMilliseconds * oran).round());
+    final hedef = Duration(milliseconds: (_sure.inMilliseconds * oran).round());
     await _player.seek(hedef);
     setState(() => _konum = hedef);
   }
@@ -1144,9 +1223,7 @@ class _SesOynaticiState extends State<_SesOynatici> {
               GestureDetector(
                 onTap: _degistir,
                 child: Icon(
-                  _caliyor
-                      ? Icons.pause_circle_filled
-                      : Icons.play_circle_fill,
+                  _caliyor ? Icons.pause_circle_filled : Icons.play_circle_fill,
                   color: renk,
                   size: 36,
                 ),
@@ -1156,10 +1233,12 @@ class _SesOynaticiState extends State<_SesOynatici> {
                 child: LayoutBuilder(
                   builder: (context, c) => GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (d) =>
-                        _seek((d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0)),
-                    onHorizontalDragUpdate: (d) =>
-                        _seek((d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0)),
+                    onTapDown: (d) => _seek(
+                      (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0),
+                    ),
+                    onHorizontalDragUpdate: (d) => _seek(
+                      (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0),
+                    ),
                     child: SizedBox(
                       height: 30,
                       child: CustomPaint(
@@ -1179,14 +1258,18 @@ class _SesOynaticiState extends State<_SesOynatici> {
                 Text(
                   '${_mmss(_konum)} / ${_sure == Duration.zero ? "--:--" : _mmss(_sure)}',
                   style: TextStyle(
-                      color: renk.withValues(alpha: 0.8), fontSize: 11),
+                    color: renk.withValues(alpha: 0.8),
+                    fontSize: 11,
+                  ),
                 ),
                 const Spacer(),
                 GestureDetector(
                   onTap: _hizDegistir,
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: renk.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(10),
@@ -1194,9 +1277,10 @@ class _SesOynaticiState extends State<_SesOynatici> {
                     child: Text(
                       '${hizYazi}x',
                       style: TextStyle(
-                          color: renk,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600),
+                        color: renk,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
@@ -1285,7 +1369,9 @@ class _YazmaAlani extends StatelessWidget {
                               enabledBorder: InputBorder.none,
                               focusedBorder: InputBorder.none,
                               contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 18, vertical: 13),
+                                horizontal: 18,
+                                vertical: 13,
+                              ),
                             ),
                           ),
                         ),
@@ -1376,14 +1462,16 @@ class _KayitCubuguState extends State<_KayitCubugu>
               child: Container(
                 height: 48,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration:
-                    Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
                 child: Row(
                   children: [
                     FadeTransition(
                       opacity: _yanip,
-                      child: const Icon(Icons.fiber_manual_record,
-                          color: Renkler.tehlike, size: 12),
+                      child: const Icon(
+                        Icons.fiber_manual_record,
+                        color: Renkler.tehlike,
+                        size: 12,
+                      ),
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
@@ -1392,16 +1480,21 @@ class _KayitCubuguState extends State<_KayitCubugu>
                         _sure,
                         style: Yazi.stil(13, FontWeight.w700, Renkler.metin)
                             .copyWith(
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
                       ),
                     ),
                     Expanded(
                       child: SizedBox(
                         height: 24,
                         child: CustomPaint(
-                          painter: _DalgaPainter(widget.dalga, Renkler.neon,
-                              canli: true),
+                          painter: _DalgaPainter(
+                            widget.dalga,
+                            Renkler.neon,
+                            canli: true,
+                          ),
                           size: Size.infinite,
                         ),
                       ),
@@ -1416,8 +1509,11 @@ class _KayitCubuguState extends State<_KayitCubugu>
               kose: Kose.dugme,
               padding: const EdgeInsets.all(13),
               onTap: widget.onGonder,
-              cocuk: const Icon(Icons.send_rounded,
-                  color: Renkler.metinKoyu, size: 22),
+              cocuk: const Icon(
+                Icons.send_rounded,
+                color: Renkler.metinKoyu,
+                size: 22,
+              ),
             ),
           ],
         ),
@@ -1451,7 +1547,10 @@ class _DalgaPainter extends CustomPainter {
       }
     } else {
       for (var i = 0; i < adet; i++) {
-        final idx = (i * dalga.length / adet).floor().clamp(0, dalga.length - 1);
+        final idx = (i * dalga.length / adet).floor().clamp(
+          0,
+          dalga.length - 1,
+        );
         goster.add(dalga[idx]);
       }
     }
@@ -1471,7 +1570,8 @@ class _DalgaPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DalgaPainter old) =>
-      old.ilerleme != ilerleme || !identical(old.dalga, dalga) ||
+      old.ilerleme != ilerleme ||
+      !identical(old.dalga, dalga) ||
       old.dalga.length != dalga.length;
 }
 
@@ -1500,42 +1600,346 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
 
   static const _gruplar = <List<String>>[
     [
-      '😀','😃','😄','😁','😆','😅','😂','🤣','🥲','😊','😇','🙂','🙃','😉','😌',
-      '😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎',
-      '🥸','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩',
-      '🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥',
-      '😓','🤗','🤔','🫡','🤭','🤫','😴','😪','🤤','😵','🥴','🤢','🤮','🤧','😷',
+      '😀',
+      '😃',
+      '😄',
+      '😁',
+      '😆',
+      '😅',
+      '😂',
+      '🤣',
+      '🥲',
+      '😊',
+      '😇',
+      '🙂',
+      '🙃',
+      '😉',
+      '😌',
+      '😍',
+      '🥰',
+      '😘',
+      '😗',
+      '😙',
+      '😚',
+      '😋',
+      '😛',
+      '😝',
+      '😜',
+      '🤪',
+      '🤨',
+      '🧐',
+      '🤓',
+      '😎',
+      '🥸',
+      '🤩',
+      '🥳',
+      '😏',
+      '😒',
+      '😞',
+      '😔',
+      '😟',
+      '😕',
+      '🙁',
+      '☹️',
+      '😣',
+      '😖',
+      '😫',
+      '😩',
+      '🥺',
+      '😢',
+      '😭',
+      '😤',
+      '😠',
+      '😡',
+      '🤬',
+      '🤯',
+      '😳',
+      '🥵',
+      '🥶',
+      '😱',
+      '😨',
+      '😰',
+      '😥',
+      '😓',
+      '🤗',
+      '🤔',
+      '🫡',
+      '🤭',
+      '🤫',
+      '😴',
+      '😪',
+      '🤤',
+      '😵',
+      '🥴',
+      '🤢',
+      '🤮',
+      '🤧',
+      '😷',
     ],
     [
-      '👍','👎','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','👇',
-      '☝️','👋','🤚','🖐️','✋','🖖','🫱','🫲','🫳','🫴','👏','🙌','🫶','👐','🤲',
-      '🙏','🤝','💪','🦾','✍️','💅','🤳','👀','🫵','🤜','🤛',
+      '👍',
+      '👎',
+      '👌',
+      '🤌',
+      '🤏',
+      '✌️',
+      '🤞',
+      '🫰',
+      '🤟',
+      '🤘',
+      '🤙',
+      '👈',
+      '👉',
+      '👆',
+      '👇',
+      '☝️',
+      '👋',
+      '🤚',
+      '🖐️',
+      '✋',
+      '🖖',
+      '🫱',
+      '🫲',
+      '🫳',
+      '🫴',
+      '👏',
+      '🙌',
+      '🫶',
+      '👐',
+      '🤲',
+      '🙏',
+      '🤝',
+      '💪',
+      '🦾',
+      '✍️',
+      '💅',
+      '🤳',
+      '👀',
+      '🫵',
+      '🤜',
+      '🤛',
     ],
     [
-      '❤️','🧡','💛','💚','💙','💜','🤎','🖤','🤍','💔','❣️','💕','💞','💓','💗',
-      '💖','💘','💝','💟','♥️','💌','💋','💯','💢','💥','💫','💦','💨','🔥','✨',
+      '❤️',
+      '🧡',
+      '💛',
+      '💚',
+      '💙',
+      '💜',
+      '🤎',
+      '🖤',
+      '🤍',
+      '💔',
+      '❣️',
+      '💕',
+      '💞',
+      '💓',
+      '💗',
+      '💖',
+      '💘',
+      '💝',
+      '💟',
+      '♥️',
+      '💌',
+      '💋',
+      '💯',
+      '💢',
+      '💥',
+      '💫',
+      '💦',
+      '💨',
+      '🔥',
+      '✨',
     ],
     [
-      '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵',
-      '🐔','🐧','🐦','🐤','🦆','🦉','🐴','🦄','🐝','🦋','🐌','🐞','🐢','🐍','🐙',
-      '🦀','🐠','🐬','🐳','🐋','🌸','🌹','🌻','🌷','🌳','🌵','🍀','🌙','⭐','🌈',
-      '☀️','⛅','❄️',
+      '🐶',
+      '🐱',
+      '🐭',
+      '🐹',
+      '🐰',
+      '🦊',
+      '🐻',
+      '🐼',
+      '🐨',
+      '🐯',
+      '🦁',
+      '🐮',
+      '🐷',
+      '🐸',
+      '🐵',
+      '🐔',
+      '🐧',
+      '🐦',
+      '🐤',
+      '🦆',
+      '🦉',
+      '🐴',
+      '🦄',
+      '🐝',
+      '🦋',
+      '🐌',
+      '🐞',
+      '🐢',
+      '🐍',
+      '🐙',
+      '🦀',
+      '🐠',
+      '🐬',
+      '🐳',
+      '🐋',
+      '🌸',
+      '🌹',
+      '🌻',
+      '🌷',
+      '🌳',
+      '🌵',
+      '🍀',
+      '🌙',
+      '⭐',
+      '🌈',
+      '☀️',
+      '⛅',
+      '❄️',
     ],
     [
-      '🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍒','🍑','🥭','🍍','🥥',
-      '🥝','🍅','🥑','🍆','🥕','🌽','🌶️','🥔','🥐','🍞','🧀','🍗','🍖','🌭','🍔',
-      '🍟','🍕','🌮','🌯','🥗','🍝','🍜','🍣','🍦','🍰','🎂','🍫','🍬','🍭','🍩',
-      '🍪','☕','🍵','🥤','🍺','🍻','🥂','🍷',
+      '🍏',
+      '🍎',
+      '🍐',
+      '🍊',
+      '🍋',
+      '🍌',
+      '🍉',
+      '🍇',
+      '🍓',
+      '🫐',
+      '🍒',
+      '🍑',
+      '🥭',
+      '🍍',
+      '🥥',
+      '🥝',
+      '🍅',
+      '🥑',
+      '🍆',
+      '🥕',
+      '🌽',
+      '🌶️',
+      '🥔',
+      '🥐',
+      '🍞',
+      '🧀',
+      '🍗',
+      '🍖',
+      '🌭',
+      '🍔',
+      '🍟',
+      '🍕',
+      '🌮',
+      '🌯',
+      '🥗',
+      '🍝',
+      '🍜',
+      '🍣',
+      '🍦',
+      '🍰',
+      '🎂',
+      '🍫',
+      '🍬',
+      '🍭',
+      '🍩',
+      '🍪',
+      '☕',
+      '🍵',
+      '🥤',
+      '🍺',
+      '🍻',
+      '🥂',
+      '🍷',
     ],
     [
-      '⚽','🏀','🏈','⚾','🎾','🏐','🏉','🎱','🏓','🏸','🥅','⛳','🏒','🏏','🥊',
-      '🎮','🎲','🎯','🎳','🎤','🎧','🎸','🎹','🥁','🎺','🎻','🎬','🎨','🎭','🎟️',
-      '🏆','🥇','🥈','🥉','🚗','✈️','🚀','⛵','🏖️','🎉','🎊','🎈','🎁',
+      '⚽',
+      '🏀',
+      '🏈',
+      '⚾',
+      '🎾',
+      '🏐',
+      '🏉',
+      '🎱',
+      '🏓',
+      '🏸',
+      '🥅',
+      '⛳',
+      '🏒',
+      '🏏',
+      '🥊',
+      '🎮',
+      '🎲',
+      '🎯',
+      '🎳',
+      '🎤',
+      '🎧',
+      '🎸',
+      '🎹',
+      '🥁',
+      '🎺',
+      '🎻',
+      '🎬',
+      '🎨',
+      '🎭',
+      '🎟️',
+      '🏆',
+      '🥇',
+      '🥈',
+      '🥉',
+      '🚗',
+      '✈️',
+      '🚀',
+      '⛵',
+      '🏖️',
+      '🎉',
+      '🎊',
+      '🎈',
+      '🎁',
     ],
     [
-      '📱','💻','⌚','📷','🔋','💡','🔦','📺','🛒','💰','💵','💎','🔑','🔒','🔔',
-      '📌','📎','✂️','✏️','📝','📚','📖','🗓️','⏰','⏳','🔍','❗','❓','💤','✅',
-      '❌','⭕','💬','💭','🗯️','⚡','🎵','🎶',
+      '📱',
+      '💻',
+      '⌚',
+      '📷',
+      '🔋',
+      '💡',
+      '🔦',
+      '📺',
+      '🛒',
+      '💰',
+      '💵',
+      '💎',
+      '🔑',
+      '🔒',
+      '🔔',
+      '📌',
+      '📎',
+      '✂️',
+      '✏️',
+      '📝',
+      '📚',
+      '📖',
+      '🗓️',
+      '⏰',
+      '⏳',
+      '🔍',
+      '❗',
+      '❓',
+      '💤',
+      '✅',
+      '❌',
+      '⭕',
+      '💬',
+      '💭',
+      '🗯️',
+      '⚡',
+      '🎵',
+      '🎶',
     ],
   ];
 
@@ -1611,7 +2015,9 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
                         child: Container(
                           width: 42,
                           margin: const EdgeInsets.symmetric(
-                              horizontal: 3, vertical: 7),
+                            horizontal: 3,
+                            vertical: 7,
+                          ),
                           decoration: BoxDecoration(
                             color: secili ? Renkler.neonSis : null,
                             borderRadius: Kose.dugme,
@@ -1633,8 +2039,10 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
                 ),
                 IconButton(
                   tooltip: 'Sil',
-                  icon: const Icon(Icons.backspace_outlined,
-                      color: Renkler.metinSoluk),
+                  icon: const Icon(
+                    Icons.backspace_outlined,
+                    color: Renkler.metinSoluk,
+                  ),
                   onPressed: widget.onSil,
                 ),
               ],

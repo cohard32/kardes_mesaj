@@ -8,6 +8,7 @@ import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arkadas_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
+import 'profil_goruntule_ekrani.dart';
 
 /// Kullanıcı adıyla (@) arama + arkadaş ekleme (FAZ 4.2).
 class KullaniciAraEkrani extends StatefulWidget {
@@ -79,7 +80,9 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
             ),
             if (_yukleniyor)
               const LinearProgressIndicator(
-                  color: Renkler.neon, backgroundColor: Renkler.yuzey),
+                color: Renkler.neon,
+                backgroundColor: Renkler.yuzey,
+              ),
             Expanded(child: _govde()),
           ],
         ),
@@ -174,30 +177,38 @@ class _SonucSatiriState extends State<_SonucSatiri> {
   @override
   Widget build(BuildContext context) {
     final k = widget.kullanici;
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        gradient: Gradyanlar.yuzey,
-        borderRadius: Kose.kartKose,
-        border: Border.all(color: Renkler.kenar),
+    return InkWell(
+      borderRadius: Kose.kartKose,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ProfilGoruntuleEkrani(kullanici: k),
+        ),
       ),
-      child: Row(
-        children: [
-          KullaniciAvatar(kullanici: k, boyut: 48),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(k.ad, style: Yazi.isim),
-                Text('@${k.kullaniciAdi}', style: Yazi.kucuk),
-              ],
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          gradient: Gradyanlar.yuzey,
+          borderRadius: Kose.kartKose,
+          border: Border.all(color: Renkler.kenar),
+        ),
+        child: Row(
+          children: [
+            KullaniciAvatar(kullanici: k, boyut: 48),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(k.ad, style: Yazi.isim),
+                  Text('@${k.kullaniciAdi}', style: Yazi.kucuk),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          _buton(),
-        ],
+            const SizedBox(width: 8),
+            _buton(),
+          ],
+        ),
       ),
     );
   }
@@ -207,8 +218,10 @@ class _SonucSatiriState extends State<_SonucSatiri> {
       return const SizedBox(
         width: 20,
         height: 20,
-        child:
-            CircularProgressIndicator(strokeWidth: 2, color: Renkler.metinSoluk),
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: Renkler.metinSoluk,
+        ),
       );
     }
     final yukleniyor = _islemde
@@ -216,7 +229,9 @@ class _SonucSatiriState extends State<_SonucSatiri> {
             width: 18,
             height: 18,
             child: CircularProgressIndicator(
-                strokeWidth: 2, color: Renkler.metinKoyu),
+              strokeWidth: 2,
+              color: Renkler.metinKoyu,
+            ),
           )
         : null;
 
@@ -225,16 +240,23 @@ class _SonucSatiriState extends State<_SonucSatiri> {
         return Uc3DDugme(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           onTap: _islemde ? null : _istekGonder,
-          cocuk: yukleniyor ??
-              Text('Ekle', style: Yazi.stil(13, FontWeight.w800, Renkler.metinKoyu)),
+          cocuk:
+              yukleniyor ??
+              Text(
+                'Ekle',
+                style: Yazi.stil(13, FontWeight.w800, Renkler.metinKoyu),
+              ),
         );
       case IliskiDurumu.istekGeldi:
         return Uc3DDugme(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           onTap: _islemde ? null : _kabulEt,
-          cocuk: yukleniyor ??
-              Text('Kabul et',
-                  style: Yazi.stil(13, FontWeight.w800, Renkler.metinKoyu)),
+          cocuk:
+              yukleniyor ??
+              Text(
+                'Kabul et',
+                style: Yazi.stil(13, FontWeight.w800, Renkler.metinKoyu),
+              ),
         );
       case IliskiDurumu.istekGonderdim:
         return _etiket('İstek gönderildi', Renkler.metinSoluk);
@@ -246,7 +268,7 @@ class _SonucSatiriState extends State<_SonucSatiri> {
   }
 
   Widget _etiket(String yazi, Color renk) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: Text(yazi, style: Yazi.stil(12, FontWeight.w700, renk)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 6),
+    child: Text(yazi, style: Yazi.stil(12, FontWeight.w700, renk)),
+  );
 }

@@ -15,6 +15,15 @@ service cloud.firestore {
     function arkadasMi(idPair) {
       return exists(/databases/$(database)/documents/friendships/$(idPair));
     }
+    // Bir çiftteki KARŞI uid (ben olmayan). uidler = [a, b].
+    function digerUid(uidler) {
+      return uidler[0] == request.auth.uid ? uidler[1] : uidler[0];
+    }
+    // Karşı taraftan BANA bekleyen bir arkadaşlık isteği var mı?
+    // (istek id = {gonderen}_{alan}, alan = ben) → onaysız arkadaşlığı önler.
+    function banaIstekVar(uidler) {
+      return exists(/databases/$(database)/documents/friend_requests/$(digerUid(uidler) + '_' + request.auth.uid));
+    }
     function chatKatilimcisi(chatId) {
       return girisli() &&
         request.auth.uid in
@@ -24,6 +33,13 @@ service cloud.firestore {
     // ---- PROFİLLER ----
     // Herkes okuyabilir (kullanıcı arama/profil görüntüleme).
     // Sadece kişi kendi kaydını oluşturur/günceller. Silme yok.
+    // ⚠️ BİLİNEN SINIR (rules testi T6): fcmToken bu dokümanda tutulduğu ve
+    //    doküman herkese okunur olduğu için giriş yapmış kullanıcılar
+    //    başkasının fcmToken'ını okuyabilir. KARTSIZ mimaride kaçınılmaz:
+    //    (a) kullanıcı arama profili public olmalı, (b) arkadaşlık-isteği
+    //    push'u henüz-arkadaş-olmayanın token'ını okumayı gerektirir,
+    //    (c) FCM gönderme yetkisi zaten APK'daki service_account.json'da.
+    //    Token'ı arkadaşa kısıtlamak isteğe-bağlı bildirimi kırar → kabul edildi.
     match /users/{uid} {
       allow read: if girisli();
       allow create, update: if benim(uid);
@@ -57,11 +73,14 @@ service cloud.firestore {
 
     // ---- ARKADAŞLIKLAR ----
     // id = iki uid'den sıralı üretilir (chatId ile AYNI). Sadece taraflar.
+    // ⚠️ Oluşturma: karşı taraftan BANA bekleyen istek OLMALI (banaIstekVar) —
+    //    yoksa biri kendini onaysız başkasına arkadaş yapabilirdi (rules testi T8).
     match /friendships/{id} {
       allow read: if girisli() && request.auth.uid in resource.data.uidler;
       allow create: if girisli()
         && request.auth.uid in request.resource.data.uidler
-        && request.resource.data.uidler.size() == 2;
+        && request.resource.data.uidler.size() == 2
+        && banaIstekVar(request.resource.data.uidler);
       allow delete: if girisli() && request.auth.uid in resource.data.uidler;
       allow update: if false;
     }
@@ -81,12 +100,19 @@ service cloud.firestore {
       allow delete: if false;
 
       // ---- MESAJLAR ----
-      // Sadece sohbetin katılımcıları. Kimse başkası adına yazamaz.
+      // Okuma: katılımcılar (eski geçmiş arkadaşlık bitse de görünür).
+      // Yazma: katılımcı OLMAK + hâlâ ARKADAŞ olmak + kendi adına
+      //   (arkadaşlıktan çıkınca yeni mesaj/arama gönderilemesin — chatId=friendshipId).
+      // Güncelleme: sadece goruldu/tepki/sesDinlendi alanları değişebilir
+      //   (biri diğerinin mesaj metnini/göndericisini bozamasın).
       match /messages/{msgId} {
         allow read: if chatKatilimcisi(chatId);
         allow create: if chatKatilimcisi(chatId)
+          && arkadasMi(chatId)
           && request.resource.data.gonderen == request.auth.uid;
-        allow update: if chatKatilimcisi(chatId); // goruldu/tepki/dinlendi
+        allow update: if chatKatilimcisi(chatId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['goruldu', 'tepki', 'sesDinlendi']);
         allow delete: if false;
       }
     }

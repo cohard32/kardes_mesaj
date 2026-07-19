@@ -30,6 +30,13 @@ class KullaniciServisi {
 
   static final RegExp _adDeseni = RegExp(r'^[a-z0-9_]{3,20}$');
 
+  /// Rezerve/yanıltıcı kullanıcı adları (kimse alamaz).
+  static const _rezerveAdlar = {
+    'admin', 'administrator', 'root', 'system', 'sistem', 'support', 'destek',
+    'moderator', 'moderatör', 'mod', 'kardes', 'kardesmesaj', 'kardes_mesaj',
+    'null', 'undefined', 'me', 'ben', 'sen', 'you', 'everyone', 'herkes',
+  };
+
   /// Kullanıcı adı biçim kuralı (küçük harf/rakam/alt çizgi, 3-20).
   /// Geçerliyse null, değilse hata metni döner.
   String? kullaniciAdiHatasi(String ad) {
@@ -39,6 +46,7 @@ class KullaniciServisi {
     if (!_adDeseni.hasMatch(a)) {
       return 'Sadece küçük harf, rakam ve _ (boşluk yok)';
     }
+    if (_rezerveAdlar.contains(a)) return 'Bu kullanıcı adı kullanılamaz';
     return null;
   }
 
@@ -113,6 +121,46 @@ class KullaniciServisi {
   /// Profil dokümanı var mı? (auth_gate: profil kurulmamışsa kuruluma yönlendir)
   Future<bool> profilVarMi(String uid) async =>
       (await _users.doc(uid).get()).exists;
+
+  /// Oturumu AÇIK ama profili OLMAYAN kullanıcı için profil kurar
+  /// (ör. eski hesaplar, ilk açılışta @kullanıcı adı seçimi). Auth hesabı
+  /// oluşturmaz — mevcut uid/e-posta kullanılır. Kullanıcı adını TRANSACTION
+  /// ile rezerve eder (yarış durumunda çakışmayı önler).
+  Future<void> profilKur({
+    required String ad,
+    required String kullaniciAdi,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw KullaniciHatasi('Oturum yok.');
+    final uid = user.uid;
+    final adTemiz = ad.trim();
+    final kAdi = kullaniciAdi.trim().toLowerCase();
+
+    if (adTemiz.isEmpty) throw KullaniciHatasi('İsim boş olamaz.');
+    final kHata = kullaniciAdiHatasi(kAdi);
+    if (kHata != null) throw KullaniciHatasi('Kullanıcı adı: $kHata');
+
+    try {
+      await _db.runTransaction((tx) async {
+        final unameRef = _usernames.doc(kAdi);
+        final snap = await tx.get(unameRef);
+        if (snap.exists) {
+          throw KullaniciHatasi('@$kAdi alınmış, başka bir ad dene.');
+        }
+        tx.set(unameRef, {'uid': uid});
+        tx.set(_users.doc(uid), {
+          'ad': adTemiz,
+          'kullaniciAdi': kAdi,
+          'eposta': user.email ?? '',
+          'cevrimici': false,
+          'olusturma': FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (e) {
+      if (e is KullaniciHatasi) rethrow;
+      throw KullaniciHatasi('Profil kurulamadı, tekrar dene.');
+    }
+  }
 
   /// Bir kullanıcının profilini canlı dinler.
   Stream<Kullanici> profilDinle(String uid) =>

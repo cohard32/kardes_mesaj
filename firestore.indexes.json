@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "chats",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "katilimcilar", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "sonMesajZamani", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
