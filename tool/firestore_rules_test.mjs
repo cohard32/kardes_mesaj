@@ -39,6 +39,9 @@ async function seed() {
     await setDoc(doc(db, 'usernames/alice'), { uid: 'alice' });
     await setDoc(doc(db, 'usernames/bob'),   { uid: 'bob' });
     await setDoc(doc(db, `friendships/${pair('alice','bob')}`), { uidler: ['alice','bob'] });
+    // alice & dave ARKADAŞ ama aralarında CHAT YOK (create/varlık-kontrol testi)
+    await setDoc(doc(db, 'users/dave'), { ad: 'Dave', kullaniciAdi: 'dave' });
+    await setDoc(doc(db, `friendships/${pair('alice','dave')}`), { uidler: ['alice','dave'] });
     await setDoc(doc(db, `chats/${pair('alice','bob')}`), { katilimcilar: ['alice','bob'].sort() });
     await setDoc(doc(db, `chats/${pair('alice','bob')}/messages/m1`), { gonderen: 'alice', metin: 'selam', goruldu: false });
     // bob -> carol bekleyen istek (kabul testi)
@@ -81,6 +84,12 @@ await env.withSecurityRulesDisabled(async (ctx) => {
 log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m9`), { gonderen: 'bob', metin: 'artik arkadas degiliz' }))), 'T11 arkadas cikinca yeni mesaj GONDERILEMEZ');
 log(await ok(assertSucceeds(getDoc(doc(B(), `chats/${AB}/messages/m1`)))), 'T11b eski gecmis hala OKUNABILIR');
 log(await ok(assertFails(setDoc(doc(B(), `aramalar/${AB}`), { arayanUid: 'bob', tip: 'ses' }))), 'T11c arkadas cikinca arama baslatilamaz');
+
+// ---- SOHBET AÇMA (create) + VAR OLMAYAN CHAT VARLIK KONTROLÜ ----
+const AD = pair('alice','dave');
+log(await ok(assertSucceeds(getDoc(doc(A(), `chats/${AD}`)))), 'T12 arkadas var olmayan chat varlik kontrolu (get) OK');
+log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AD}`), { katilimcilar: ['alice','dave'].sort() }))), 'T13 arkadas sohbet ACABILIR (create)');
+log(await ok(assertFails(setDoc(doc(C(), `chats/${pair('carol','dave')}`), { katilimcilar: ['carol','dave'].sort() }))), 'T14 arkadas olmayan chat olusturamaz');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

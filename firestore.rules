@@ -95,8 +95,11 @@ service cloud.firestore {
     // chatId = iki uid sıralı (friendshipId ile AYNI).
     // Oluşturma: katılımcı olmalı VE karşı tarafla ARKADAŞ olmalı.
     match /chats/{chatId} {
+      // resource == null → var olmayan doküman: sohbetAcOrGetir'in varlık
+      // kontrolü (get) reddedilmesin (yoksa "sohbet açılamadı: permission-denied").
+      // Var olan sohbeti yalnız katılımcılar okur. Oluşturma yine arkadaşlık ister.
       allow read: if girisli() &&
-        request.auth.uid in resource.data.katilimcilar;
+        (resource == null || request.auth.uid in resource.data.katilimcilar);
       allow create: if girisli()
         && request.auth.uid in request.resource.data.katilimcilar
         && request.resource.data.katilimcilar.size() == 2
