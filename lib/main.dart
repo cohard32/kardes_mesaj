@@ -86,14 +86,18 @@ Future<void> _aramayiKabulEt(String chatId) async {
     if (bilgi == null) return;
     if (durum != 'cagriliyor' && durum != 'kabul') return; // iptal edilmiş
     final servis = AramaServisi.instance;
-    if (servis.islenenChatId == chatId) return; // çift işleme koruması
-    servis.islenenChatId = chatId;
+    if (servis.ayniAramaIsleniyor(chatId)) return; // çift işleme koruması
+    servis.islemeBasla(chatId);
 
     final tip = aramaTipiCoz(bilgi['tip'] as String?);
     final baslik = (bilgi['arayan'] ?? 'Arama').toString();
     final ok = await servis.kabulEt(chatId, tip);
     if (!ok) {
-      servis.islenenChatId = null;
+      // Kabul edilemedi (izin yok vb.) → ARAYAN sonsuza kadar çalmasın.
+      servis.islemeBitti();
+      try {
+        await servis.reddet(chatId);
+      } catch (_) {}
       return;
     }
     final nav = navigatorKey.currentState;
@@ -111,7 +115,11 @@ Future<void> _aramayiKabulEt(String chatId) async {
     }
   } catch (e) {
     debugPrint('CallKit kabul hatası: $e');
-    AramaServisi.instance.islenenChatId = null;
+    AramaServisi.instance.islemeBitti();
+    // Hata olduysa arayan tarafın zili sussun.
+    try {
+      await AramaServisi.instance.reddet(chatId);
+    } catch (_) {}
   }
 }
 
@@ -181,7 +189,7 @@ class KardesMesajApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Kardeş Mesaj',
+      title: 'ROY MESSANGER',
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
       theme: AppTema.karanlik(), // merkezi tema (tema.dart)

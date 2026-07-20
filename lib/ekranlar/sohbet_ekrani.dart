@@ -71,8 +71,23 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   Timer? _yaziyorTimer;
   bool _yaziyorGonderildi = false;
-  bool _kayitYapiliyor = false;
   bool _yukleniyor = false;
+
+  // ⚠️ Mesaj akışı ÖNBELLEKTE tutulur. Eskiden `stream:` doğrudan
+  // mesajlariDinle(...) çağırıyordu → HER build'de YENİ Stream nesnesi →
+  // StreamBuilder aboneliği kopup yeniden kuruluyor → ConnectionState.waiting →
+  // liste yerine spinner çiziliyordu. Kayıtta genlik 120 ms'de bir setState
+  // yaptığı için ekran saniyede ~8 kez SİYAH YANIP SÖNÜYORDU.
+  Stream<List<Mesaj>>? _mesajAkisi;
+  int? _akisLimit;
+
+  Stream<List<Mesaj>> get _mesajlarAkisi {
+    if (_mesajAkisi == null || _akisLimit != _mesajLimit) {
+      _akisLimit = _mesajLimit;
+      _mesajAkisi = _servis.mesajlariDinle(widget.chatId, limit: _mesajLimit);
+    }
+    return _mesajAkisi!;
+  }
 
   // Otomatik kaydırma kontrolü (klavye/scroll zıplamasını önler)
   int _oncekiMesajSayisi = 0;
@@ -85,11 +100,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   bool _hepsiYuklendi = false;
   bool _eskiYukleniyor = false;
 
-  // Sesli mesaj kaydı durumu
+  // Sesli mesaj kaydı durumu.
+  // ⚠️ setState YERİNE ValueNotifier: kayıt sırasında saniyede ~8 güncelleme
+  // oluyor; setState tüm sohbet ekranını (mesaj listesi, video/foto balonları)
+  // yeniden çizip takılmaya/yanıp sönmeye yol açıyordu. Artık sadece kayıt
+  // çubuğu yeniden çizilir.
   Timer? _kayitTimer;
-  int _kayitSaniye = 0;
   StreamSubscription<Amplitude>? _ampSub;
-  final List<double> _dalga = [];
+  final _kayitYapiliyorVN = ValueNotifier<bool>(false);
+  final _kayitSaniyeVN = ValueNotifier<int>(0);
+  final _dalgaVN = ValueNotifier<List<double>>(<double>[]);
+  final _iptalBolgesindeVN = ValueNotifier<bool>(false);
 
   // Emoji paneli
   bool _emojiAcik = false;
@@ -122,6 +143,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // (1) pil optimizasyonu muafiyeti (Doze uyutmasın),
   // (2) Android 14+ tam ekran bildirim izni (yoksa arama tam ekran açılmaz).
   Future<void> _aramaIzinleriniKontrolEt() async {
+    // ÖNEMLİ: mikrofon/kamera iznini ARAMA GELMEDEN ÖNCE al. İzin diyaloğu
+    // kabul anında açılırsa sistem ekranı Flutter aktivitesini duraklatıyor,
+    // kabul akışı askıda kalıyor ve arama ekranı hiç açılmıyordu.
+    // (İzin zaten verilmişse bu çağrı diyalog AÇMAZ, anında döner.)
+    await AramaServisi.instance.izinleriHazirla(AramaTipi.video);
+    if (!mounted) return;
     final b = BildirimServisi.instance;
     await b.pilOptimizasyonuIste();
     if (!mounted) return;
@@ -210,6 +237,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _mesajCtrl.dispose();
     _scrollCtrl.dispose();
     _odak.dispose();
+    _kayitYapiliyorVN.dispose();
+    _kayitSaniyeVN.dispose();
+    _dalgaVN.dispose();
+    _iptalBolgesindeVN.dispose();
     super.dispose();
   }
 
@@ -404,8 +435,22 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     if (x != null) await _medyaGonder(File(x.path), MesajTipi.video);
   }
 
-  // Sesli mesaj kaydını başlat (canlı süre sayacı + ses dalgası)
+  // ---- SESLİ MESAJ: BASILI TUT → KAYDET, BIRAK → GÖNDER, SOLA KAYDIR → İPTAL
+
+  /// Mikrofona kısa dokunulunca ipucu (WhatsApp gibi basılı tutmak gerekir).
+  void _mikrofonBilgi() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Kaydetmek için mikrofona basılı tut'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Basılı tutma başladı → kaydı başlat.
+  /// setState YOK: güncellemeler ValueNotifier üzerinden gider (yanıp sönme yok).
   Future<void> _kayitBaslat() async {
+    if (_kayitYapiliyorVN.value) return;
     if (!await _kayitci.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -418,24 +463,45 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final yol =
         '${dizin.path}/ses_${DateTime.now().millisecondsSinceEpoch}.m4a';
     await _kayitci.start(const RecordConfig(), path: yol);
-    _dalga.clear();
-    _kayitSaniye = 0;
+    _dalgaVN.value = <double>[];
+    _kayitSaniyeVN.value = 0;
+    _iptalBolgesindeVN.value = false;
     _kayitTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _kayitSaniye++);
+      _kayitSaniyeVN.value++;
     });
     _ampSub = _kayitci
         .onAmplitudeChanged(const Duration(milliseconds: 120))
         .listen((amp) {
           // dBFS (-45..0) → 0..1 ölçek (konuşurken dalga oynar)
-          final normal = ((amp.current + 45) / 45).clamp(0.0, 1.0);
-          if (mounted) {
-            setState(() {
-              _dalga.add(normal.toDouble());
-              if (_dalga.length > 50) _dalga.removeAt(0);
-            });
-          }
+          final normal = ((amp.current + 45) / 45).clamp(0.0, 1.0).toDouble();
+          final yeni = List<double>.of(_dalgaVN.value)..add(normal);
+          if (yeni.length > 50) yeni.removeAt(0);
+          _dalgaVN.value = yeni; // yalnızca dalga yeniden çizilir
         });
-    setState(() => _kayitYapiliyor = true);
+    _kayitYapiliyorVN.value = true;
+  }
+
+  /// Parmak sola kaydıkça iptal bölgesine girildi mi (çöp kutusu).
+  void _kayitSurukle(double dx) {
+    if (!_kayitYapiliyorVN.value) return;
+    final iptal = dx < -70;
+    if (_iptalBolgesindeVN.value != iptal) _iptalBolgesindeVN.value = iptal;
+  }
+
+  /// Parmak kalktı → iptal bölgesindeyse çöpe at, değilse gönder.
+  Future<void> _kayitBitir() async {
+    if (!_kayitYapiliyorVN.value) return;
+    if (_iptalBolgesindeVN.value) {
+      await _kayitIptal();
+      return;
+    }
+    // Çok kısa kayıt = yanlışlıkla dokunma → gönderme.
+    if (_kayitSaniyeVN.value < 1) {
+      await _kayitIptal();
+      if (mounted) _mikrofonBilgi();
+      return;
+    }
+    await _kayitGonder();
   }
 
   Future<void> _kayitTemizle() async {
@@ -449,7 +515,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _kayitGonder() async {
     final yol = await _kayitci.stop();
     await _kayitTemizle();
-    setState(() => _kayitYapiliyor = false);
+    _kayitYapiliyorVN.value = false;
     if (yol != null) await _medyaGonder(File(yol), MesajTipi.ses);
   }
 
@@ -457,7 +523,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _kayitIptal() async {
     final yol = await _kayitci.stop();
     await _kayitTemizle();
-    setState(() => _kayitYapiliyor = false);
+    _kayitYapiliyorVN.value = false;
+    _iptalBolgesindeVN.value = false;
     if (yol != null) {
       try {
         await File(yol).delete();
@@ -525,10 +592,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               ),
             Expanded(
               child: StreamBuilder<List<Mesaj>>(
-                stream: _servis.mesajlariDinle(
-                  widget.chatId,
-                  limit: _mesajLimit,
-                ),
+                stream: _mesajlarAkisi, // önbellekli (her build'de yenilenmez)
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
@@ -578,27 +642,46 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 },
               ),
             ),
-            // Kayıt sırasında kayıt çubuğu, değilse yazma alanı (+ emoji paneli)
-            if (_kayitYapiliyor)
-              _KayitCubugu(
-                saniye: _kayitSaniye,
-                dalga: _dalga,
-                onIptal: _kayitIptal,
-                onGonder: _kayitGonder,
-              )
-            else ...[
-              _YazmaAlani(
-                controller: _mesajCtrl,
-                odak: _odak,
-                emojiAcik: _emojiAcik,
-                onGonder: _gonder,
-                onEk: _ekMenu,
-                onMikrofon: _kayitBaslat,
-                onEmoji: _emojiToggle,
-              ),
-              if (_emojiAcik)
-                _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil),
-            ],
+            // Yazma alanı HER ZAMAN ağaçta kalır: basılı-tut jestinin sahibi
+            // odur; kayıt sırasında widget ağaçtan çıkarılsaydı parmak
+            // kalktığında "bitir" olayı hiç gelmez, kayıt asılı kalırdı.
+            // Kayıt göstergesi ÜSTÜNE bindirilir (IgnorePointer → jesti bozmaz).
+            Stack(
+              children: [
+                _YazmaAlani(
+                  controller: _mesajCtrl,
+                  odak: _odak,
+                  emojiAcik: _emojiAcik,
+                  onGonder: _gonder,
+                  onEk: _ekMenu,
+                  onEmoji: _emojiToggle,
+                  onMikrofonBilgi: _mikrofonBilgi,
+                  onKayitBasla: _kayitBaslat,
+                  onKayitSurukle: _kayitSurukle,
+                  onKayitBitir: _kayitBitir,
+                ),
+                Positioned.fill(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _kayitYapiliyorVN,
+                    builder: (_, kayitta, _) => kayitta
+                        ? IgnorePointer(
+                            child: _KayitKaplamasi(
+                              saniye: _kayitSaniyeVN,
+                              dalga: _dalgaVN,
+                              iptalBolgesinde: _iptalBolgesindeVN,
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+              ],
+            ),
+            ValueListenableBuilder<bool>(
+              valueListenable: _kayitYapiliyorVN,
+              builder: (_, kayitta, _) => (_emojiAcik && !kayitta)
+                  ? _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil)
+                  : const SizedBox.shrink(),
+            ),
           ],
         ),
       ),
@@ -1247,8 +1330,19 @@ class _YazmaAlani extends StatelessWidget {
   final bool emojiAcik;
   final VoidCallback onGonder;
   final VoidCallback onEk;
-  final VoidCallback onMikrofon;
   final VoidCallback onEmoji;
+
+  /// Mikrofona kısa dokunma (ipucu göster)
+  final VoidCallback onMikrofonBilgi;
+
+  /// Basılı tutma başladı → kayda başla
+  final VoidCallback onKayitBasla;
+
+  /// Basılıyken yatay kayma (sola kaydırınca iptal bölgesi)
+  final void Function(double dx) onKayitSurukle;
+
+  /// Parmak kalktı → gönder veya iptal
+  final VoidCallback onKayitBitir;
 
   const _YazmaAlani({
     required this.controller,
@@ -1256,8 +1350,11 @@ class _YazmaAlani extends StatelessWidget {
     required this.emojiAcik,
     required this.onGonder,
     required this.onEk,
-    required this.onMikrofon,
     required this.onEmoji,
+    required this.onMikrofonBilgi,
+    required this.onKayitBasla,
+    required this.onKayitSurukle,
+    required this.onKayitBitir,
   });
 
   @override
@@ -1324,17 +1421,37 @@ class _YazmaAlani extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // 3D gönder / mikrofon butonu
-                      Uc3DDugme(
-                        kose: Kose.dugme,
-                        padding: const EdgeInsets.all(13),
-                        onTap: bos ? onMikrofon : onGonder,
-                        cocuk: Icon(
-                          bos ? Icons.mic : Icons.send_rounded,
-                          color: Renkler.metinKoyu,
-                          size: 22,
+                      // Metin varsa GÖNDER; boşsa MİKROFON (basılı tut → kaydet,
+                      // bırak → gönder, sola kaydır → çöpe at).
+                      if (!bos)
+                        Uc3DDugme(
+                          kose: Kose.dugme,
+                          padding: const EdgeInsets.all(13),
+                          onTap: onGonder,
+                          cocuk: const Icon(
+                            Icons.send_rounded,
+                            color: Renkler.metinKoyu,
+                            size: 22,
+                          ),
+                        )
+                      else
+                        GestureDetector(
+                          onLongPressStart: (_) => onKayitBasla(),
+                          onLongPressMoveUpdate: (d) =>
+                              onKayitSurukle(d.localOffsetFromOrigin.dx),
+                          onLongPressEnd: (_) => onKayitBitir(),
+                          onLongPressCancel: onKayitBitir,
+                          child: Uc3DDugme(
+                            kose: Kose.dugme,
+                            padding: const EdgeInsets.all(13),
+                            onTap: onMikrofonBilgi, // kısa dokunuş → ipucu
+                            cocuk: const Icon(
+                              Icons.mic,
+                              color: Renkler.metinKoyu,
+                              size: 22,
+                            ),
+                          ),
                         ),
-                      ),
                     ],
                   );
                 },
@@ -1347,25 +1464,27 @@ class _YazmaAlani extends StatelessWidget {
   }
 }
 
-/// Sesli mesaj kaydı sırasında gösterilen çubuk:
-/// yanıp sönen kırmızı nokta + canlı süre + canlı ses dalgası + iptal/gönder.
-class _KayitCubugu extends StatefulWidget {
-  final int saniye;
-  final List<double> dalga;
-  final VoidCallback onIptal;
-  final VoidCallback onGonder;
-  const _KayitCubugu({
+/// Kayıt sırasında yazma alanının ÜSTÜNE binen gösterge (WhatsApp gibi):
+/// yanıp sönen kırmızı nokta + canlı süre + canlı dalga + "sola kaydır" ipucu.
+/// Tamamen GÖRSEL (IgnorePointer ile sarılır) — kayıt, mikrofon butonundaki
+/// basılı-tut jestiyle yönetilir. Güncellemeler ValueNotifier'la geldiği için
+/// sohbet ekranının tamamı yeniden ÇİZİLMEZ (siyah yanıp sönme yok).
+class _KayitKaplamasi extends StatefulWidget {
+  final ValueNotifier<int> saniye;
+  final ValueNotifier<List<double>> dalga;
+  final ValueNotifier<bool> iptalBolgesinde;
+
+  const _KayitKaplamasi({
     required this.saniye,
     required this.dalga,
-    required this.onIptal,
-    required this.onGonder,
+    required this.iptalBolgesinde,
   });
 
   @override
-  State<_KayitCubugu> createState() => _KayitCubuguState();
+  State<_KayitKaplamasi> createState() => _KayitKaplamasiState();
 }
 
-class _KayitCubuguState extends State<_KayitCubugu>
+class _KayitKaplamasiState extends State<_KayitKaplamasi>
     with SingleTickerProviderStateMixin {
   late final AnimationController _yanip;
 
@@ -1384,87 +1503,137 @@ class _KayitCubuguState extends State<_KayitCubugu>
     super.dispose();
   }
 
-  String get _sure {
-    final d = (widget.saniye ~/ 60).toString().padLeft(2, '0');
-    final s = (widget.saniye % 60).toString().padLeft(2, '0');
+  String _sure(int sn) {
+    final d = (sn ~/ 60).toString().padLeft(2, '0');
+    final s = (sn % 60).toString().padLeft(2, '0');
     return '$d:$s';
   }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 8, 10, 10),
-        color: Renkler.zemin,
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: 'İptal',
-              icon: const Icon(Icons.delete_outline, color: Renkler.tehlike),
-              onPressed: widget.onIptal,
-            ),
-            // Kayıt göstergesi + süre + canlı dalga — cam yüzey içinde
-            Expanded(
-              child: Container(
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
-                child: Row(
-                  children: [
-                    FadeTransition(
-                      opacity: _yanip,
-                      child: const Icon(
-                        Icons.fiber_manual_record,
-                        color: Renkler.tehlike,
-                        size: 12,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 44,
-                      child: Text(
-                        _sure,
-                        style: Yazi.stil(13, FontWeight.w700, Renkler.metin)
-                            .copyWith(
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                      ),
-                    ),
-                    Expanded(
-                      child: SizedBox(
-                        height: 24,
-                        child: CustomPaint(
-                          painter: _DalgaPainter(
-                            widget.dalga,
-                            Renkler.neon,
-                            canli: true,
-                          ),
-                          size: Size.infinite,
-                        ),
-                      ),
-                    ),
-                  ],
+    return ValueListenableBuilder<bool>(
+      valueListenable: widget.iptalBolgesinde,
+      builder: (context, iptal, _) {
+        return SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(8, 8, 10, 10),
+            color: Renkler.zemin,
+            child: Row(
+              children: [
+                // Çöp kutusu — iptal bölgesinde büyür ve kırmızıya döner
+                AnimatedScale(
+                  scale: iptal ? 1.35 : 1.0,
+                  duration: const Duration(milliseconds: 150),
+                  child: Icon(
+                    Icons.delete_outline,
+                    color: iptal ? Renkler.tehlike : Renkler.metinSoluk,
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: Kutular.duzYuzey(
+                      kose: Kose.alan,
+                      kenarli: true,
+                    ),
+                    child: Row(
+                      children: [
+                        FadeTransition(
+                          opacity: _yanip,
+                          child: const Icon(
+                            Icons.fiber_manual_record,
+                            color: Renkler.tehlike,
+                            size: 12,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 44,
+                          child: ValueListenableBuilder<int>(
+                            valueListenable: widget.saniye,
+                            builder: (_, sn, _) => Text(
+                              _sure(sn),
+                              style:
+                                  Yazi.stil(
+                                    13,
+                                    FontWeight.w700,
+                                    Renkler.metin,
+                                  ).copyWith(
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: iptal
+                              ? Center(
+                                  child: Text(
+                                    'Bırak → iptal',
+                                    style: Yazi.stil(
+                                      12,
+                                      FontWeight.w700,
+                                      Renkler.tehlike,
+                                    ),
+                                  ),
+                                )
+                              : ValueListenableBuilder<List<double>>(
+                                  valueListenable: widget.dalga,
+                                  builder: (_, dalga, _) => SizedBox(
+                                    height: 24,
+                                    child: CustomPaint(
+                                      painter: _DalgaPainter(
+                                        dalga,
+                                        Renkler.neon,
+                                        canli: true,
+                                      ),
+                                      size: Size.infinite,
+                                    ),
+                                  ),
+                                ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (!iptal)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.keyboard_arrow_left,
+                                size: 16,
+                                color: Renkler.metinSoluk,
+                              ),
+                              Text('kaydır', style: Yazi.zaman),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Mikrofon (basılı tutuluyor) — bırakınca gönderilir
+                Container(
+                  padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(
+                    gradient: iptal ? null : Gradyanlar.accent,
+                    color: iptal ? Renkler.tehlike : null,
+                    borderRadius: Kose.dugme,
+                    boxShadow: iptal ? Golgeler.tehlikeGlow : Golgeler.neonGlow,
+                  ),
+                  child: Icon(
+                    iptal ? Icons.delete : Icons.mic,
+                    color: iptal ? Renkler.metinTehlikeUstu : Renkler.metinKoyu,
+                    size: 22,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            // 3D gönder butonu
-            Uc3DDugme(
-              kose: Kose.dugme,
-              padding: const EdgeInsets.all(13),
-              onTap: widget.onGonder,
-              cocuk: const Icon(
-                Icons.send_rounded,
-                color: Renkler.metinKoyu,
-                size: 22,
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

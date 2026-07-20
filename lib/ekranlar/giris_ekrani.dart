@@ -112,7 +112,7 @@ class _GirisEkraniState extends State<GirisEkrani> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  Text('Kardeş Mesaj',
+                  Text('ROY MESSANGER',
                       textAlign: TextAlign.center, style: Yazi.baslik),
                   const SizedBox(height: 6),
                   Text('Giriş yap',

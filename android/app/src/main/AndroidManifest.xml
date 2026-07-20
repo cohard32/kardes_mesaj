@@ -27,7 +27,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
-        android:label="Kardeş Mesaj"
+        android:label="ROY MESSANGER"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

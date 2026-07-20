@@ -99,7 +99,7 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   final params = CallKitParams(
     id: chatId,
     nameCaller: arayan,
-    appName: 'Kardeş Mesaj',
+    appName: 'ROY MESSANGER',
     handle: video ? 'Görüntülü arama' : 'Sesli arama',
     type: video ? 1 : 0,
     // Zil süresi: arayan tarafın 45 sn zaman aşımıyla uyumlu.
@@ -354,7 +354,7 @@ class BildirimServisi {
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           aktifKanalId,
-          'Kardeş Mesaj',
+          'ROY MESSANGER',
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',

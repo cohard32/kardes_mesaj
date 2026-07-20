@@ -58,11 +58,33 @@ class AramaServisi {
   AramaTipi? bekleyenTip;
   String? bekleyenBaslik;
 
-  /// Şu an kabul akışı işlenen chatId (CallKit onEvent + activeCalls kurtarma
-  /// aynı aramayı iki kez işlemesin diye). ⚠️ [bitir] içinde MUTLAKA temizlenir;
-  /// aksi halde aynı kişiden gelen SONRAKİ arama "zaten işlendi" sanılıp
-  /// sessizce yok sayılıyordu.
-  String? islenenChatId;
+  // Kabul akışı dedupe'u (CallKit onEvent + activeCalls kurtarma aynı aramayı
+  // iki kez işlemesin). ⚠️ ZAMAN SINIRLI: akış bir yerde takılırsa bayrak
+  // kalıcı kalıp SONRAKİ TÜM aramaları sessizce yok sayıyordu.
+  String? _islenenChatId;
+  DateTime? _islenenZaman;
+
+  /// Bu arama şu anda (son 15 sn içinde) zaten işleniyor mu?
+  bool ayniAramaIsleniyor(String chatId) {
+    final t = _islenenZaman;
+    if (_islenenChatId != chatId || t == null) return false;
+    if (DateTime.now().difference(t).inSeconds >= 15) {
+      // Takılı kalmış → yeniden işlenebilsin
+      islemeBitti();
+      return false;
+    }
+    return true;
+  }
+
+  void islemeBasla(String chatId) {
+    _islenenChatId = chatId;
+    _islenenZaman = DateTime.now();
+  }
+
+  void islemeBitti() {
+    _islenenChatId = null;
+    _islenenZaman = null;
+  }
 
   Stream<DocumentSnapshot<Map<String, dynamic>>> aramaDinle(String chatId) =>
       _aramaDoc(chatId).snapshots();
@@ -70,13 +92,35 @@ class AramaServisi {
   Future<Map<String, dynamic>?> aktifArama(String chatId) async =>
       (await _aramaDoc(chatId).get()).data();
 
-  Future<bool> _izinIste(AramaTipi tip) async {
-    final izinler = <Permission>[
-      Permission.microphone,
-      if (tip == AramaTipi.video) Permission.camera,
-    ];
-    final sonuc = await izinler.request();
-    return sonuc.values.every((s) => s.isGranted);
+  List<Permission> _izinListesi(AramaTipi tip) => <Permission>[
+        Permission.microphone,
+        if (tip == AramaTipi.video) Permission.camera,
+      ];
+
+  /// İzinler ZATEN verilmiş mi? Sistem diyaloğu AÇMAZ (hızlı yol).
+  Future<bool> izinlerVerilmisMi(AramaTipi tip) async {
+    for (final p in _izinListesi(tip)) {
+      if (!await p.isGranted) return false;
+    }
+    return true;
+  }
+
+  /// İzinleri hazırlar. ⚠️ KRİTİK: izin ZATEN verilmişse diyalog AÇMAZ ve
+  /// anında döner. Diyalog açmak gerekiyorsa zaman aşımı konur — çünkü sistem
+  /// izin ekranı Flutter aktivitesini duraklatıyor ve dönen Future bazen HİÇ
+  /// tamamlanmıyordu; bu yüzden arama kabulü askıda kalıp ekran açılmıyordu.
+  /// Zaman aşımından sonra durum tekrar okunur (kullanıcı izni vermiş olabilir).
+  Future<bool> izinleriHazirla(AramaTipi tip) async {
+    if (await izinlerVerilmisMi(tip)) return true;
+    try {
+      final sonuc = await _izinListesi(tip)
+          .request()
+          .timeout(const Duration(seconds: 30));
+      if (sonuc.values.every((s) => s.isGranted)) return true;
+    } catch (_) {
+      // yut: aşağıda gerçek durumu okuyacağız
+    }
+    return izinlerVerilmisMi(tip);
   }
 
   Future<void> _engineHazirla(AramaTipi tip) async {
@@ -147,7 +191,7 @@ class AramaServisi {
   /// ARAYAN: [chatId]'de [alanUid]'i arar. Kanal döner (ekran için).
   Future<String?> aramaBaslat(
       String chatId, String alanUid, AramaTipi tip) async {
-    if (!await _izinIste(tip)) return null;
+    if (!await izinleriHazirla(tip)) return null;
     final kanal = _kanalUret();
     try {
       await _engineHazirla(tip);
@@ -185,7 +229,7 @@ class AramaServisi {
 
   /// ARANAN: [chatId]'deki aramayı kabul eder (kanalı Firestore'dan okur).
   Future<bool> kabulEt(String chatId, AramaTipi tip) async {
-    if (!await _izinIste(tip)) return false;
+    if (!await izinleriHazirla(tip)) return false;
     try {
       try {
         await FlutterCallkitIncoming.endAllCalls();
@@ -259,7 +303,7 @@ class AramaServisi {
     bekleyenTip = null;
     bekleyenBaslik = null;
     // Sonraki aramanın işlenebilmesi için dedupe bayrağını SIFIRLA.
-    islenenChatId = null;
+    islemeBitti();
   }
 
   // ---- Arama içi kontroller ----
