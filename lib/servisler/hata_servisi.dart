@@ -66,6 +66,39 @@ class HataServisi {
     }
   }
 
+  /// ARKA PLAN İZOLATI raporu (gelen arama / FCM handler).
+  ///
+  /// ⚠️ NEDEN AYRI: FCM arka plan handler'ı AYRI bir isolate'te çalışır; oradaki
+  /// [iz] kayıtları ana uygulamanın belleğinde GÖRÜNMEZ ve uygulama açılınca
+  /// kaybolur (teşhiste kör nokta oluşturuyordu). Bu yüzden gelen arama adımları
+  /// DOĞRUDAN Firestore'a yazılır — arka planda Firestore yazmanın çalıştığı
+  /// `sonCagriPush` alanıyla kanıtlı.
+  Future<void> arkaplanRapor(String baslik, List<String> adimlar) async {
+    try {
+      var uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) {
+        // Arka plan izolatında oturum diskten geç yüklenebilir → kısa bekle.
+        try {
+          final u = await FirebaseAuth.instance
+              .authStateChanges()
+              .firstWhere((u) => u != null)
+              .timeout(const Duration(seconds: 3));
+          uid = u?.uid;
+        } catch (_) {}
+      }
+      if (uid == null) return; // kural gereği uid şart
+      await FirebaseFirestore.instance.collection('hatalar').add({
+        'zaman': FieldValue.serverTimestamp(),
+        'uid': uid,
+        'etiket': 'arkaplan',
+        'surum': GuncellemeServisi.mevcutSurum,
+        'cihaz': Platform.operatingSystemVersion,
+        'hata': baslik,
+        'izler': adimlar,
+      });
+    } catch (_) {}
+  }
+
   /// Kullanıcı "Sorun bildir"e bastığında: hata olmasa da son izleri yolla.
   Future<bool> manuelBildir([String not = 'Kullanıcı raporu']) async {
     try {

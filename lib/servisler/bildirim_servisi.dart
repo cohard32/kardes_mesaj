@@ -43,9 +43,32 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
   HataServisi.instance.iz('PUSH geldi tur=${data['tur']}');
   switch (data['tur']) {
     case 'arama':
+      // ARKA PLAN TEŞHİSİ: bu isolate'in izleri ana uygulamada görünmediği
+      // için adımlar toplanıp doğrudan Firestore'a yazılır.
+      final adimlar = <String>[
+        'push alindi chatId=${data['chatId']} tip=${data['tip']} '
+            'arayan=${data['arayan']} kanal=${data['kanal']}',
+        'aktifAramaVar=$aktifAramaVar',
+      ];
       // Önce zil çalsın (gecikme olmasın)...
-      await gelenAramayiGoster(data);
-      HataServisi.instance.iz('CALLKIT gelen arama gosterildi');
+      try {
+        await gelenAramayiGoster(data);
+        adimlar.add('CallKit showCallkitIncoming TAMAM');
+        HataServisi.instance.iz('CALLKIT gelen arama gosterildi');
+      } catch (e, st) {
+        adimlar.add('CallKit showCallkitIncoming HATA: $e');
+        final satirlar = st.toString().split('\n').take(4).join(' | ');
+        adimlar.add('stack: $satirlar');
+      }
+      // CallKit gerçekten kaydetti mi? (0 ise gelen arama ekranı HİÇ açılmamış)
+      try {
+        final aktif = await FlutterCallkitIncoming.activeCalls();
+        adimlar.add('activeCalls sonrasi=${aktif.length}');
+        if (aktif.isNotEmpty) adimlar.add('activeCall id=${aktif.first.id}');
+      } catch (e) {
+        adimlar.add('activeCalls HATA: $e');
+      }
+      await HataServisi.instance.arkaplanRapor('GELEN ARAMA (arka plan)', adimlar);
       // ...sonra TEŞHİS (fire-and-forget): handler'ın GERÇEKTEN çalıştığını
       // Firestore'a işaretle. "Kapalıyken hiç gelmiyor"un sebebi böyle ayrışır:
       //  - Bu zaman damgası güncellendiyse → FCM ULAŞTI (sorun CallKit/kod).

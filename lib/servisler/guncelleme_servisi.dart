@@ -23,7 +23,7 @@ class GuncellemeServisi {
   // âš ï¸ Ã–NEMLÄ°: Bu sÃ¼rÃ¼m pubspec.yaml'daki "version" ile AYNI olmalÄ±.
   // Her release'te ikisini birlikte yÃ¼kselt. (package_info_plus, Agora ffi
   // Ã§akÄ±ÅŸmasÄ± nedeniyle kaldÄ±rÄ±ldÄ±; sÃ¼rÃ¼m artÄ±k derleme-zamanÄ± sabiti.)
-  static const String mevcutSurum = '1.6.1';
+  static const String mevcutSurum = '1.6.2';
 
   /// Repo bilgisi henÃ¼z ayarlanmadÄ±ysa kontrolÃ¼ atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';
