@@ -4,6 +4,7 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 
 import '../servisler/arama_servisi.dart';
+import '../servisler/hata_servisi.dart';
 import '../tema.dart';
 
 /// Aktif arama ekranı (görüntülü + sesli ortak).
@@ -42,6 +43,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
   void initState() {
     super.initState();
     _hoparlor = _video;
+    HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name}');
     _arama.karsiUid.addListener(_baglantiKontrol);
     _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
       final durum = doc.data()?['durum'];
@@ -81,6 +83,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
   Future<void> _kapat({String? mesaj}) async {
     if (_kapandi) return;
     _kapandi = true;
+    HataServisi.instance.iz('ARAMA EKRANI kapaniyor mesaj=${mesaj ?? "-"}');
     _sayac?.cancel();
     _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);

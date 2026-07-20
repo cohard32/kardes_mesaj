@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'hata_servisi.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -39,10 +40,12 @@ bool aktifAramaVar = false;
 /// uygulama açıkken (onMessage) AYNI yolu kullanır → tek tutarlı akış.
 /// İşlendiyse true döner.
 Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
+  HataServisi.instance.iz('PUSH geldi tur=${data['tur']}');
   switch (data['tur']) {
     case 'arama':
       // Önce zil çalsın (gecikme olmasın)...
       await gelenAramayiGoster(data);
+      HataServisi.instance.iz('CALLKIT gelen arama gosterildi');
       // ...sonra TEŞHİS (fire-and-forget): handler'ın GERÇEKTEN çalıştığını
       // Firestore'a işaretle. "Kapalıyken hiç gelmiyor"un sebebi böyle ayrışır:
       //  - Bu zaman damgası güncellendiyse → FCM ULAŞTI (sorun CallKit/kod).
@@ -53,6 +56,7 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
       // Arayan kapattı/vazgeçti → zil sussun, ekran kapansın.
       try {
         await FlutterCallkitIncoming.endAllCalls();
+        HataServisi.instance.iz('CALLKIT iptal: zil susturuldu');
       } catch (_) {}
       return true;
     default:

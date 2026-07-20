@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'hata_servisi.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -51,6 +52,7 @@ class MesajServisi {
     final uid = _uid;
     if (temiz.isEmpty || uid == null) return;
 
+    HataServisi.instance.iz('MESAJ gonderiliyor chat=$chatId');
     await _mesajlar(chatId).add(
       Mesaj.yeniMesajVerisi(gonderen: uid, metin: temiz),
     );
@@ -63,8 +65,13 @@ class MesajServisi {
       MesajTipi tip) async {
     final uid = _uid;
     if (uid == null) return false;
+    HataServisi.instance.iz('MEDYA yukleniyor tip=${tip.name}');
     final url = await MedyaServisi.instance.yukle(dosya, tip);
-    if (url == null) return false;
+    if (url == null) {
+      HataServisi.instance.iz('MEDYA YUKLENEMEDI (Cloudinary null)');
+      return false;
+    }
+    HataServisi.instance.iz('MEDYA yuklendi');
 
     await _mesajlar(chatId).add(
       Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'hata_servisi.dart';
 
 import '../modeller/kullanici.dart';
 
@@ -79,6 +80,7 @@ class KullaniciServisi {
       throw KullaniciHatasi('@$kAdi alınmış, başka bir ad dene.');
     }
 
+    HataServisi.instance.iz('KAYIT deneniyor @$kAdi');
     // 1) Auth hesabı
     final UserCredential cred;
     try {

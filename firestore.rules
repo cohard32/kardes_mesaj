@@ -137,6 +137,14 @@ service cloud.firestore {
       allow read, write: if girisli() && arkadasMi(chatId);
     }
 
+    // ---- UZAKTAN TEŞHİS (hata/iz raporları) ----
+    // Kullanıcı yalnız KENDİ raporunu OLUŞTURABİLİR. İstemci OKUYAMAZ
+    // (raporlar cihaz/uid bilgisi içerir); okuma yalnız admin SDK ile yapılır.
+    match /hatalar/{id} {
+      allow create: if girisli() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
     // ═══ GEÇİŞ UYUMU (cutover'a kadar; sonra kaldırılacak) ═══
     // Eski tek-sohbet yapısı + FCM token/teşhis dokümanları.
     match /kullanicilar/{uid} {

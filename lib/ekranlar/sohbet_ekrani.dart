@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import '../servisler/hata_servisi.dart';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -124,6 +125,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     BildirimServisi.instance.tokenKaydet();
     _presence.cevrimiciYap();
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
+    HataServisi.instance.iz('SOHBET acildi chat=${widget.chatId}');
     _mesajCtrl.addListener(_yaziyorDinle);
     _scrollCtrl.addListener(_eskiMesajKontrol);
     _odak.addListener(() {
@@ -462,6 +464,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final dizin = await getTemporaryDirectory();
     final yol =
         '${dizin.path}/ses_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    HataServisi.instance.iz('SES KAYIT basladi');
     await _kayitci.start(const RecordConfig(), path: yol);
     _dalgaVN.value = <double>[];
     _kayitSaniyeVN.value = 0;
@@ -513,6 +516,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // Durdur ve gönder
   Future<void> _kayitGonder() async {
+    HataServisi.instance.iz('SES KAYIT gonderiliyor');
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;
@@ -521,6 +525,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // İptal: kaydı sil, gönderme
   Future<void> _kayitIptal() async {
+    HataServisi.instance.iz('SES KAYIT iptal edildi');
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;

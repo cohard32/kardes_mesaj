@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'bildirim_servisi.dart';
+import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
 
 enum AramaTipi { video, ses }
@@ -140,17 +141,25 @@ class AramaServisi {
     ));
     e.registerEventHandler(RtcEngineEventHandler(
       onJoinChannelSuccess: (connection, elapsed) {
+        HataServisi.instance.iz('AGORA kanala girildi (${elapsed}ms)');
         katildi.value = true;
         e.setEnableSpeakerphone(tip == AramaTipi.video).catchError((_) {});
       },
-      onUserJoined: (connection, remoteUid, elapsed) =>
-          karsiUid.value = remoteUid,
-      onUserOffline: (connection, remoteUid, reason) => karsiUid.value = null,
+      onUserJoined: (connection, remoteUid, elapsed) {
+        HataServisi.instance.iz('AGORA KARSI TARAF KATILDI uid=$remoteUid');
+        karsiUid.value = remoteUid;
+      },
+      onUserOffline: (connection, remoteUid, reason) {
+        HataServisi.instance.iz('AGORA karsi taraf ayrildi ($reason)');
+        karsiUid.value = null;
+      },
       onError: (err, msg) {
+        HataServisi.instance.iz('AGORA HATA $err — $msg');
         debugPrint('Agora HATA: $err — $msg');
         sonHata.value = '$err: $msg';
       },
       onConnectionStateChanged: (connection, state, reason) {
+        HataServisi.instance.iz('AGORA baglanti durumu=$state ($reason)');
         if (state == ConnectionStateType.connectionStateFailed) {
           sonHata.value = 'Bağlantı başarısız ($reason)';
         }
@@ -166,7 +175,11 @@ class AramaServisi {
     _engine = e;
   }
 
-  Future<void> _katil(String kanal, String karsiUid_) async {
+  Future<void> _katil(
+    String kanal,
+    String karsiUid_, [
+    AramaTipi tip = AramaTipi.ses,
+  ]) async {
     final token = RtcTokenBuilder.build(
       appId: appId,
       appCertificate: agoraSertifika,
@@ -175,11 +188,21 @@ class AramaServisi {
       role: RtcRole.publisher,
       expireTimestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
     );
+    // ⚠️ Seçenekler AÇIKÇA verilmeli. Boş `ChannelMediaOptions()` ile mikrofon/
+    // kamera yayını ve otomatik abonelik SDK varsayılanlarına bırakılıyordu;
+    // "karşılıklı bağlanıyor ama SES YOK" tablosunun en olası sebebi buydu.
     await _engine?.joinChannel(
       token: token,
       channelId: kanal,
       uid: 0,
-      options: const ChannelMediaOptions(),
+      options: ChannelMediaOptions(
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+        publishMicrophoneTrack: true,
+        publishCameraTrack: tip == AramaTipi.video,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: tip == AramaTipi.video,
+      ),
     );
     _aktifKarsiUid = karsiUid_;
     _aktifKanal = kanal;
@@ -191,11 +214,19 @@ class AramaServisi {
   /// ARAYAN: [chatId]'de [alanUid]'i arar. Kanal döner (ekran için).
   Future<String?> aramaBaslat(
       String chatId, String alanUid, AramaTipi tip) async {
-    if (!await izinleriHazirla(tip)) return null;
+    final iz = HataServisi.instance.iz;
+    iz('ARAMA BASLAT istendi tip=${tip.name} chat=$chatId');
+    if (!await izinleriHazirla(tip)) {
+      iz('ARAMA BASLAT iptal: izin YOK');
+      return null;
+    }
+    iz('izinler tamam');
     final kanal = _kanalUret();
     try {
       await _engineHazirla(tip);
-      await _katil(kanal, alanUid);
+      iz('engine hazir');
+      await _katil(kanal, alanUid, tip);
+      iz('kanala katildi kanal=$kanal');
 
       final me = _uid;
       final ben = me == null
@@ -220,8 +251,11 @@ class AramaServisi {
         'tip': tip.name,
         'kanal': kanal,
       });
+      iz('ARAMA BASLAT tamam, push gonderildi');
       return kanal;
-    } catch (e) {
+    } catch (e, st) {
+      iz('ARAMA BASLAT HATA: $e');
+      HataServisi.instance.bildir(e, st, etiket: 'aramaBaslat');
       await bitir(chatId);
       throw AramaHatasi('Arama başlatılamadı: $e');
     }
@@ -229,20 +263,43 @@ class AramaServisi {
 
   /// ARANAN: [chatId]'deki aramayı kabul eder (kanalı Firestore'dan okur).
   Future<bool> kabulEt(String chatId, AramaTipi tip) async {
-    if (!await izinleriHazirla(tip)) return false;
+    final iz = HataServisi.instance.iz;
+    iz('KABUL istendi tip=${tip.name} chat=$chatId');
+    if (!await izinleriHazirla(tip)) {
+      iz('KABUL iptal: izin YOK');
+      return false;
+    }
+    iz('izinler tamam');
     try {
-      try {
-        await FlutterCallkitIncoming.endAllCalls();
-      } catch (_) {}
       final bilgi = await aktifArama(chatId);
       final kanal = bilgi?['kanal'] as String?;
       final karsi = bilgi?['arayanUid'] as String?;
-      if (kanal == null) return false;
+      if (kanal == null) {
+        iz('KABUL iptal: firestore kanal YOK');
+        return false;
+      }
+      iz('arama dokumani okundu kanal=$kanal');
       await _engineHazirla(tip);
-      await _katil(kanal, karsi ?? '');
+      iz('engine hazir');
+      await _katil(kanal, karsi ?? '', tip);
+      iz('kanala katildi');
+      // ⚠️ Burada endAllCalls() ÇAĞIRMIYORUZ. Kabul anında sisteme "arama
+      // bitti" demek, işletim sisteminin arama oturumunu kapatmasına ve
+      // uygulamanın ARKA PLANA düşmesine yol açıyordu (kullanıcı kabul edince
+      // sohbet listesine dönüyordu). Doğrusu: aramayı BAĞLANDI işaretlemek —
+      // CallKit gelen-arama ekranı kapanır, oturum yaşamaya devam eder.
+      try {
+        await FlutterCallkitIncoming.setCallConnected(chatId);
+        iz('callkit setCallConnected');
+      } catch (e) {
+        iz('setCallConnected hata: $e');
+      }
       await _aramaDoc(chatId).set({'durum': 'kabul'}, SetOptions(merge: true));
+      iz('KABUL tamam');
       return true;
-    } catch (e) {
+    } catch (e, st) {
+      iz('KABUL HATA: $e');
+      HataServisi.instance.bildir(e, st, etiket: 'kabulEt');
       await bitir(chatId);
       throw AramaHatasi('Aramaya katılınamadı: $e');
     }
@@ -267,11 +324,13 @@ class AramaServisi {
 
   /// ARANAN reddeder.
   Future<void> reddet(String chatId) async {
+    HataServisi.instance.iz('REDDET chat=$chatId');
     await _aramaDoc(chatId).set({'durum': 'red'}, SetOptions(merge: true));
   }
 
   /// Aramayı bitirir: karşı tarafın zilini sustur + Firestore + Agora temizle.
   Future<void> bitir(String chatId) async {
+    HataServisi.instance.iz('BITIR chat=$chatId');
     // 1) Karşı tarafın zilini sustur (iptal push).
     try {
       final karsi = _aktifKarsiUid;

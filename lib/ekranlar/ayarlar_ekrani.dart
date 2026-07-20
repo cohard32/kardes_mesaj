@@ -6,6 +6,7 @@ import '../parcalar/guncelleme_akisi.dart';
 import '../servisler/ayar_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/guncelleme_servisi.dart';
+import '../servisler/hata_servisi.dart';
 import '../tema.dart';
 
 /// Ayarlar ekranı: bildirim aç/kapa, titreşim, bildirim sesi
@@ -184,6 +185,34 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
               trailing:
                   const Icon(Icons.chevron_right, color: Renkler.metinSoluk),
               onTap: () => guncellemeAkisi(context, sessiz: false),
+            ),
+          ),
+
+          _Kart(
+            child: ListTile(
+              leading: const Icon(Icons.bug_report_outlined,
+                  color: Renkler.neon),
+              title: Text('Sorun bildir', style: Yazi.isim),
+              subtitle: Text(
+                'Son işlemlerin kaydını geliştiriciye gönderir '
+                '(arama/mesaj sorunlarını çözmek için)',
+                style: Yazi.kucuk,
+              ),
+              trailing:
+                  const Icon(Icons.chevron_right, color: Renkler.metinSoluk),
+              onTap: () async {
+                final ok = await HataServisi.instance.manuelBildir(
+                  'Kullanıcı sorun bildirdi',
+                );
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(ok
+                        ? 'Rapor gönderildi ✓ Teşekkürler!'
+                        : 'Rapor gönderilemedi (bağlantı yok)'),
+                  ),
+                );
+              },
             ),
           ),
         ],

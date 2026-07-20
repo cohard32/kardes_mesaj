@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../servisler/hata_servisi.dart';
 
 import '../main.dart' show bekleyenSohbetiAc;
 import '../parcalar/guncelleme_akisi.dart';
@@ -29,6 +30,7 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    HataServisi.instance.iz('ANA EKRAN acildi');
     BildirimServisi.instance.tokenKaydet();
     PresenceServisi.instance.cevrimiciYap();
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi

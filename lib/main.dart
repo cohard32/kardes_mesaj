@@ -12,6 +12,7 @@ import 'kimlik/auth_gate.dart';
 import 'servisler/arama_servisi.dart';
 import 'servisler/ayar_servisi.dart';
 import 'servisler/bildirim_servisi.dart';
+import 'servisler/hata_servisi.dart';
 import 'servisler/kullanici_servisi.dart';
 import 'tema.dart';
 
@@ -22,6 +23,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Firebase'i baslat (firebase_options.dart flutterfire configure ile uretildi)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Uzaktan teşhis: çökmeleri ve akış izlerini topla (Ayarlar > Sorun bildir)
+  HataServisi.instance.baslat();
+  HataServisi.instance.iz('uygulama açıldı');
   // Kullanici ayarlarini yukle (bildirim/titresim/ses tercihleri)
   await AyarServisi.instance.baslat();
   // Uygulama kapali/arka plandayken gelen mesajlar + cagri icin handler
@@ -55,6 +59,7 @@ void main() async {
 /// CallKit olaylarının id'si = chatId (gelenAramayiGoster böyle ayarlar).
 void _callkitDinle() {
   FlutterCallkitIncoming.onEvent.listen((event) async {
+    HataServisi.instance.iz('CALLKIT olay: ${event?.runtimeType}');
     debugPrint('CallKit olay: ${event?.runtimeType}');
     switch (event) {
       case CallEventActionCallAccept(:final id):
@@ -79,14 +84,23 @@ void _callkitDinle() {
 /// [chatId]'deki gelen aramayı kabul eder: Firestore'dan tip/arayan okur,
 /// Agora'ya katılır, arama ekranını açar.
 Future<void> _aramayiKabulEt(String chatId) async {
+  final iz = HataServisi.instance.iz;
+  iz('KABUL AKISI basladi chat=$chatId');
   try {
     await _authHazirOlsun();
+    iz('auth hazir');
     final bilgi = await AramaServisi.instance.aktifArama(chatId);
     final durum = bilgi?['durum'];
     if (bilgi == null) return;
-    if (durum != 'cagriliyor' && durum != 'kabul') return; // iptal edilmiş
+    if (durum != 'cagriliyor' && durum != 'kabul') {
+      iz('KABUL iptal: durum=$durum');
+      return;
+    }
     final servis = AramaServisi.instance;
-    if (servis.ayniAramaIsleniyor(chatId)) return; // çift işleme koruması
+    if (servis.ayniAramaIsleniyor(chatId)) {
+      iz('KABUL atlandi: ayni arama zaten isleniyor');
+      return;
+    }
     servis.islemeBasla(chatId);
 
     final tip = aramaTipiCoz(bilgi['tip'] as String?);
@@ -102,18 +116,22 @@ Future<void> _aramayiKabulEt(String chatId) async {
     }
     final nav = navigatorKey.currentState;
     if (nav != null) {
+      iz('ARAMA EKRANI aciliyor (navigator hazir)');
       nav.push(
         MaterialPageRoute<void>(
           builder: (_) => AramaEkrani(chatId: chatId, tip: tip, baslik: baslik),
         ),
       );
     } else {
+      iz('navigator YOK -> bekleyen aramaya alindi');
       // Navigator henüz yok → SohbetEkrani/AnaKabuk açılınca açar.
       AramaServisi.instance.bekleyenChatId = chatId;
       AramaServisi.instance.bekleyenTip = tip;
       AramaServisi.instance.bekleyenBaslik = baslik;
     }
   } catch (e) {
+    iz('KABUL AKISI HATA: $e');
+    HataServisi.instance.bildir(e, StackTrace.current, etiket: 'kabulAkisi');
     debugPrint('CallKit kabul hatası: $e');
     AramaServisi.instance.islemeBitti();
     // Hata olduysa arayan tarafın zili sussun.
@@ -128,6 +146,7 @@ Future<void> _aramayiKabulEt(String chatId) async {
 Future<void> _oldurulmuskenKabulEdileniAc() async {
   try {
     final calls = await FlutterCallkitIncoming.activeCalls();
+    HataServisi.instance.iz('soguk baslangic aktif cagri=${calls.length}');
     if (calls.isEmpty) return;
     final chatId = calls.first.id;
     await _aramayiKabulEt(chatId);
