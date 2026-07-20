@@ -195,8 +195,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
       valueListenable: _arama.karsiUid,
       builder: (_, uid, _) {
         final e = _arama.engine;
-        // Karşı taraf henüz katılmadı → bekleme + avatar (görüntülü aramada)
-        if (uid == null || e == null) {
+        final kanal = _arama.aktifKanal;
+        // Karşı taraf henüz katılmadı VEYA kanal/motor hazır değil →
+        // bekleme + avatar. (Boş kanal adıyla AgoraVideoView kurmak Agora'da
+        // hataya/siyah ekrana yol açıyordu.)
+        if (uid == null || e == null || kanal == null || kanal.isEmpty) {
           return Zemin(
             child: Center(child: _avatar(cap: 132)),
           );
@@ -205,7 +208,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
           controller: VideoViewController.remote(
             rtcEngine: e,
             canvas: VideoCanvas(uid: uid),
-            connection: RtcConnection(channelId: _arama.aktifKanal ?? ''),
+            connection: RtcConnection(channelId: kanal),
           ),
         );
       },

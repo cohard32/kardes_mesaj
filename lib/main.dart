@@ -30,9 +30,6 @@ void main() async {
   await BildirimServisi.instance.baslat();
   // CallKit (gelen arama ekranı) olaylarını dinle
   _callkitDinle();
-  // KRİTİK: Uygulama ÖLDÜRÜLMÜŞKEN kabule basılıp açıldıysa, accept olayı
-  // dinleyici kurulmadan önce geldiği için KAYBOLUR. activeCalls() ile kurtar.
-  await _oldurulmuskenKabulEdileniAc();
   // Mesaj bildirimine tıklama → doğru sohbeti aç.
   //  - arka plandayken: onMessageOpenedApp
   //  - öldürülmüşken açılışta: getInitialMessage (navigator hazır olunca açılır)
@@ -42,10 +39,18 @@ void main() async {
   // Sistem çubukları temaya uysun (AppBar'ı olmayan ekranlar dahil)
   SystemChrome.setSystemUIOverlayStyle(AppTema.sistemCubuklari);
   runApp(const KardesMesajApp());
+
+  // KRİTİK: Uygulama ÖLDÜRÜLMÜŞKEN kabule basılıp açıldıysa accept olayı
+  // kaybolabilir → activeCalls() ile kurtar.
+  // ⚠️ runApp'ten SONRA ve await'SİZ: eskiden runApp'ten önce await ediliyordu;
+  // auth beklemesi + izin isteği + Agora bağlanması UI HİÇ AÇILMADAN yapılıyor,
+  // uygulama saniyelerce donuk/kapanmış görünüyordu (izin diyaloğunun da
+  // tutunacağı bir arayüz yoktu).
+  _oldurulmuskenKabulEdileniAc();
 }
 
-/// Aynı aramanın iki kez (onEvent + activeCalls kurtarma) işlenmesini önler.
-String? _islenenChatId;
+// NOT: dedupe bayrağı AramaServisi.islenenChatId'de tutulur (bitir() temizler),
+// böylece aynı kişiden gelen sonraki arama yok sayılmaz.
 
 /// CallKit olaylarının id'si = chatId (gelenAramayiGoster böyle ayarlar).
 void _callkitDinle() {
@@ -80,14 +85,15 @@ Future<void> _aramayiKabulEt(String chatId) async {
     final durum = bilgi?['durum'];
     if (bilgi == null) return;
     if (durum != 'cagriliyor' && durum != 'kabul') return; // iptal edilmiş
-    if (_islenenChatId == chatId) return; // çift işleme koruması
-    _islenenChatId = chatId;
+    final servis = AramaServisi.instance;
+    if (servis.islenenChatId == chatId) return; // çift işleme koruması
+    servis.islenenChatId = chatId;
 
     final tip = aramaTipiCoz(bilgi['tip'] as String?);
     final baslik = (bilgi['arayan'] ?? 'Arama').toString();
-    final ok = await AramaServisi.instance.kabulEt(chatId, tip);
+    final ok = await servis.kabulEt(chatId, tip);
     if (!ok) {
-      _islenenChatId = null;
+      servis.islenenChatId = null;
       return;
     }
     final nav = navigatorKey.currentState;
@@ -105,7 +111,7 @@ Future<void> _aramayiKabulEt(String chatId) async {
     }
   } catch (e) {
     debugPrint('CallKit kabul hatası: $e');
-    _islenenChatId = null;
+    AramaServisi.instance.islenenChatId = null;
   }
 }
 

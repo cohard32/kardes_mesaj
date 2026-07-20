@@ -58,6 +58,12 @@ class AramaServisi {
   AramaTipi? bekleyenTip;
   String? bekleyenBaslik;
 
+  /// Şu an kabul akışı işlenen chatId (CallKit onEvent + activeCalls kurtarma
+  /// aynı aramayı iki kez işlemesin diye). ⚠️ [bitir] içinde MUTLAKA temizlenir;
+  /// aksi halde aynı kişiden gelen SONRAKİ arama "zaten işlendi" sanılıp
+  /// sessizce yok sayılıyordu.
+  String? islenenChatId;
+
   Stream<DocumentSnapshot<Map<String, dynamic>>> aramaDinle(String chatId) =>
       _aramaDoc(chatId).snapshots();
 
@@ -252,6 +258,8 @@ class AramaServisi {
     bekleyenChatId = null;
     bekleyenTip = null;
     bekleyenBaslik = null;
+    // Sonraki aramanın işlenebilmesi için dedupe bayrağını SIFIRLA.
+    islenenChatId = null;
   }
 
   // ---- Arama içi kontroller ----

@@ -50,7 +50,12 @@ service cloud.firestore {
     // Okuma serbest (müsaitlik kontrolü). Oluşturma sadece kendi uid'iyle ve
     // ad daha önce alınmamışsa (transaction bunu garanti eder). Değişmez.
     match /usernames/{ad} {
-      allow read: if girisli();
+      // ⚠️ KAYIT ekranında kullanıcı HENÜZ GİRİŞ YAPMAMIŞ olur ama @ad
+      // müsaitliğini sorması ŞART → tek doküman GET'i girişsiz serbest.
+      // (Doküman yalnız {uid} içerir; users/{uid} okuması yine giriş ister.)
+      // Toplu LİSTELEME anonim yapılamaz (enumeration engeli).
+      allow get: if true;
+      allow list: if girisli();
       allow create: if girisli()
         && request.resource.data.uid == request.auth.uid
         && !exists(/databases/$(database)/documents/usernames/$(ad));

@@ -72,12 +72,22 @@ class _KayitEkraniState extends State<KayitEkrani> {
     });
     // Debounce: yazma durunca sor
     _kadiTimer = Timer(const Duration(milliseconds: 450), () async {
-      final musait = await _servis.kullaniciAdiMusaitMi(ad);
-      if (!mounted || _kadiCtrl.text.trim().toLowerCase() != ad) return;
-      setState(() {
-        _adDurum = musait ? _AdDurum.musait : _AdDurum.dolu;
-        _adNot = musait ? '@$ad müsait' : '@$ad alınmış';
-      });
+      try {
+        final musait = await _servis.kullaniciAdiMusaitMi(ad);
+        if (!mounted || _kadiCtrl.text.trim().toLowerCase() != ad) return;
+        setState(() {
+          _adDurum = musait ? _AdDurum.musait : _AdDurum.dolu;
+          _adNot = musait ? '@$ad müsait' : '@$ad alınmış';
+        });
+      } catch (_) {
+        // Kontrol edilemedi (ağ/izin) → SONSUZ DÖNME OLMASIN.
+        // Kayıt yine denenebilir: benzersizlik transaction ile garanti.
+        if (!mounted || _kadiCtrl.text.trim().toLowerCase() != ad) return;
+        setState(() {
+          _adDurum = _AdDurum.hata;
+          _adNot = 'Kontrol edilemedi — yine de deneyebilirsin';
+        });
+      }
     });
   }
 

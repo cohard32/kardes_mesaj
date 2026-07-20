@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (18 senaryo).
+// Firestore güvenlik kuralları birim testi (25 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 18 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 25 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -13,7 +13,7 @@ import {
 } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'node:fs';
 import {
-  doc, getDoc, setDoc, updateDoc, deleteDoc,
+  doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -90,6 +90,13 @@ const AD = pair('alice','dave');
 log(await ok(assertSucceeds(getDoc(doc(A(), `chats/${AD}`)))), 'T12 arkadas var olmayan chat varlik kontrolu (get) OK');
 log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AD}`), { katilimcilar: ['alice','dave'].sort() }))), 'T13 arkadas sohbet ACABILIR (create)');
 log(await ok(assertFails(setDoc(doc(C(), `chats/${pair('carol','dave')}`), { katilimcilar: ['carol','dave'].sort() }))), 'T14 arkadas olmayan chat olusturamaz');
+
+// ---- KAYIT AKISI: GIRIS YOKKEN @ad musaitlik kontrolu ----
+const anon = env.unauthenticatedContext().firestore();
+log(await ok(assertSucceeds(getDoc(doc(anon, 'usernames/alice')))), 'T15 girissiz @ad musaitlik GET (kayit) OK');
+log(await ok(assertSucceeds(getDoc(doc(anon, 'usernames/bosbirad')))), 'T15b girissiz var-olmayan @ad GET OK');
+log(await ok(assertFails(getDocs(collection(anon, 'usernames')))), 'T16 girissiz toplu username listeleme YASAK');
+log(await ok(assertFails(getDoc(doc(anon, 'users/alice')))), 'T17 girissiz users okunamaz');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();
