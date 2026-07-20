@@ -168,15 +168,23 @@ class BildirimServisi {
   // Android 8+'da bildirim sesi KANALA kilitlidir → her ses için ayrı kanal.
   // ⚠️ Kanalın sesi sonradan DEĞİŞTİRİLEMEZ. Ses çalmıyorsa kilitli eski
   // kanal sebebidir → _kanalVer'i artır (yeni id'ler TAZE oluşur, ses gelir).
-  static const String _kanalVer = 'v2';
-  static const String _kanalVarsayilan = 'kardes_mesaj_kanal';
+  static const String _kanalVer = 'v3';
+  // ⚠️ VARSAYILAN kanal da SÜRÜMLÜ olmalı. Eskiden sabit 'kardes_mesaj_kanal'
+  // idi; v1.x'te oluşturulduğu için Android sesini KALICI KİLİTLEMİŞTİ ve
+  // "Varsayılan" seçiliyken hiç ses gelmiyordu (diğer sesler km_v2_* sürümlü
+  // olduğu için çalışıyordu). Sürümlü id ile kanal TAZE oluşur, ses gelir.
+  static const String _kanalVarsayilan = 'km_${_kanalVer}_varsayilan';
 
   // Eski (kilitli/sessiz kalmış olabilecek) kanallar — açılışta silinir.
   static const List<String> _eskiKanallar = [
+    'kardes_mesaj_kanal', // v1.x varsayılan (sessiz kilitlenmişti)
     'kardes_mesaj_kanal_sessiz',
     'kardes_mesaj_kanal_kedi',
     'kardes_mesaj_kanal_cingirak',
     'kardes_mesaj_kanal_ozel',
+    // v2 kuşağı (varsayılan sorunu nedeniyle v3'e geçildi)
+    'km_v2_sessiz', 'km_v2_kedi', 'km_v2_kedi2', 'km_v2_kedi3',
+    'km_v2_kedi4', 'km_v2_cingirak', 'km_v2_ozel',
   ];
 
   // Kedi sesleri: seçim anahtarı → gösterim adı (raw kaynak adı = anahtarın aynısı)
@@ -303,6 +311,7 @@ class BildirimServisi {
       _kanalVarsayilan, 'Varsayılan',
       description: 'Yeni mesaj bildirimleri',
       importance: Importance.high,
+      playSound: true, // AÇIKÇA: sistem varsayılan bildirim sesi çalsın
     ));
     // Sessiz
     await a.createNotificationChannel(AndroidNotificationChannel(

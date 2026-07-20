@@ -137,6 +137,14 @@ service cloud.firestore {
       allow read, write: if girisli() && arkadasMi(chatId);
     }
 
+    // ---- NATIVE ÇÖKME ADLİ TIBBI ----
+    // Kişi başına TEK doküman; riskli adımdan önce üzerine yazılır.
+    // Native çökmede süreç ölür ama bu kayıt sunucuda kalır → son adım görülür.
+    match /son_adim/{uid} {
+      allow write: if benim(uid);
+      allow read: if false; // yalnız admin SDK okur
+    }
+
     // ---- UZAKTAN TEŞHİS (hata/iz raporları) ----
     // Kullanıcı yalnız KENDİ raporunu OLUŞTURABİLİR. İstemci OKUYAMAZ
     // (raporlar cihaz/uid bilgisi içerir); okuma yalnız admin SDK ile yapılır.

@@ -168,11 +168,28 @@ class AramaServisi {
     await e.enableAudio();
     if (tip == AramaTipi.video) {
       await e.enableVideo();
-      await e.startPreview();
+      // ⚠️ startPreview() BURADA ÇAĞRILMIYOR — kamerayı açar.
+      // Aranan taraf CallKit'ten kabul ettiğinde uygulama HENÜZ ÖN PLANDA
+      // DEĞİL. Android 14+ arka plandan kamera açmayı kısıtlar ve görünür
+      // yüzey yokken kamera başlatmak süreci NATIVE olarak çökertiyordu
+      // ("uygulama durdu" — Dart hatası oluşmadığı için yakalanamıyordu).
+      // Önizleme, arama ekranı görünür olunca [onizlemeBaslat] ile başlar.
     } else {
       await e.disableVideo();
     }
     _engine = e;
+  }
+
+  /// Kamera önizlemesini başlatır. SADECE arama ekranı görünürken çağrılmalı
+  /// (bkz. [_engineHazirla] içindeki açıklama). Hata olursa aramayı düşürmez.
+  Future<void> onizlemeBaslat() async {
+    await HataServisi.instance.sonAdim('EKRAN: kamera onizleme baslatiliyor');
+    try {
+      await _engine?.startPreview();
+      HataServisi.instance.iz('kamera onizleme basladi');
+    } catch (e) {
+      HataServisi.instance.iz('kamera onizleme HATA: $e');
+    }
   }
 
   Future<void> _katil(
@@ -279,10 +296,14 @@ class AramaServisi {
         return false;
       }
       iz('arama dokumani okundu kanal=$kanal');
+      await HataServisi.instance
+          .sonAdim('KABUL: engine hazirlaniyor (tip=${tip.name})');
       await _engineHazirla(tip);
       iz('engine hazir');
+      await HataServisi.instance.sonAdim('KABUL: kanala katiliyor');
       await _katil(kanal, karsi ?? '', tip);
       iz('kanala katildi');
+      await HataServisi.instance.sonAdim('KABUL: kanala katildi, ekran aciliyor');
       // ⚠️ Burada endAllCalls() ÇAĞIRMIYORUZ. Kabul anında sisteme "arama
       // bitti" demek, işletim sisteminin arama oturumunu kapatmasına ve
       // uygulamanın ARKA PLANA düşmesine yol açıyordu (kullanıcı kabul edince

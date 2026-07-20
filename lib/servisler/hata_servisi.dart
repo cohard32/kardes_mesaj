@@ -66,6 +66,26 @@ class HataServisi {
     }
   }
 
+  /// NATIVE ÇÖKME ADLİ TIBBI — her riskli adımdan ÖNCE çağrılır.
+  ///
+  /// ⚠️ Android'in "uygulama durdu" ekranı NATIVE çökmedir; süreç anında ölür,
+  /// `FlutterError.onError`/`PlatformDispatcher.onError` ÇALIŞMAZ, dolayısıyla
+  /// hiçbir hata raporu yazılamaz. Çözüm: adımı ÖNCEDEN sunucuya yaz. Çökme
+  /// olursa `son_adim/{uid}` dokümanında çökmeden önceki SON adım kalır.
+  Future<void> sonAdim(String adim) async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
+      iz('» $adim');
+      await FirebaseFirestore.instance.collection('son_adim').doc(uid).set({
+        'adim': adim,
+        'zaman': FieldValue.serverTimestamp(),
+        'surum': GuncellemeServisi.mevcutSurum,
+        'cihaz': Platform.operatingSystemVersion,
+      }, SetOptions(merge: true));
+    } catch (_) {}
+  }
+
   /// ARKA PLAN İZOLATI raporu (gelen arama / FCM handler).
   ///
   /// ⚠️ NEDEN AYRI: FCM arka plan handler'ı AYRI bir isolate'te çalışır; oradaki

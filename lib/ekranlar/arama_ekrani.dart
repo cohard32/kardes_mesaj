@@ -44,6 +44,13 @@ class _AramaEkraniState extends State<AramaEkrani> {
     super.initState();
     _hoparlor = _video;
     HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name}');
+    // Kamera önizlemesini ANCAK ekran görünür olduktan sonra başlat.
+    // (Kabul anında/arka planda başlatmak native çökmeye yol açıyordu.)
+    if (_video) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _arama.onizlemeBaslat();
+      });
+    }
     _arama.karsiUid.addListener(_baglantiKontrol);
     _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
       final durum = doc.data()?['durum'];
