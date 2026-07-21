@@ -243,15 +243,43 @@ class _AramaEkraniState extends State<AramaEkrani> {
     );
   }
 
+  /// KENDİ görüntün (küçük köşe).
+  ///
+  /// ⚠️ KANALA KATILMADAN OLUŞTURULMAZ. Kanıt zinciri: `son_adim` iki cihazda
+  /// da "EKRAN: arama ekrani HAZIR"da duruyor → çökme ekran kurulduktan SONRA.
+  /// O andan sonra native olarak oluşan tek şey bu YEREL video yüzeyidir.
+  /// `startPreview()` kaldırıldığı için kamera capture'ı `joinChannel`
+  /// (publishCameraTrack) ile başlar; katılım TAMAMLANMADAN yerel yüzey
+  /// kurmak kamerayı hazır olmadan bağlamaya çalışıp süreci çökertebiliyor.
+  /// Bu yüzden `katildi` true olana kadar yer tutucu gösterilir.
   Widget _yerelGorunum() {
-    final e = _arama.engine;
-    if (e == null) return const ColoredBox(color: Renkler.yuzey);
-    return AgoraVideoView(
-      controller: VideoViewController(
-        rtcEngine: e,
-        canvas: const VideoCanvas(uid: 0),
-      ),
+    return ValueListenableBuilder<bool>(
+      valueListenable: _arama.katildi,
+      builder: (_, katildi, _) {
+        final e = _arama.engine;
+        if (e == null || !katildi) {
+          // Henüz hazır değil → native yüzey OLUŞTURMA.
+          return const ColoredBox(color: Renkler.yuzey);
+        }
+        _yerelGorunumIsaretle(); // çökerse son_adim tam burayı gösterir
+        return AgoraVideoView(
+          controller: VideoViewController(
+            rtcEngine: e,
+            canvas: const VideoCanvas(uid: 0),
+          ),
+        );
+      },
     );
+  }
+
+  bool _yerelIsaretlendi = false;
+
+  /// Yerel video yüzeyi ilk kez oluşturulurken TEK KEZ işaret bırakır.
+  /// (build içinden ağ yazımı olmasın diye bayrakla korunur.)
+  void _yerelGorunumIsaretle() {
+    if (_yerelIsaretlendi) return;
+    _yerelIsaretlendi = true;
+    HataServisi.instance.sonAdim('EKRAN: YEREL kamera goruntusu olusturuluyor');
   }
 
   /// İsim + durum rozeti (bağlanıyor / süre) + varsa Agora hatası.

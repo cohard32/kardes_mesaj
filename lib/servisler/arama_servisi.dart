@@ -50,6 +50,15 @@ class AramaServisi {
   String? _aktifKarsiUid;
   String? _aktifKanal;
 
+  // ---- OTOMATİK ARAMA TEŞHİSİ ----
+  // Her arama bitişinde özet rapor gönderilir; kullanıcının "Sorun bildir"e
+  // basmasına gerek kalmasın diye. En kritik soru: KARŞI TARAF KATILDI MI?
+  bool _karsiKatildi = false;
+  bool _yerelKatildi = false;
+  DateTime? _aramaBaslangic;
+  String? _aramaTipi;
+  bool _benArayan = false;
+
   final ValueNotifier<int?> karsiUid = ValueNotifier<int?>(null);
   final ValueNotifier<bool> katildi = ValueNotifier<bool>(false);
   final ValueNotifier<String?> sonHata = ValueNotifier<String?>(null);
@@ -142,11 +151,13 @@ class AramaServisi {
     e.registerEventHandler(RtcEngineEventHandler(
       onJoinChannelSuccess: (connection, elapsed) {
         HataServisi.instance.iz('AGORA kanala girildi (${elapsed}ms)');
+        _yerelKatildi = true;
         katildi.value = true;
         e.setEnableSpeakerphone(tip == AramaTipi.video).catchError((_) {});
       },
       onUserJoined: (connection, remoteUid, elapsed) {
         HataServisi.instance.iz('AGORA KARSI TARAF KATILDI uid=$remoteUid');
+        _karsiKatildi = true;
         karsiUid.value = remoteUid;
       },
       onUserOffline: (connection, remoteUid, reason) {
@@ -244,6 +255,11 @@ class AramaServisi {
       return null;
     }
     iz('izinler tamam');
+    _benArayan = true;
+    _aramaTipi = tip.name;
+    _aramaBaslangic = DateTime.now();
+    _karsiKatildi = false;
+    _yerelKatildi = false;
     final kanal = _kanalUret();
     try {
       await _engineHazirla(tip);
@@ -293,6 +309,11 @@ class AramaServisi {
       return false;
     }
     iz('izinler tamam');
+    _benArayan = false;
+    _aramaTipi = tip.name;
+    _aramaBaslangic = DateTime.now();
+    _karsiKatildi = false;
+    _yerelKatildi = false;
     try {
       final bilgi = await aktifArama(chatId);
       final kanal = bilgi?['kanal'] as String?;
@@ -358,6 +379,7 @@ class AramaServisi {
   /// Aramayı bitirir: karşı tarafın zilini sustur + Firestore + Agora temizle.
   Future<void> bitir(String chatId) async {
     HataServisi.instance.iz('BITIR chat=$chatId');
+    await _aramaOzetiBildir(chatId); // alanlar sıfırlanmadan ÖNCE
     // 1) Karşı tarafın zilini sustur (iptal push).
     try {
       final karsi = _aktifKarsiUid;
@@ -400,6 +422,30 @@ class AramaServisi {
     bekleyenBaslik = null;
     // Sonraki aramanın işlenebilmesi için dedupe bayrağını SIFIRLA.
     islemeBitti();
+  }
+
+  /// Arama bitince OTOMATİK özet raporu (kullanıcı bir şeye basmak zorunda
+  /// kalmasın). En kritik bilgi: karşı taraf Agora kanalına KATILDI MI?
+  /// Katılmadıysa medya hiç kurulmamıştır → "ses yok / bağlanmıyor" budur.
+  Future<void> _aramaOzetiBildir(String chatId) async {
+    if (_aramaBaslangic == null) return; // bu turda arama olmadı
+    final sn = DateTime.now().difference(_aramaBaslangic!).inSeconds;
+    _aramaBaslangic = null;
+    try {
+      await HataServisi.instance.arkaplanRapor(
+        'ARAMA OZETI (otomatik)',
+        <String>[
+          'rol=${_benArayan ? "ARAYAN" : "ARANAN"} tip=$_aramaTipi',
+          'chatId=$chatId kanal=$_aktifKanal',
+          'YEREL kanala katildi = $_yerelKatildi',
+          'KARSI TARAF katildi   = $_karsiKatildi'
+              '${_karsiKatildi ? "" : "  <-- MEDYA KURULMADI"}',
+          'sure=${sn}sn',
+          'agoraSonHata=${sonHata.value ?? "-"}',
+          ...HataServisi.instance.sonIzler(25),
+        ],
+      );
+    } catch (_) {}
   }
 
   // ---- Arama içi kontroller ----

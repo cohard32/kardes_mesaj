@@ -50,6 +50,18 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
             'arayan=${data['arayan']} kanal=${data['kanal']}',
         'aktifAramaVar=$aktifAramaVar',
       ];
+      // ZİL TEŞHİSİ: hangi zil seçili + telefonun zil modu/seviyesi.
+      // "Zil çalmıyor"un cihaz ayarından mı yoksa koddan mı geldiğini ayırır.
+      try {
+        adimlar.add('secili zil=${await AyarServisi.aramaZiliDiskten()}');
+        final z = await BildirimServisi.instance.zilDurumu();
+        adimlar.add('telefon zil modu=${z.mod} zil seviyesi=${z.seviye}'
+            '${z.mod != 'normal' || z.seviye == 0 ? "  <-- ZIL DUYULMAZ" : ""}');
+      } catch (e) {
+        // Arka plan izolatında Activity yoktur → MethodChannel çalışmaz.
+        // Seçili zil yine de okunur (SharedPreferences arka planda çalışır).
+        adimlar.add('zil modu okunamadi (arka plan, Activity yok)');
+      }
       // Önce zil çalsın (gecikme olmasın)...
       try {
         await gelenAramayiGoster(data);

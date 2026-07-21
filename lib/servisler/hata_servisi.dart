@@ -32,6 +32,12 @@ class HataServisi {
     debugPrint('İZ  $mesaj');
   }
 
+  /// Son [adet] izi döndürür (otomatik arama özeti raporuna eklemek için).
+  List<String> sonIzler([int adet = 25]) {
+    if (_izler.length <= adet) return List<String>.from(_izler);
+    return List<String>.from(_izler.sublist(_izler.length - adet));
+  }
+
   /// Global hata yakalayıcıları kur (main içinde çağrılır).
   void baslat() {
     FlutterError.onError = (details) {
