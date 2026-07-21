@@ -114,6 +114,23 @@ Future<void> _cagriPushTeshisYaz(String? kanal) async {
   } catch (_) {}
 }
 
+/// MEŞGULken gelen aramayı arayana bildirir: `aramalar/{chatId}.durum='mesgul'`.
+/// Arayanın [AramaEkrani] dinleyicisi bunu görüp "Meşgul" ile kapanır.
+/// (AramaServisi'ni import ETMİYORUZ — o zaten bildirim_servisi'ni import
+/// ediyor; dairesel bağımlılık olmasın diye Firestore'a doğrudan yazılır.)
+Future<void> _mesgulBildir(String? chatId) async {
+  if (chatId == null || chatId.isEmpty) return;
+  try {
+    await FirebaseFirestore.instance
+        .collection('aramalar')
+        .doc(chatId)
+        .set({'durum': 'mesgul'}, SetOptions(merge: true));
+    HataServisi.instance.iz('MESGUL bildirildi chat=$chatId');
+  } catch (e) {
+    HataServisi.instance.iz('MESGUL bildirilemedi: $e');
+  }
+}
+
 /// GELEN ARAMA — uygulamanın TEK gelen arama ekranı (her durumda bu çalışır:
 /// açık / arka plan / tamamen kapalı). Zil, tam ekran ve kilit ekranı
 /// desteğini işletim sisteminden alır.
@@ -123,6 +140,9 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   final chatId = (data['chatId'] ?? data['kanal'] ?? 'arama').toString();
   final arayan = (data['arayan'] ?? 'Kardeş').toString();
   final video = data['tip'] == 'video';
+  // ARANANIN kendi zil tercihi. ⚠️ Burası ARKA PLAN izolatı olabilir →
+  // AyarServisi.baslat() çalışmamıştır; ayar DİSKTEN taze okunur.
+  final zilYolu = await AyarServisi.aramaZiliDiskten();
   final params = CallKitParams(
     id: chatId,
     nameCaller: arayan,
@@ -144,8 +164,10 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       isShowFullLockedScreen: true,
       isShowCallID: false,
       isImportant: true,
-      // Paketin res/raw içindeki kendi zili (loop'lu çalar).
-      ringtonePath: 'ringtone_default',
+      // KULLANICININ SEÇTİĞİ zil (Ayarlar > Arama Zil Sesi).
+      // Eklenti bunu `res/raw/<ad>` olarak çözer; `system_ringtone_default`
+      // ise telefonun kendi zilini çalar. STREAM_RING'de, döngüde.
+      ringtonePath: zilYolu,
       // TEMA: varsayılan MAVİ (#0955fa) yerine uygulamanın neon-yeşil dili
       backgroundColor: TemaHex.zemin,
       actionColor: TemaHex.neon,
@@ -195,6 +217,20 @@ class BildirimServisi {
     'kedi4': 'Yavru Kedi 4 🐾',
   };
 
+  /// Karşı tarafın Firestore'da YAYINLADIĞI kanal id'sini doğrular.
+  ///
+  /// ⚠️ NEDEN GEREKLİ: Alıcı uygulamayı güncelledikten sonra AÇMADIYSA,
+  /// `bildirimKanali` alanında ESKİ SÜRÜM kanal id'si (`km_v2_*`,
+  /// `kardes_mesaj_kanal`) kalır. O kanallar açılışta SİLİNDİĞİ için push
+  /// var olmayan bir kanala gider → bildirim sessiz kalabilir/görünmeyebilir.
+  /// Geçersizse güvenli varsayılana düşeriz (o kanal her zaman kurulur).
+  String _gecerliKanal(String? kanal) {
+    if (kanal == null || kanal.isEmpty) return _kanalVarsayilan;
+    if (kanal == _kanalVarsayilan) return kanal;
+    // Yalnız GÜNCEL sürüm öneki kabul edilir.
+    return kanal.startsWith('km_${_kanalVer}_') ? kanal : _kanalVarsayilan;
+  }
+
   String _kanalIdFor(String secim) =>
       secim == 'varsayilan' ? _kanalVarsayilan : 'km_${_kanalVer}_$secim';
 
@@ -228,6 +264,28 @@ class BildirimServisi {
     } catch (_) {
       return true; // kontrol edilemiyorsa engelleme
     }
+  }
+
+  /// Telefonun zil durumu. Zil çalmama şikayetinin en yaygın sebebi cihazın
+  /// SESSİZ/TİTREŞİM modu ya da zil sesinin 0 olmasıdır. Kullanıcıyı
+  /// bilgilendirmek için okunur — uygulama cihaz ayarını DEĞİŞTİRMEZ.
+  /// Dönen: (mod: 'normal'|'titresim'|'sessiz', seviye: int)
+  Future<({String mod, int seviye})> zilDurumu() async {
+    try {
+      final r = await _native.invokeMapMethod<String, dynamic>('zilDurumu');
+      return (
+        mod: (r?['mod'] as String?) ?? 'normal',
+        seviye: (r?['seviye'] as int?) ?? 1,
+      );
+    } catch (_) {
+      return (mod: 'normal', seviye: 1); // okunamıyorsa uyarı gösterme
+    }
+  }
+
+  /// Zil duyulmayacak mı? (sessiz/titreşim modu veya zil sesi 0)
+  Future<bool> zilDuyulmazMi() async {
+    final d = await zilDurumu();
+    return d.mod != 'normal' || d.seviye == 0;
   }
 
   /// Tam ekran bildirim izni ayar ekranını açar.
@@ -286,7 +344,13 @@ class BildirimServisi {
   /// de zil çalar, tek tutarlı akış olur.
   Future<void> _gelenMesaj(RemoteMessage message) async {
     // MEŞGUL: zaten bir aramadayken yeni gelen çağrıyı gösterme (üstüne binmesin).
-    if (message.data['tur'] == 'arama' && aktifAramaVar) return;
+    // ⚠️ Eskiden burada SESSİZCE `return` ediliyordu → arayan 45 sn boyunca
+    // boşuna çalıyor, meşgul olduğumuzu asla öğrenmiyordu. Artık arayana
+    // 'mesgul' durumu yazılıyor; onun arama ekranı "Meşgul" deyip kapanır.
+    if (message.data['tur'] == 'arama' && aktifAramaVar) {
+      await _mesgulBildir(message.data['chatId']?.toString());
+      return;
+    }
     if (await aramaMesajiIsle(message.data)) return; // çağrı/iptal ise bitti
     _foregroundGoster(message); // normal mesaj bildirimi
   }
@@ -452,85 +516,13 @@ class BildirimServisi {
     }
   }
 
-  /// Karşı tarafa (iki kişilik: benim dışımdaki kullanıcı) bildirim gönderir.
-  /// FCM HTTP v1 API + service account OAuth2. Hata olursa sessizce geçer
-  /// (mesaj zaten Firestore'a yazıldı, bildirim ikincil).
-  Future<void> karsiTarafaBildirimGonder({
-    required String baslik,
-    required String govde,
-  }) async {
-    await _push(kur: (hedefKanal) => {
-      'notification': {'title': baslik, 'body': govde},
-      'android': {
-        'priority': 'high',
-        'notification': {
-          // Karşı tarafın SEÇTİĞİ kanal → kendi sesini duyar (kapalıyken bile)
-          'channel_id': hedefKanal,
-          // Kilit ekranında içerik gizlenmesin/yarım görünmesin
-          'visibility': 'PUBLIC',
-          // Aynı sohbet tek bildirimde toplansın
-          'tag': 'kardes_mesaj',
-        },
-      },
-    });
-  }
-
-  /// Karşı tarafa GELEN ARAMA push'u (data-only, yüksek öncelikli).
-  /// Uygulama kapalıyken arka plan handler bunu yakalayıp CallKit gösterir.
-  Future<void> karsiTarafaAramaGonder({
-    required String arayan,
-    required String tip,
-    required String kanal,
-  }) async {
-    await _push(kur: (_) => {
-      'data': {
-        'tur': 'arama',
-        'arayan': arayan,
-        'tip': tip,
-        'kanal': kanal,
-      },
-      'android': {
-        // HTTP v1 kanonik değer BÜYÜK harf 'HIGH'. Data-only mesajın
-        // ÖLDÜRÜLMÜŞ uygulamayı uyandırması için priority HIGH ŞART
-        // (küçük harf 'high' düşük önceliğe düşebiliyordu → çağrı hiç gelmiyordu).
-        'priority': 'HIGH',
-        // Çağrı anlıktır; gecikirse anlamsız → kuyrukta bekletme.
-        'ttl': '45s',
-      },
-    });
-  }
-
-  /// ARAMA İPTAL push'u — arayan kapatınca/vazgeçince karşı tarafın ZİLİNİ
-  /// susturur. Firestore dinleyicisi karşı taraf KAPALIYKEN çalışmadığı için
-  /// bu push olmadan CallKit çalmaya devam ediyordu (kritik hata).
-  Future<void> karsiTarafaAramaIptal({required String kanal}) async {
-    await _push(kur: (_) => {
-      'data': {'tur': 'arama_iptal', 'kanal': kanal},
-      'android': {'priority': 'HIGH', 'ttl': '45s'},
-    });
-  }
-
-  /// (2 kişilik — eski akış) Karşı tarafın token'ını + kanalını bulur, yollar.
-  /// FAZ 4'te yerini [hedefeBildirimGonder] / [hedefeVeriGonder] alacak.
-  Future<void> _push({
-    required Map<String, dynamic> Function(String hedefKanal) kur,
-  }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-    final snap = await _kullanicilar.get();
-    String? hedefToken;
-    var hedefKanal = _kanalVarsayilan;
-    for (final doc in snap.docs) {
-      if (doc.id != uid) {
-        final d = doc.data();
-        hedefToken = d['fcmToken'] as String?;
-        hedefKanal = (d['bildirimKanali'] as String?) ?? _kanalVarsayilan;
-        if (hedefToken != null) break;
-      }
-    }
-    if (hedefToken == null) return;
-    await _gonderMesaj(hedefToken, kur(hedefKanal));
-  }
+  // ÖLÜ KOD SİLİNDİ (FAZ 4 öncesi 2 kişilik akış):
+  //   karsiTarafaBildirimGonder / karsiTarafaAramaGonder /
+  //   karsiTarafaAramaIptal / _push
+  // Bunlar "karşı taraf"ı `kullanicilar` koleksiyonundan KENDİSİ OLMAYAN İLK
+  // kullanıcıyı seçerek buluyordu — çok kullanıcılı yapıda YANLIŞ KİŞİYE
+  // arama/iptal göndermeye açıktı. Yerlerini uid-hedefli
+  // [hedefeBildirimGonder] / [hedefeVeriGonder] aldı (0 kullanımdaydılar).
 
   /// FAZ 4: BELİRLİ bir kullanıcıya (uid) mesaj bildirimi gönderir.
   /// [ekstraData] verilirse data payload olarak eklenir (sohbet açma vb.).
@@ -543,7 +535,7 @@ class BildirimServisi {
     final d = (await _users.doc(hedefUid).get()).data();
     final token = d?['fcmToken'] as String?;
     if (token == null) return;
-    final kanal = (d?['bildirimKanali'] as String?) ?? _kanalVarsayilan;
+    final kanal = _gecerliKanal(d?['bildirimKanali'] as String?);
     await _gonderMesaj(token, {
       'notification': {'title': baslik, 'body': govde},
       'data': ?ekstraData,

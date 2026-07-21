@@ -55,6 +55,21 @@ class MainActivity : FlutterActivity() {
                         startActivityForResult(intent, sesSecKodu)
                     }
 
+                    // Telefonun zil durumu: 'normal' | 'titresim' | 'sessiz'
+                    // + zil ses seviyesi 0 mı? Zil çalmıyor şikayetinin en
+                    // yaygın sebebi cihaz ayarıdır; kullanıcıyı bilgilendirmek
+                    // için okunur (uygulama BUNU DEĞİŞTİRMEZ).
+                    "zilDurumu" -> {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                        val mod = when (am.ringerMode) {
+                            android.media.AudioManager.RINGER_MODE_SILENT -> "sessiz"
+                            android.media.AudioManager.RINGER_MODE_VIBRATE -> "titresim"
+                            else -> "normal"
+                        }
+                        val seviye = am.getStreamVolume(android.media.AudioManager.STREAM_RING)
+                        result.success(mapOf("mod" to mod, "seviye" to seviye))
+                    }
+
                     // Android 14+ (API 34) tam ekran bildirim izni verilmiş mi?
                     // Verilmezse gelen arama tam ekran açılmaz, sadece bildirime düşer.
                     "tamEkranIzniVarMi" -> {

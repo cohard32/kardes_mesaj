@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../servisler/arama_servisi.dart';
 import '../servisler/hata_servisi.dart';
+import '../servisler/ringback_servisi.dart';
 import '../tema.dart';
 
 /// Aktif arama ekranı (görüntülü + sesli ortak).
@@ -15,11 +16,16 @@ class AramaEkrani extends StatefulWidget {
   final AramaTipi tip;
   final String baslik; // karşı tarafın adı/e-postası
 
+  /// ARAYAN mıyım? Yalnız arayanda "çalıyor" (ringback) tonu çalar.
+  /// ARANAN tarafta zaten CallKit zili çaldı; burada ton çalmamalı.
+  final bool benArayanim;
+
   const AramaEkrani({
     super.key,
     required this.chatId,
     required this.tip,
     required this.baslik,
+    this.benArayanim = false,
   });
 
   @override
@@ -44,18 +50,26 @@ class _AramaEkraniState extends State<AramaEkrani> {
     super.initState();
     _hoparlor = _video;
     HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name}');
-    // Kamera önizlemesini ANCAK ekran görünür olduktan sonra başlat.
-    // (Kabul anında/arka planda başlatmak native çökmeye yol açıyordu.)
-    if (_video) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _arama.onizlemeBaslat();
-      });
-    }
+    // Ekran çizildikten sonra "hazır" işaretini bırak. Bir daha NATIVE çökme
+    // olursa son_adim'da nerede öldüğü net görünsün (önceki çökme tam da
+    // burada, kamera önizlemesinde oluyordu — artık önizleme çağrılmıyor).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_video) _arama.onizlemeBaslat(); // no-op: yalnız iz bırakır
+      HataServisi.instance.sonAdim('EKRAN: arama ekrani HAZIR (tip=${widget.tip.name})');
+    });
     _arama.karsiUid.addListener(_baglantiKontrol);
+    // ARAYAN "çalıyor" tonu: SADECE arayanda ve karşı taraf henüz katılmadıysa.
+    if (widget.benArayanim && _arama.karsiUid.value == null) {
+      RingbackServisi.instance.baslat();
+    }
     _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
       final durum = doc.data()?['durum'];
       if (durum == 'red') {
         _kapat(mesaj: 'Arama reddedildi');
+      } else if (durum == 'mesgul') {
+        // Karşı taraf başka bir aramada → boşuna çalmaya devam etme.
+        _kapat(mesaj: 'Meşgul');
       } else if (durum == 'bitti') {
         _kapat();
       }
@@ -70,6 +84,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   void _baglantiKontrol() {
     if (_arama.karsiUid.value != null) {
+      // Karşı taraf kanala katıldı → konuşma başlıyor, ton DERHAL sussun.
+      RingbackServisi.instance.durdur();
       _zamanAsimi?.cancel();
       _sayac ??= Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _saniye++);
@@ -83,6 +99,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     _sub?.cancel();
+    RingbackServisi.instance.durdur(); // güvenlik ağı (çift çağrı güvenli)
     if (!_kapandi) _arama.bitir(widget.chatId);
     super.dispose();
   }
@@ -91,6 +108,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (_kapandi) return;
     _kapandi = true;
     HataServisi.instance.iz('ARAMA EKRANI kapaniyor mesaj=${mesaj ?? "-"}');
+    RingbackServisi.instance.durdur();
     _sayac?.cancel();
     _zamanAsimi?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);

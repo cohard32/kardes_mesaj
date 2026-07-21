@@ -174,6 +174,55 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             ),
           ),
 
+          const _BolumBaslik('Arama Zil Sesi'),
+
+          _zilTile(
+            deger: AyarServisi.zilTelefon,
+            baslik: 'Telefon zil sesi 📱',
+            altYazi: 'Telefonunun kendi zil sesi (önerilen)',
+          ),
+          _zilTile(
+            deger: AyarServisi.zilVarsayilan,
+            baslik: 'Uygulama zili 🔔',
+            altYazi: 'ROY MESSANGER varsayılan zili',
+          ),
+          _zilTile(
+            deger: 'kedi',
+            baslik: 'Yavru Kedi 1 🐱',
+            onizlemeAsset: 'sesler/kedi.mp3',
+          ),
+          _zilTile(
+            deger: 'kedi2',
+            baslik: 'Yavru Kedi 2 😻',
+            onizlemeAsset: 'sesler/kedi2.mp3',
+          ),
+          _zilTile(
+            deger: 'kedi3',
+            baslik: 'Yavru Kedi 3 🐈',
+            onizlemeAsset: 'sesler/kedi3.mp3',
+          ),
+          _zilTile(
+            deger: 'kedi4',
+            baslik: 'Yavru Kedi 4 🐾',
+            onizlemeAsset: 'sesler/kedi4.mp3',
+          ),
+          _zilTile(
+            deger: 'cingirak',
+            baslik: 'Çıngırak 🔔',
+            onizlemeAsset: 'sesler/cingirak.wav',
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+            child: Text(
+              'Seçtiğin zil, biri seni aradığında çalar (uygulama kapalıyken '
+              'bile). Telefonun sessiz/titreşim modundaysa Android zili çalmaz — '
+              'bu uygulamanın değil, telefonun ayarıdır. Arama titreşimi '
+              'Android tarafından otomatik yönetilir.',
+              style: Yazi.zaman,
+            ),
+          ),
+
           const _BolumBaslik('Uygulama'),
 
           _Kart(
@@ -218,6 +267,40 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
         ],
         ),
       ),
+    );
+  }
+
+  /// ARAMA ZİLİ satırı (bildirim sesinden ayrı ayar: `AyarServisi.aramaZili`).
+  /// Önizleme, gerçek zilin çalacağı yoldan (CallKit/res-raw) değil assets'ten
+  /// çalar — ses dosyası aynıdır, amaç kullanıcının sesi duymasıdır.
+  Widget _zilTile({
+    required String deger,
+    required String baslik,
+    String? altYazi,
+    String? onizlemeAsset,
+  }) {
+    return ValueListenableBuilder<String>(
+      valueListenable: _ayar.aramaZili,
+      builder: (context, secili, _) {
+        final aktif = secili == deger;
+        return _Kart(
+          secili: aktif,
+          child: ListTile(
+            leading: _SecimIsareti(aktif: aktif),
+            title: Text(baslik, style: Yazi.isim),
+            subtitle: altYazi == null ? null : Text(altYazi, style: Yazi.kucuk),
+            trailing: onizlemeAsset == null
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.play_circle_outline,
+                        color: Renkler.neon),
+                    tooltip: 'Önizle',
+                    onPressed: () => _onizle(onizlemeAsset),
+                  ),
+            onTap: () => _ayar.aramaZiliAyarla(deger),
+          ),
+        );
+      },
     );
   }
 

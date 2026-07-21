@@ -152,6 +152,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     await AramaServisi.instance.izinleriHazirla(AramaTipi.video);
     if (!mounted) return;
     final b = BildirimServisi.instance;
+    // Zil duyulmayacaksa kullanıcıyı bilgilendir (en yaygın "zil çalmıyor"
+    // sebebi cihazın sessiz/titreşim modu ya da zil sesinin 0 olmasıdır).
+    if (await b.zilDuyulmazMi() && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 6),
+          content: Text(
+            'Telefonun sessiz/titreşim modunda — gelen arama zili duyulmaz.',
+          ),
+        ),
+      );
+    }
+    if (!mounted) return;
     await b.pilOptimizasyonuIste();
     if (!mounted) return;
     if (await b.tamEkranIzniVarMi()) return;
@@ -216,6 +229,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             chatId: widget.chatId,
             tip: tip,
             baslik: widget.karsi.ad,
+            benArayanim: true, // "çalıyor" tonu burada çalar
           ),
         ),
       );

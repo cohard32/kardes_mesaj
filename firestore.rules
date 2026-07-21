@@ -15,6 +15,13 @@ service cloud.firestore {
     function arkadasMi(idPair) {
       return exists(/databases/$(database)/documents/friendships/$(idPair));
     }
+    // ⚠️ [arkadasMi] YALNIZCA arkadaşlığın VAR OLDUĞUNA bakar, isteyenin o
+    // çiftin ÜYESİ olduğuna DEĞİL. Tek başına kullanılırsa yabancı biri
+    // başkalarının verisine erişebilir. Üyelik gerektiren yerlerde bunu kullan.
+    function ciftinUyesiyim(idPair) {
+      return girisli() && request.auth.uid in
+        get(/databases/$(database)/documents/friendships/$(idPair)).data.uidler;
+    }
     // Bir çiftteki KARŞI uid (ben olmayan). uidler = [a, b].
     function digerUid(uidler) {
       return uidler[0] == request.auth.uid ? uidler[1] : uidler[0];
@@ -133,8 +140,13 @@ service cloud.firestore {
 
     // ---- ARAMA SİNYALLEŞMESİ ----
     // aramalar/{chatId} — sadece o çiftin arkadaşları.
+    // ⚠️ GÜVENLİK: Eskiden `arkadasMi(chatId)` idi — o yalnız arkadaşlığın VAR
+    // olduğuna bakıyordu, isteyenin ÜYE olduğuna değil. Sonuç: giriş yapmış
+    // HERHANGİ biri başkalarının arama dokümanını okuyup Agora KANAL ADINI
+    // alabiliyor (→ aramaya katılıp dinleyebilir) veya durum='bitti' yazıp
+    // aramalarını düşürebiliyordu. Artık sadece o çiftin ÜYELERİ erişebilir.
     match /aramalar/{chatId} {
-      allow read, write: if girisli() && arkadasMi(chatId);
+      allow read, write: if ciftinUyesiyim(chatId);
     }
 
     // ---- NATIVE ÇÖKME ADLİ TIBBI ----

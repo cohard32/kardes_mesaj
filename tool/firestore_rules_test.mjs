@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (25 senaryo).
+// Firestore güvenlik kuralları birim testi (31 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 25 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 31 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -46,6 +46,10 @@ async function seed() {
     await setDoc(doc(db, `chats/${pair('alice','bob')}/messages/m1`), { gonderen: 'alice', metin: 'selam', goruldu: false });
     // bob -> carol bekleyen istek (kabul testi)
     await setDoc(doc(db, 'friend_requests/bob_carol'), { gonderenUid: 'bob', alanUid: 'carol', durum: 'bekliyor' });
+    // ARAMA dokumani: alice-bob cifti arasinda aktif cagri (KANAL ADI hassas!)
+    await setDoc(doc(db, `aramalar/${pair('alice','bob')}`), {
+      arayanUid:'alice', arayan:'Alice', tip:'video',
+      kanal:'k_GIZLI_KANAL', durum:'cagriliyor' });
   });
 }
 await seed();
@@ -97,6 +101,25 @@ log(await ok(assertSucceeds(getDoc(doc(anon, 'usernames/alice')))), 'T15 girissi
 log(await ok(assertSucceeds(getDoc(doc(anon, 'usernames/bosbirad')))), 'T15b girissiz var-olmayan @ad GET OK');
 log(await ok(assertFails(getDocs(collection(anon, 'usernames')))), 'T16 girissiz toplu username listeleme YASAK');
 log(await ok(assertFails(getDoc(doc(anon, 'users/alice')))), 'T17 girissiz users okunamaz');
+
+// ---- ARAMA GUVENLIGI (K1: yabanci baskalarinin aramasina erisemez) ----
+// NOT: T11 alice-bob arkadasligini SILMISTI; arama testleri anlamli olsun diye
+// (yabanci ENGELLENMELI ama UYELER calismali) arkadasligi geri kur.
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), `friendships/${AB}`), { uidler: ['alice','bob'] });
+});
+log(await ok(assertFails(getDoc(doc(C(), `aramalar/${AB}`)))),
+  'T18 yabanci BASKALARININ arama dokumanini OKUYAMAZ (kanal adi sizmaz)');
+log(await ok(assertFails(setDoc(doc(C(), `aramalar/${AB}`), { durum:'bitti' }))),
+  'T19 yabanci baskalarinin aramasini DUSUREMEZ');
+log(await ok(assertSucceeds(getDoc(doc(A(), `aramalar/${AB}`)))),
+  'T20 arayan kendi aramasini okuyabilir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(B(), `aramalar/${AB}`), { durum:'kabul' }))),
+  'T21 aranan KABUL yazabilir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(B(), `aramalar/${AB}`), { durum:'mesgul' }))),
+  'T22 aranan MESGUL yazabilir (yeni ozellik, pozitif)');
+log(await ok(assertSucceeds(getDoc(doc(A(), `aramalar/${pair('alice','dave')}`)))),
+  'T23 uye var-olmayan arama dokumanini okuyabilir (varlik kontrolu)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

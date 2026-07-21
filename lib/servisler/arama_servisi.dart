@@ -180,16 +180,22 @@ class AramaServisi {
     _engine = e;
   }
 
-  /// Kamera önizlemesini başlatır. SADECE arama ekranı görünürken çağrılmalı
-  /// (bkz. [_engineHazirla] içindeki açıklama). Hata olursa aramayı düşürmez.
+  /// ⚠️ `startPreview()` ARTIK HİÇ ÇAĞRILMIYOR — KASITLI.
+  ///
+  /// KANIT (v1.6.3, son_adim adli tıbbı, İKİ cihazda da birebir aynı):
+  ///   SON ADIM: "EKRAN: kamera onizleme baslatiliyor"
+  /// Bu işaret `startPreview()`'den hemen ÖNCE yazılıyor → süreç tam orada
+  /// ölüyor. try/catch yakalamıyor çünkü NATIVE çökme (Dart hatası değil).
+  ///
+  /// SEBEP: `joinChannel(publishCameraTrack: true)` ile kanala katılınca kamera
+  /// ZATEN yayına başlıyor. Üstüne `startPreview()` çağırmak kamerayı İKİNCİ
+  /// kez açmaya çalışıyor ve native katmanda çökertiyor. (v1.6.3'te önizleme
+  /// katılımdan SONRAYA alınınca çökme arayan tarafta da başlamıştı.)
+  ///
+  /// Yerel görüntü, kamera track'i yayınlandığı için `AgoraVideoView`
+  /// (uid: 0) tarafından zaten çiziliyor — önizlemeye ihtiyaç yok.
   Future<void> onizlemeBaslat() async {
-    await HataServisi.instance.sonAdim('EKRAN: kamera onizleme baslatiliyor');
-    try {
-      await _engine?.startPreview();
-      HataServisi.instance.iz('kamera onizleme basladi');
-    } catch (e) {
-      HataServisi.instance.iz('kamera onizleme HATA: $e');
-    }
+    HataServisi.instance.iz('onizleme atlandi (kamera join ile zaten aktif)');
   }
 
   Future<void> _katil(
@@ -369,10 +375,20 @@ class AramaServisi {
     try {
       await FlutterCallkitIncoming.endAllCalls();
     } catch (_) {}
+    // ⚠️ AYRI try blokları: eskiden ikisi AYNI try'daydı; `leaveChannel` hata
+    // verirse `release()` HİÇ çağrılmıyordu → motor sızıyor, KAMERA ve
+    // MİKROFON açık kalabiliyordu (pil + gizlilik sorunu).
+    // `release()` her hâlükârda çalışmalı.
     try {
       await _engine?.leaveChannel();
+    } catch (e) {
+      HataServisi.instance.iz('leaveChannel hata: $e');
+    }
+    try {
       await _engine?.release();
-    } catch (_) {}
+    } catch (e) {
+      HataServisi.instance.iz('release hata: $e');
+    }
     _engine = null;
     _aktifKarsiUid = null;
     _aktifKanal = null;
