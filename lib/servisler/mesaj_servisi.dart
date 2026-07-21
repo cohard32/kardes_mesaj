@@ -106,6 +106,61 @@ class MesajServisi {
     } catch (_) {}
   }
 
+  /// Mesajın geri alınabileceği süre. Sunucu kuralında da AYNI değer var
+  /// (firestore.rules → messages allow delete). İkisi birlikte değişmeli.
+  static const Duration silmeSuresi = Duration(seconds: 60);
+
+  /// Bu mesaj ŞU AN silinebilir mi? (kendi mesajım + ilk 60 saniye)
+  /// Yalnızca ARAYÜZ içindir; asıl kısıt sunucu kuralındadır.
+  bool silinebilirMi(Mesaj m) {
+    if (m.gonderen != _uid) return false;
+    final t = m.zaman;
+    if (t == null) return true; // henüz sunucu damgası yok = az önce gönderildi
+    return DateTime.now().difference(t) < silmeSuresi;
+  }
+
+  /// Mesajı siler (yalnız kendi mesajın, ilk 60 sn). Silinen son mesajsa
+  /// sohbet önizlemesi de tazelenir — yoksa listede SİLİNMİŞ metin görünürdü.
+  Future<void> mesajSil(String chatId, String mesajId) async {
+    HataServisi.instance.iz('MESAJ siliniyor chat=$chatId');
+    await _mesajlar(chatId).doc(mesajId).delete();
+    await _sonMesajTazele(chatId);
+  }
+
+  /// Silmeden sonra sohbet meta'sını kalan SON mesaja göre günceller.
+  Future<void> _sonMesajTazele(String chatId) async {
+    try {
+      final son = await _mesajlar(chatId)
+          .orderBy('zaman', descending: true)
+          .limit(1)
+          .get();
+      if (son.docs.isEmpty) {
+        await _chat(chatId).set({
+          'sonMesaj': '',
+          'sonMesajGonderen': null,
+        }, SetOptions(merge: true));
+        return;
+      }
+      final m = Mesaj.firestoreDan(son.docs.first);
+      final onizleme = switch (m.tip) {
+        MesajTipi.resim => '📷 Fotoğraf',
+        MesajTipi.video => '🎥 Video',
+        MesajTipi.ses => '🎤 Sesli mesaj',
+        MesajTipi.gif => '🎞️ GIF',
+        MesajTipi.metin => m.metin,
+      };
+      await _chat(chatId).set({
+        'sonMesaj': onizleme,
+        'sonMesajZamani': m.zaman == null
+            ? FieldValue.serverTimestamp()
+            : Timestamp.fromDate(m.zaman!),
+        'sonMesajGonderen': m.gonderen,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      HataServisi.instance.iz('son mesaj tazelenemedi: $e');
+    }
+  }
+
   /// Bir mesaja emoji tepkisi ekler/kaldırır (toggle).
   Future<void> tepkiDegistir(
       String chatId, String mesajId, String emoji) async {

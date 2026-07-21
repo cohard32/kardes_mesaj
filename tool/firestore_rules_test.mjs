@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (31 senaryo).
+// Firestore güvenlik kuralları birim testi (34 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 31 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 34 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -14,6 +14,7 @@ import {
 import { readFileSync } from 'node:fs';
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
+  Timestamp as TS,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -120,6 +121,22 @@ log(await ok(assertSucceeds(setDoc(doc(B(), `aramalar/${AB}`), { durum:'mesgul' 
   'T22 aranan MESGUL yazabilir (yeni ozellik, pozitif)');
 log(await ok(assertSucceeds(getDoc(doc(A(), `aramalar/${pair('alice','dave')}`)))),
   'T23 uye var-olmayan arama dokumanini okuyabilir (varlik kontrolu)');
+
+// ---- MESAJ SILME: yalniz KENDI mesajin ve yalniz ILK 60 SANIYE ----
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  const simdi = TS.now();
+  const eskiT = TS.fromMillis(Date.now() - 5 * 60 * 1000);
+  await setDoc(doc(db, `chats/${AB}/messages/s_yeni`), { gonderen:'alice', metin:'yeni', zaman:simdi });
+  await setDoc(doc(db, `chats/${AB}/messages/s_eski`), { gonderen:'alice', metin:'eski', zaman:eskiT });
+  await setDoc(doc(db, `chats/${AB}/messages/s_bob`),  { gonderen:'bob',   metin:'bob',  zaman:simdi });
+});
+log(await ok(assertFails(deleteDoc(doc(A(), `chats/${AB}/messages/s_bob`)))),
+  'S1 BASKASININ mesaji silinemez');
+log(await ok(assertFails(deleteDoc(doc(A(), `chats/${AB}/messages/s_eski`)))),
+  'S2 1 DAKIKA dolmus mesaj silinemez');
+log(await ok(assertSucceeds(deleteDoc(doc(A(), `chats/${AB}/messages/s_yeni`)))),
+  'S3 kendi mesajini ILK 1 DK icinde silebilir (pozitif)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

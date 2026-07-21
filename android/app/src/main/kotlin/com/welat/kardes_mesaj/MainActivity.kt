@@ -55,6 +55,74 @@ class MainActivity : FlutterActivity() {
                         startActivityForResult(intent, sesSecKodu)
                     }
 
+                    // Medyayı (foto/video) TELEFON GALERİSİNE kaydeder.
+                    // MediaStore kullanılır → Android 10+ (API 29) izin GEREKMEZ.
+                    // Dosya Dart tarafında geçici dizine İNDİRİLİP yolu verilir;
+                    // burada sadece kopyalanır (büyük videolarda RAM şişmesin).
+                    "galeriyeKaydet" -> {
+                        try {
+                            val yol = call.argument<String>("yol")
+                            val ad = call.argument<String>("ad") ?: "roy_medya"
+                            val mime = call.argument<String>("mime")
+                                ?: "application/octet-stream"
+                            val kaynak = if (yol != null) java.io.File(yol) else null
+                            if (kaynak == null || !kaynak.exists()) {
+                                result.success(false)
+                                return@setMethodCallHandler
+                            }
+                            val video = mime.startsWith("video")
+                            val klasor = if (video)
+                                android.os.Environment.DIRECTORY_MOVIES
+                            else android.os.Environment.DIRECTORY_PICTURES
+
+                            if (Build.VERSION.SDK_INT >= 29) {
+                                val koleksiyon = if (video)
+                                    android.provider.MediaStore.Video.Media
+                                        .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                                else android.provider.MediaStore.Images.Media
+                                    .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                                val degerler = android.content.ContentValues().apply {
+                                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, ad)
+                                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                                    put(
+                                        android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                                        "$klasor/ROY MESSANGER"
+                                    )
+                                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                                }
+                                val uri = contentResolver.insert(koleksiyon, degerler)
+                                if (uri == null) { result.success(false); return@setMethodCallHandler }
+                                contentResolver.openOutputStream(uri).use { cikis ->
+                                    if (cikis == null) { result.success(false); return@setMethodCallHandler }
+                                    kaynak.inputStream().use { it.copyTo(cikis) }
+                                }
+                                degerler.clear()
+                                degerler.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                                contentResolver.update(uri, degerler, null, null)
+                                result.success(true)
+                            } else {
+                                // Android 9 ve altı: klasöre yaz + galeriye tarat
+                                // (WRITE_EXTERNAL_STORAGE manifestte maxSdk=28).
+                                val dizin = java.io.File(
+                                    android.os.Environment
+                                        .getExternalStoragePublicDirectory(klasor),
+                                    "ROY MESSANGER"
+                                )
+                                if (!dizin.exists()) dizin.mkdirs()
+                                val hedef = java.io.File(dizin, ad)
+                                kaynak.inputStream().use { g ->
+                                    hedef.outputStream().use { c -> g.copyTo(c) }
+                                }
+                                android.media.MediaScannerConnection.scanFile(
+                                    this, arrayOf(hedef.absolutePath), arrayOf(mime), null
+                                )
+                                result.success(true)
+                            }
+                        } catch (e: Exception) {
+                            result.error("KAYDEDILEMEDI", e.message, null)
+                        }
+                    }
+
                     // Telefonun zil durumu: 'normal' | 'titresim' | 'sessiz'
                     // + zil ses seviyesi 0 mı? Zil çalmıyor şikayetinin en
                     // yaygın sebebi cihaz ayarıdır; kullanıcıyı bilgilendirmek

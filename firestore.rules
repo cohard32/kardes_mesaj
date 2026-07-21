@@ -134,7 +134,14 @@ service cloud.firestore {
         allow update: if chatKatilimcisi(chatId)
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['goruldu', 'tepki', 'sesDinlendi']);
-        allow delete: if false;
+        // SİLME: yalnızca KENDİ mesajını ve yalnızca ilk 60 SANİYE içinde.
+        // ⚠️ Süre SUNUCUDA doğrulanır — istemcideki gizleme yeterli değildir
+        // (uygulama değiştirilip eski mesaj silinmeye çalışılabilir).
+        // `request.time` sunucu zamanı, `zaman` mesajın serverTimestamp'ı.
+        allow delete: if chatKatilimcisi(chatId)
+          && resource.data.gonderen == request.auth.uid
+          && resource.data.zaman is timestamp
+          && request.time < resource.data.zaman + duration.value(60, 's');
       }
     }
 

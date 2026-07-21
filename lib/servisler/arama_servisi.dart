@@ -136,6 +136,14 @@ class AramaServisi {
   Future<void> _engineHazirla(AramaTipi tip) async {
     sonHata.value = null;
     if (_engine != null) {
+      // ⚠️ ÖNCE leaveChannel, SONRA release. Eskiden yalnız release() vardı;
+      // art arda arama yapılınca eski motor kanaldan ÇIKMADAN yenisi katılmaya
+      // çalışıyor ve Agora -17 (ERR_JOIN_CHANNEL_REJECTED / "zaten kanaldasın")
+      // fırlatıyordu → kabul başarısız, karşı taraf hiç bağlanmıyordu.
+      // (Kanıt: v1.6.6 raporları, [kabulEt] AgoraRtcException(-17) → _katil.)
+      try {
+        await _engine?.leaveChannel();
+      } catch (_) {}
       try {
         await _engine?.release();
       } catch (_) {}
@@ -206,7 +214,29 @@ class AramaServisi {
   /// Yerel görüntü, kamera track'i yayınlandığı için `AgoraVideoView`
   /// (uid: 0) tarafından zaten çiziliyor — önizlemeye ihtiyaç yok.
   Future<void> onizlemeBaslat() async {
-    HataServisi.instance.iz('onizleme atlandi (kamera join ile zaten aktif)');
+    HataServisi.instance.iz('onizleme atlandi (kamera yayina ayri alinir)');
+  }
+
+  /// KAMERAYI YAYINA ALIR — yalnızca arama ekranı GÖRÜNÜR olduktan sonra
+  /// çağrılmalı (AramaEkrani postFrame).
+  ///
+  /// Kanala katılırken `publishCameraTrack: false` ile giriyoruz; böylece
+  /// ses bağlantısı kamera açılmasını BEKLEMEDEN kuruluyor. Uygulama ön plana
+  /// geldikten sonra kamera burada yayına alınır — arka planda kamera açma
+  /// yasağına takılmaz. Hata olursa arama DÜŞMEZ (sesli devam eder).
+  Future<void> kamerayiYayinaAl() async {
+    if (_aramaTipi != 'video') return;
+    if (_engine == null) return;
+    await HataServisi.instance.sonAdim('EKRAN: kamera yayina aliniyor');
+    try {
+      await _engine?.updateChannelMediaOptions(const ChannelMediaOptions(
+        publishCameraTrack: true,
+        autoSubscribeVideo: true,
+      ));
+      HataServisi.instance.iz('kamera YAYINA ALINDI');
+    } catch (e) {
+      HataServisi.instance.iz('kamera yayina alinamadi: $e');
+    }
   }
 
   Future<void> _katil(
@@ -225,19 +255,40 @@ class AramaServisi {
     // ⚠️ Seçenekler AÇIKÇA verilmeli. Boş `ChannelMediaOptions()` ile mikrofon/
     // kamera yayını ve otomatik abonelik SDK varsayılanlarına bırakılıyordu;
     // "karşılıklı bağlanıyor ama SES YOK" tablosunun en olası sebebi buydu.
-    await _engine?.joinChannel(
-      token: token,
-      channelId: kanal,
-      uid: 0,
-      options: ChannelMediaOptions(
+    await HataServisi.instance.sonAdim('KATIL: joinChannel cagriliyor');
+    final secenekler = ChannelMediaOptions(
         channelProfile: ChannelProfileType.channelProfileCommunication,
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         publishMicrophoneTrack: true,
-        publishCameraTrack: tip == AramaTipi.video,
+        // ⚠️ KAMERA BURADA YAYINA ALINMAZ (video'da bile false).
+        // KANIT (v1.6.6 izleri): görüntülü kabulde akış tam burada ölüyordu:
+        //   "KABUL: kanala katiliyor"  → devamı YOK
+        // Sesli kabulde ise "kanala katildi" geliyordu. Fark: video'da
+        // publishCameraTrack=true → joinChannel KAMERAYI AÇIYOR. Aranan kişi
+        // CallKit'ten kabul ettiğinde uygulama HENÜZ ÖN PLANDA DEĞİL; Android
+        // arka plandan kamera açmayı engeller → süreç ölüyor/asılıyor.
+        // (startPreview çökmesiyle AYNI aile.)
+        // Kamera, ekran görünür olunca [kamerayiYayinaAl] ile açılır.
+        publishCameraTrack: false,
         autoSubscribeAudio: true,
+        // Abone olmak kamerayı AÇMAZ → güvenli, baştan açık kalabilir.
         autoSubscribeVideo: tip == AramaTipi.video,
-      ),
     );
+    try {
+      await _engine?.joinChannel(
+          token: token, channelId: kanal, uid: 0, options: secenekler);
+    } on AgoraRtcException catch (e) {
+      // -17 = ERR_JOIN_CHANNEL_REJECTED ("zaten bir kanaldasın").
+      // Eski aramadan kalmış olabilir → kanaldan çık ve BİR KEZ daha dene.
+      if (e.code != -17) rethrow;
+      HataServisi.instance.iz('joinChannel -17 → leaveChannel + tekrar dene');
+      try {
+        await _engine?.leaveChannel();
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await _engine?.joinChannel(
+          token: token, channelId: kanal, uid: 0, options: secenekler);
+    }
     _aktifKarsiUid = karsiUid_;
     _aktifKanal = kanal;
     aktifAramaVar = true;

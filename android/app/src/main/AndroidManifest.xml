@@ -7,6 +7,10 @@
     <!-- Medya: sesli mesaj kaydi + kamera (foto/video) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Medyayı galeriye kaydetme (Android 9 ve altı). Android 10+ (API 29)
+         MediaStore kullanır ve bu izne GEREK DUYMAZ → maxSdkVersion=28. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <!-- Goruntulu/sesli arama: Agora medya + CallKit tam ekran gelen arama -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>

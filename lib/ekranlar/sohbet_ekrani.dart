@@ -17,6 +17,7 @@ import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
@@ -439,10 +440,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 
   Future<void> _fotoSec() async {
-    final x = await _resimSecici.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 70,
-    );
+    // ⚠️ imageQuality VERİLMEZ → fotoğraf ORİJİNAL/SAF haliyle gider.
+    // Eskiden `imageQuality: 70` vardı; image_picker fotoğrafı %70 kalitede
+    // YENİDEN KODLUYORDU (görünür kalite kaybı). maxWidth/maxHeight de
+    // verilmez, yoksa yeniden boyutlandırılır.
+    final x = await _resimSecici.pickImage(source: ImageSource.gallery);
     if (x != null) await _medyaGonder(File(x.path), MesajTipi.resim);
   }
 
@@ -707,35 +709,122 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
   }
 
+  /// Mesaja uzun basınca açılan menü: tepkiler + (medyada) İndir +
+  /// (kendi mesajın, ilk 1 dk) Sil.
   void _tepkiSec(Mesaj mesaj) {
     const emojiler = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+    final medyaMi = mesaj.tip != MesajTipi.metin && mesaj.medyaUrl != null;
+    // Sesli mesaj galeriye kaydedilmez (galeri foto/video içindir).
+    final indirilebilir = medyaMi && mesaj.tip != MesajTipi.ses;
+    final silinebilir = _servis.silinebilirMi(mesaj);
+
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Renkler.yuzey,
       shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
       builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              for (final e in emojiler)
-                InkWell(
-                  borderRadius: BorderRadius.circular(30),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _servis.tepkiDegistir(widget.chatId, mesaj.id, e);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(e, style: const TextStyle(fontSize: 30)),
-                  ),
-                ),
-            ],
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final e in emojiler)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(30),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _servis.tepkiDegistir(widget.chatId, mesaj.id, e);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(e, style: const TextStyle(fontSize: 30)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (indirilebilir || silinebilir) const Divider(height: 1),
+            if (indirilebilir)
+              ListTile(
+                leading: const Icon(Icons.download_rounded, color: Renkler.neon),
+                title: Text('Galeriye indir', style: Yazi.isim),
+                subtitle: Text('Orijinal kalitede kaydedilir', style: Yazi.kucuk),
+                onTap: () {
+                  Navigator.pop(context);
+                  _medyaIndir(mesaj);
+                },
+              ),
+            if (silinebilir)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Renkler.tehlike),
+                title: Text('Mesajı sil',
+                    style: Yazi.stil(16, FontWeight.w700, Renkler.tehlike)),
+                subtitle:
+                    Text('Yalnızca ilk 1 dakika içinde', style: Yazi.kucuk),
+                onTap: () {
+                  Navigator.pop(context);
+                  _mesajSil(mesaj);
+                },
+              ),
+          ],
         ),
       ),
     );
+  }
+
+  /// Medyayı galeriye indirir (ilerleme + sonuç bildirimi).
+  Future<void> _medyaIndir(Mesaj mesaj) async {
+    final url = mesaj.medyaUrl;
+    if (url == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('İndiriliyor…'), duration: Duration(seconds: 2)),
+    );
+    final ok = await MedyaIndirServisi.instance.galeriyeIndir(url, mesaj.tip);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Galeriye kaydedildi ✓' : 'İndirilemedi'),
+      ),
+    );
+  }
+
+  /// Mesajı siler (onay ister). Süre dolduysa sunucu da reddeder.
+  Future<void> _mesajSil(Mesaj mesaj) async {
+    final onay = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('Mesajı sil'),
+        content: const Text(
+          'Bu mesaj her iki taraftan da kalıcı olarak silinecek. '
+          'Mesajlar yalnızca gönderildikten sonraki 1 dakika içinde silinebilir.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d, false),
+            child: const Text('Vazgeç'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Sil', style: TextStyle(color: Renkler.tehlike)),
+          ),
+        ],
+      ),
+    );
+    if (onay != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _servis.mesajSil(widget.chatId, mesaj.id);
+      messenger.showSnackBar(const SnackBar(content: Text('Mesaj silindi')));
+    } catch (_) {
+      // Sunucu reddetti (büyük olasılıkla 1 dakika doldu).
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Silinemedi — 1 dakikalık süre dolmuş.')),
+      );
+    }
   }
 }
 

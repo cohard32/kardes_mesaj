@@ -50,19 +50,11 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
             'arayan=${data['arayan']} kanal=${data['kanal']}',
         'aktifAramaVar=$aktifAramaVar',
       ];
-      // ZİL TEŞHİSİ: hangi zil seçili + telefonun zil modu/seviyesi.
-      // "Zil çalmıyor"un cihaz ayarından mı yoksa koddan mı geldiğini ayırır.
-      try {
-        adimlar.add('secili zil=${await AyarServisi.aramaZiliDiskten()}');
-        final z = await BildirimServisi.instance.zilDurumu();
-        adimlar.add('telefon zil modu=${z.mod} zil seviyesi=${z.seviye}'
-            '${z.mod != 'normal' || z.seviye == 0 ? "  <-- ZIL DUYULMAZ" : ""}');
-      } catch (e) {
-        // Arka plan izolatında Activity yoktur → MethodChannel çalışmaz.
-        // Seçili zil yine de okunur (SharedPreferences arka planda çalışır).
-        adimlar.add('zil modu okunamadi (arka plan, Activity yok)');
-      }
-      // Önce zil çalsın (gecikme olmasın)...
+      // ⚠️ SIRALAMA KRİTİK: Gelen aramayı GÖSTERMEDEN ÖNCE hiçbir async iş
+      // yapılmaz. FCM en iyi uygulaması: yüksek öncelikli çağrı mesajı
+      // handler'a düşer düşmez bildirim/çağrı HEMEN gösterilmeli; öncesinde
+      // ağ/kanal çağrısı yapılırsa zil gecikir ve sistem işlemi kesebilir.
+      // Bu yüzden TÜM teşhis okumaları gösterimden SONRAYA alındı.
       try {
         await gelenAramayiGoster(data);
         adimlar.add('CallKit showCallkitIncoming TAMAM');
@@ -79,6 +71,18 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
         if (aktif.isNotEmpty) adimlar.add('activeCall id=${aktif.first.id}');
       } catch (e) {
         adimlar.add('activeCalls HATA: $e');
+      }
+      // Teşhis okumaları ARTIK BURADA (zil çaldıktan sonra) — gecikme yaratmaz.
+      try {
+        adimlar.add('secili zil=${await AyarServisi.aramaZiliDiskten()}');
+      } catch (_) {}
+      try {
+        final z = await BildirimServisi.instance.zilDurumu();
+        adimlar.add('telefon zil modu=${z.mod} zil seviyesi=${z.seviye}'
+            '${z.mod != 'normal' || z.seviye == 0 ? "  <-- ZIL DUYULMAZ" : ""}');
+      } catch (_) {
+        // Arka plan izolatında Activity yok → MethodChannel çalışmaz.
+        adimlar.add('zil modu okunamadi (arka plan, Activity yok)');
       }
       await HataServisi.instance.arkaplanRapor('GELEN ARAMA (arka plan)', adimlar);
       // ...sonra TEŞHİS (fire-and-forget): handler'ın GERÇEKTEN çalıştığını
@@ -169,7 +173,17 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       'arayan': arayan,
     },
     android: AndroidParams(
-      isCustomNotification: true,
+      // ⚠️ FALSE — KASITLI (kullanıcı ekran görüntüsü: bildirim YARIM görünüyor,
+      // arayan adı ve Kabul/Reddet düğmeleri kırpılıyordu).
+      // Eklenti kaynağı (CallkitNotificationManager.getIncomingNotification):
+      //   isCustomNotification=true → Android 14 ALTINDA kendi RemoteViews
+      //   düzenini kullanıyor (layout_custom_notification) → OEM kabuklarında
+      //   KIRPILIYOR. Test cihazlarından biri Android 11 (RP1A...).
+      //   isCustomNotification=false → Android 14+ native CallStyle,
+      //   14 altında standart bildirim + Reddet/Kabul ACTION düğmeleri.
+      // Her iki yol da sistemin kendi düzeni olduğu için kırpılmaz.
+      // (Tema renkleri gider ama gelen aramada OKUNABİLİRLİK önceliklidir.)
+      isCustomNotification: false,
       // ⚠️⚠️ isFullScreen: FALSE — KASITLI. Eskiden true idi ve ÜÇ SEMPTOMUN
       // DE KÖK NEDENİ buydu (eklenti kaynağından doğrulandı):
       //
@@ -574,7 +588,11 @@ class BildirimServisi {
       'notification': {'title': baslik, 'body': govde},
       'data': ?ekstraData,
       'android': {
-        'priority': 'high',
+        // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
+        // düşük önceliğe düşebiliyor → mesaj Doze'da gecikir/hiç gelmez.
+        // (Bu tuzak projede daha önce ÇAĞRI push'unda yaşanmıştı; mesaj
+        // push'u küçük harfte kalmış.)
+        'priority': 'HIGH',
         'notification': {
           'channel_id': kanal,
           'visibility': 'PUBLIC',

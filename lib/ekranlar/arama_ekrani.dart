@@ -55,8 +55,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
     // burada, kamera önizlemesinde oluyordu — artık önizleme çağrılmıyor).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_video) _arama.onizlemeBaslat(); // no-op: yalnız iz bırakır
-      HataServisi.instance.sonAdim('EKRAN: arama ekrani HAZIR (tip=${widget.tip.name})');
+      HataServisi.instance
+          .sonAdim('EKRAN: arama ekrani HAZIR (tip=${widget.tip.name})');
+      // Kamerayı ANCAK ekran görünürken yayına al (arka planda kamera açma
+      // yasağı yüzünden görüntülü kabul tam burada ölüyordu).
+      if (_video) _arama.kamerayiYayinaAl();
     });
     _arama.karsiUid.addListener(_baglantiKontrol);
     // ARAYAN "çalıyor" tonu: SADECE arayanda ve karşı taraf henüz katılmadıysa.
