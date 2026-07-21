@@ -170,9 +170,31 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
     },
     android: AndroidParams(
       isCustomNotification: true,
-      // TAM EKRAN AKTİVİTE (sadece bildirim değil) → ekran kapalı/kilitliyken
-      // bile gelen arama ekranı açılır ve ekran uyanır.
-      isFullScreen: true,
+      // ⚠️⚠️ isFullScreen: FALSE — KASITLI. Eskiden true idi ve ÜÇ SEMPTOMUN
+      // DE KÖK NEDENİ buydu (eklenti kaynağından doğrulandı):
+      //
+      //   CallkitIncomingBroadcastReceiver:
+      //     if (isFullScreen) { startActivity(...) }        // ses YOK
+      //     else { showIncomingNotification(data)           // ZİL BURADA
+      //            sendEventFlutter(CALL_INCOMING, data)
+      //            addCall(context, incomingData) }
+      //
+      // true iken: (1) ZİL HİÇ ÇALMIYOR — `play()` yalnız
+      // showIncomingNotification içinde; CallkitIncomingActivity zili
+      // BAŞLATMIYOR (yalnız ses tuşuyla durduruyor). (2) addCall yok →
+      // activeCalls hep 0 → soğuk başlangıç kurtarma ölü. (3) Flutter'a
+      // CALL_INCOMING olayı gitmiyor. (4) startActivity arka plandaki bir
+      // BroadcastReceiver'dan çağrılıyor; Android 10+ arka plan aktivite
+      // başlatmayı ENGELLER → aranan kişi aramayı HİÇ GÖRMEYEBİLİR →
+      // kabul edemez → ARAYAN "Bağlanıyor…"da kalır.
+      //
+      // false iken kayıp YOK: bildirim `setFullScreenIntent(..., true)` ile
+      // kuruluyor (CallkitNotificationManager:207) → ekran kilitliyken tam
+      // ekran arama ekranı işletim sisteminin ONAYLI yoluyla yine açılır,
+      // üstelik zil çalar ve çağrı kaydedilir.
+      // (Manifest'te USE_FULL_SCREEN_INTENT var; Android 14+ izni
+      // `tamEkranIzniVarMi` ile zaten kontrol ediliyor.)
+      isFullScreen: false,
       isShowFullLockedScreen: true,
       isShowCallID: false,
       isImportant: true,
