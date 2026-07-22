@@ -57,3 +57,8 @@ android/build/
 
 # Gizli Agora App Certificate (token uretimi)
 lib/gizli.dart
+
+# iOS kullanilmiyor (uygulama Android-only; flutter_launcher_icons ios:false).
+# Flutter arac zinciri "pub get" sirasinda ios/Flutter/ephemeral gibi dosyalari
+# yeniden uretiyor -> depoya geri sizmasinlar diye klasorun tamami yok sayilir.
+ios/
