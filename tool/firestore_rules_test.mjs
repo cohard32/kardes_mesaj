@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (34 senaryo).
+// Firestore güvenlik kuralları birim testi (51 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 34 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 51 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -137,6 +137,53 @@ log(await ok(assertFails(deleteDoc(doc(A(), `chats/${AB}/messages/s_eski`)))),
   'S2 1 DAKIKA dolmus mesaj silinemez');
 log(await ok(assertSucceeds(deleteDoc(doc(A(), `chats/${AB}/messages/s_yeni`)))),
   'S3 kendi mesajini ILK 1 DK icinde silebilir (pozitif)');
+
+// ---- ESKI KOLEKSIYONLAR KILITLI (K1/K2, yayin oncesi denetim) ----
+// Eskiden ikisi de `if girisli()` idi: giris yapan HERKES 326 eski mesaji
+// okuyup silebiliyor ve HERKESIN fcmToken'ini degistirebiliyordu.
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  await setDoc(doc(db, 'mesajlar/eski1'), { metin: 'eski gecmis' });
+  await setDoc(doc(db, 'kullanicilar/bob'), { fcmToken: 'bobun-tokeni' });
+});
+log(await ok(assertFails(getDoc(doc(A(), 'mesajlar/eski1')))),
+  'E1 eski mesajlar/ koleksiyonu OKUNAMAZ');
+log(await ok(assertFails(deleteDoc(doc(A(), 'mesajlar/eski1')))),
+  'E2 eski mesajlar/ koleksiyonu SILINEMEZ');
+log(await ok(assertFails(setDoc(doc(A(), 'kullanicilar/bob'), { fcmToken:'sahte' }))),
+  'E3 BASKASININ eski kullanicilar/ dokumanina yazilamaz (token calinamaz)');
+log(await ok(assertFails(getDoc(doc(A(), 'kullanicilar/bob')))),
+  'E4 BASKASININ eski kullanicilar/ dokumani okunamaz');
+log(await ok(assertSucceeds(setDoc(doc(A(), 'kullanicilar/alice'), { fcmToken:'benim' }))),
+  'E5 kendi eski kullanicilar/ dokumanina yazabilir (pozitif - teshis calisir)');
+
+// ---- ENGELLEME ----
+// Engel dokumani kimligi = ciftKimligi → tek dokuman iki yonu birden kapatir.
+const ENGEL = `engellenenler/${AB}`;
+log(await ok(assertFails(setDoc(doc(A(), ENGEL), { uidler:['alice','bob'], engelleyen:'bob' }))),
+  'N1 BASKASI adina engel konamaz (engelleyen != auth.uid)');
+log(await ok(assertFails(setDoc(doc(C(), ENGEL), { uidler:['alice','bob'], engelleyen:'carol' }))),
+  'N2 yabanci BASKALARININ cifti icin engel olusturamaz');
+log(await ok(assertSucceeds(setDoc(doc(A(), ENGEL), { uidler:['alice','bob'], engelleyen:'alice' }))),
+  'N3 kisi karsi tarafi engelleyebilir (pozitif)');
+log(await ok(assertFails(deleteDoc(doc(B(), ENGEL)))),
+  'N4 ENGELLENEN taraf engeli KALDIRAMAZ (yoksa engelleme anlamsiz olurdu)');
+log(await ok(assertFails(setDoc(doc(A(), `chats/${AB}/messages/n_a`), { gonderen:'alice', metin:'x' }))),
+  'N5 ENGELLEYEN de mesaj atamaz (engel iki yonlu)');
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/n_b`), { gonderen:'bob', metin:'x' }))),
+  'N6 ENGELLENEN mesaj atamaz');
+log(await ok(assertFails(setDoc(doc(B(), `aramalar/${AB}`), { durum:'cagriliyor' }))),
+  'N7 engelliyken ARAMA baslatilamaz');
+log(await ok(assertSucceeds(getDoc(doc(B(), `aramalar/${AB}`)))),
+  'N8 engelliyken arama dokumani OKUNABILIR (devam eden arama kapanabilsin)');
+log(await ok(assertSucceeds(getDoc(doc(B(), `chats/${AB}/messages/s_bob`)))),
+  'N9 engelliyken ESKI mesajlar okunmaya devam eder');
+log(await ok(assertFails(getDoc(doc(C(), ENGEL)))),
+  'N10 yabanci baskalarinin engel dokumanini okuyamaz');
+log(await ok(assertSucceeds(deleteDoc(doc(A(), ENGEL)))),
+  'N11 engeli KOYAN kaldirabilir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}/messages/n_ok`), { gonderen:'alice', metin:'tekrar' }))),
+  'N12 engel kalkinca mesajlasma devam eder (pozitif)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

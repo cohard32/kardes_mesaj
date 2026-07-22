@@ -51,6 +51,32 @@ class KullaniciServisi {
     return null;
   }
 
+  /// Şifre gücü kuralı. Geçerliyse null, değilse hata metni döner.
+  ///
+  /// ⚠️ Firebase'in tek kuralı "en az 6 karakter" — yani "123456" kabul edilir.
+  /// Bu, kimlik doğrulamanın EN ZAYIF halkası (kurallar ne kadar sıkı olursa
+  /// olsun tahmin edilen şifre hesabı verir). Bu yüzden istemcide daha güçlü
+  /// bir asgari uygulanır. Kartsız/Spark planında sunucu tarafı şifre politikası
+  /// (Identity Platform) YOK — burası tek kontrol noktası.
+  String? sifreHatasi(String sifre) {
+    if (sifre.length < 8) return 'En az 8 karakter olmalı';
+    if (!RegExp(r'[A-Za-zÇĞİÖŞÜçğıöşü]').hasMatch(sifre)) {
+      return 'En az bir harf içermeli';
+    }
+    if (!RegExp(r'[0-9]').hasMatch(sifre)) return 'En az bir rakam içermeli';
+    if (_zayifSifreler.contains(sifre.toLowerCase())) {
+      return 'Bu şifre çok yaygın, başka bir tane seç';
+    }
+    return null;
+  }
+
+  /// En sık denenen şifreler (sözlük saldırısının ilk sırası).
+  static const _zayifSifreler = {
+    '12345678', '123456789', '1234567890', 'password', 'password1',
+    'parola123', 'sifre123', 'qwerty123', 'iloveyou', 'abc12345',
+    '11111111', '00000000', 'admin123', 'welcome1', 'asdf1234',
+  };
+
   /// Kullanıcı adı müsait mi? (usernames koleksiyonuna bakar)
   Future<bool> kullaniciAdiMusaitMi(String ad) async {
     final a = ad.trim().toLowerCase();
@@ -74,6 +100,8 @@ class KullaniciServisi {
     if (adTemiz.isEmpty) throw KullaniciHatasi('İsim boş olamaz.');
     final kHata = kullaniciAdiHatasi(kAdi);
     if (kHata != null) throw KullaniciHatasi('Kullanıcı adı: $kHata');
+    final sHata = sifreHatasi(sifre);
+    if (sHata != null) throw KullaniciHatasi('Şifre: $sHata');
 
     // Hızlı ön kontrol (kesin garanti transaction'da)
     if (!await kullaniciAdiMusaitMi(kAdi)) {
@@ -105,7 +133,10 @@ class KullaniciServisi {
         tx.set(_users.doc(uid), {
           'ad': adTemiz,
           'kullaniciAdi': kAdi,
-          'eposta': eposta.trim(),
+          // ⚠️ E-POSTA YAZILMAZ: users/{uid} her giriş yapmış kullanıcıya
+          // OKUNUR (arama/profil için şart). E-posta oraya konursa herkesin
+          // e-postası herkese açılır. Uygulama zaten hiçbir yerde
+          // kullanmıyor; kimlik için FirebaseAuth.currentUser.email var.
           'cevrimici': false,
           'olusturma': FieldValue.serverTimestamp(),
         });
@@ -117,6 +148,55 @@ class KullaniciServisi {
       } catch (_) {}
       if (e is KullaniciHatasi) rethrow;
       throw KullaniciHatasi('Kayıt tamamlanamadı, tekrar dene.');
+    }
+
+    // 3) Doğrulama maili (fire-and-forget). ⚠️ BAŞARISIZLIĞI KAYDI BOZMAZ:
+    // uygulama doğrulanmamış hesapla TAM çalışır, profilde uyarı gösterilir.
+    // Kullanıcı yeni kayıt olurken mail gönderilemedi diye hesabı silmek
+    // (kota/ağ hatası yüzünden) çok daha kötü bir sonuç olurdu.
+    try {
+      await cred.user?.sendEmailVerification();
+      HataServisi.instance.iz('DOGRULAMA maili gonderildi');
+    } catch (e) {
+      HataServisi.instance.iz('DOGRULAMA maili gonderilemedi: $e');
+    }
+  }
+
+  /// Oturumdaki hesabın e-postası doğrulanmış mı?
+  bool get epostaDogrulandi =>
+      FirebaseAuth.instance.currentUser?.emailVerified ?? false;
+
+  /// Oturumdaki hesabın e-postası (profil ekranında göstermek için).
+  String? get oturumEpostasi => FirebaseAuth.instance.currentUser?.email;
+
+  /// Doğrulama mailini yeniden gönderir.
+  /// ⚠️ Firebase kısa aralıklı tekrarlarda `too-many-requests` döner —
+  /// bu kullanıcıya anlaşılır bir metin olarak iletilir, sessizce yutulmaz.
+  Future<void> dogrulamaMailiGonder() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) throw KullaniciHatasi('Oturum yok.');
+    if (u.emailVerified) return;
+    try {
+      await u.sendEmailVerification();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'too-many-requests') {
+        throw KullaniciHatasi('Çok sık denendi, birkaç dakika sonra tekrar dene.');
+      }
+      throw KullaniciHatasi(_authHata(e.code));
+    }
+  }
+
+  /// Auth durumunu sunucudan tazeler → kullanıcı maildeki linke tıkladıysa
+  /// [epostaDogrulandi] artık true döner. (reload olmadan istemci ESKİ
+  /// token'a bakar ve "doğrulanmadı" demeye devam eder.)
+  Future<bool> dogrulamaDurumunuTazele() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) return false;
+    try {
+      await u.reload();
+      return FirebaseAuth.instance.currentUser?.emailVerified ?? false;
+    } catch (_) {
+      return u.emailVerified;
     }
   }
 
@@ -153,7 +233,7 @@ class KullaniciServisi {
         tx.set(_users.doc(uid), {
           'ad': adTemiz,
           'kullaniciAdi': kAdi,
-          'eposta': user.email ?? '',
+          // E-posta YAZILMAZ — bkz. kayitOl içindeki gizlilik açıklaması.
           'cevrimici': false,
           'olusturma': FieldValue.serverTimestamp(),
         });
@@ -236,6 +316,10 @@ class KullaniciServisi {
         return 'Geçersiz e-posta adresi.';
       case 'weak-password':
         return 'Şifre çok zayıf (en az 6 karakter).';
+      case 'too-many-requests':
+        return 'Çok fazla deneme yapıldı, biraz sonra tekrar dene.';
+      case 'requires-recent-login':
+        return 'Güvenlik için çıkış yapıp tekrar giriş yapmalısın.';
       case 'network-request-failed':
         return 'İnternet bağlantısı yok.';
       case 'user-not-found':

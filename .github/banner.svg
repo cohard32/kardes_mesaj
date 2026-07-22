@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="ROY MESSANGER">
+  <!--
+    Depo başlığı. Renkler lib/tema.dart ile BİREBİR aynı (merkezi tema kuralı):
+      zeminDerin #050F0A · zemin #071A10 · yuzey #0D2818 · yuzeyYuksek #14301E
+      neon #B4FF3C · neonAcik #D4FF5C · neonKoyu #A8E02A · yesilKoyu #3F7A10
+      metin #EAFFD8 · metinSoluk #6B8F5A
+    ⚠️ 3B etkisi FİLTREYLE DEĞİL, üst üste bindirilmiş metin katmanlarıyla
+    yapıldı: GitHub bazı SVG filtrelerini temizleyebiliyor; katmanlı çıkıntı
+    her koşulda görünür.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050F0A"/>
+      <stop offset="55%" stop-color="#071A10"/>
+      <stop offset="100%" stop-color="#0D2818"/>
+    </linearGradient>
+    <linearGradient id="neonY" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D4FF5C"/>
+      <stop offset="60%" stop-color="#B4FF3C"/>
+      <stop offset="100%" stop-color="#A8E02A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#B4FF3C" stop-opacity="0.30"/>
+      <stop offset="70%" stop-color="#B4FF3C" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#B4FF3C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="kenar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#B4FF3C" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#B4FF3C" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#B4FF3C" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="izgara" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" fill="none" stroke="#B4FF3C" stroke-opacity="0.055" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="340" fill="url(#bg)"/>
+  <rect width="1200" height="340" fill="url(#izgara)"/>
+  <ellipse cx="960" cy="80" rx="430" ry="300" fill="url(#glow)"/>
+  <ellipse cx="150" cy="330" rx="360" ry="230" fill="url(#glow)" opacity="0.55"/>
+
+  <!-- 3B sohbet balonu: gövde + aşağı doğru çıkıntı katmanları -->
+  <g transform="translate(92 96)">
+    <rect x="6" y="14" width="132" height="104" rx="30" fill="#2A5410" opacity="0.55"/>
+    <rect x="4" y="9"  width="132" height="104" rx="30" fill="#3F7A10"/>
+    <rect x="2" y="4"  width="132" height="104" rx="30" fill="#63B81A"/>
+    <rect x="0" y="0"  width="132" height="104" rx="30" fill="url(#neonY)"/>
+    <path d="M28 104 L28 132 L60 104 Z" fill="#A8E02A"/>
+    <circle cx="44" cy="52" r="9" fill="#06170D"/>
+    <circle cx="72" cy="52" r="9" fill="#06170D"/>
+    <circle cx="100" cy="52" r="9" fill="#06170D"/>
+  </g>
+
+  <!-- Başlık: katmanlı çıkıntı ile 3B -->
+  <g font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-weight="800" font-size="86" letter-spacing="2">
+    <text x="272" y="170" fill="#2A5410" opacity="0.6">ROY MESSANGER</text>
+    <text x="271" y="167" fill="#3F7A10">ROY MESSANGER</text>
+    <text x="270" y="164" fill="#63B81A">ROY MESSANGER</text>
+    <text x="269" y="161" fill="url(#neonY)">ROY MESSANGER</text>
+  </g>
+
+  <text x="272" y="212" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="25" font-weight="500" fill="#EAFFD8" opacity="0.92">
+    Flutter · Android · uçtan uca özel mesajlaşma
+  </text>
+
+  <!-- Özellik rozetleri -->
+  <g font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="600">
+    <g transform="translate(272 240)">
+      <rect width="176" height="42" rx="14" fill="#14301E" stroke="#B4FF3C" stroke-opacity="0.28"/>
+      <text x="88" y="27" text-anchor="middle" fill="#B4FF3C">Sesli / Görüntülü</text>
+    </g>
+    <g transform="translate(462 240)">
+      <rect width="150" height="42" rx="14" fill="#14301E" stroke="#B4FF3C" stroke-opacity="0.28"/>
+      <text x="75" y="27" text-anchor="middle" fill="#B4FF3C">Anlık Bildirim</text>
+    </g>
+    <g transform="translate(626 240)">
+      <rect width="196" height="42" rx="14" fill="#14301E" stroke="#B4FF3C" stroke-opacity="0.28"/>
+      <text x="98" y="27" text-anchor="middle" fill="#B4FF3C">Foto · Video · Ses</text>
+    </g>
+    <g transform="translate(836 240)">
+      <rect width="150" height="42" rx="14" fill="#14301E" stroke="#B4FF3C" stroke-opacity="0.28"/>
+      <text x="75" y="27" text-anchor="middle" fill="#B4FF3C">QR ile Ekle</text>
+    </g>
+  </g>
+
+  <rect x="0" y="337" width="1200" height="3" fill="url(#kenar)"/>
+</svg>

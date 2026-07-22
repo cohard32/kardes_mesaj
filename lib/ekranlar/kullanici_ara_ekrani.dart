@@ -6,6 +6,7 @@ import '../modeller/arkadaslik.dart';
 import '../modeller/kullanici.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arkadas_servisi.dart';
+import '../servisler/hata_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
 import 'profil_goruntule_ekrani.dart';
@@ -25,6 +26,7 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
   bool _yukleniyor = false;
   List<Kullanici> _sonuclar = [];
   bool _arandi = false;
+  String? _hata;
 
   @override
   void dispose() {
@@ -48,10 +50,21 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
       return;
     }
     setState(() => _yukleniyor = true);
-    final r = await KullaniciServisi.instance.kullaniciAra(q);
+    // ⚠️ try/finally ŞART: sorgu hata atarsa (ağ yok, izin reddi) eskiden
+    // `_yukleniyor` true kalıyordu → ekran SONSUZA KADAR dönen çarkta
+    // takılıyordu. Artık her durumda kapanır, hata kullanıcıya söylenir.
+    List<Kullanici> r = const [];
+    String? hata;
+    try {
+      r = await KullaniciServisi.instance.kullaniciAra(q);
+    } catch (e) {
+      hata = 'Arama yapılamadı. Bağlantını kontrol et.';
+      HataServisi.instance.iz('KULLANICI ARA hata: $e');
+    }
     if (!mounted) return;
     setState(() {
       _sonuclar = r;
+      _hata = hata;
       _yukleniyor = false;
       _arandi = true;
     });
@@ -107,6 +120,11 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
   Widget _govde() {
     if (!_arandi) {
       return _bilgi(Icons.alternate_email, 'Arkadaşının kullanıcı adını yaz.');
+    }
+    // Hata "bulunamadı" ile karıştırılmasın — kullanıcı tekrar deneyebilsin.
+    final hata = _hata;
+    if (hata != null) {
+      return _bilgi(Icons.wifi_off, hata);
     }
     if (_sonuclar.isEmpty) {
       return _bilgi(Icons.search_off, 'Kullanıcı bulunamadı.');

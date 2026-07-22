@@ -192,30 +192,21 @@ class AramaServisi {
       // DEĞİL. Android 14+ arka plandan kamera açmayı kısıtlar ve görünür
       // yüzey yokken kamera başlatmak süreci NATIVE olarak çökertiyordu
       // ("uygulama durdu" — Dart hatası oluşmadığı için yakalanamıyordu).
-      // Önizleme, arama ekranı görünür olunca [onizlemeBaslat] ile başlar.
+      // Yerel görüntü, kamera track'i yayınlandığında `AgoraVideoView` (uid: 0)
+      // tarafından zaten çizilir → ayrı bir önizleme çağrısına GEREK YOK.
     } else {
       await e.disableVideo();
     }
     _engine = e;
   }
 
-  /// ⚠️ `startPreview()` ARTIK HİÇ ÇAĞRILMIYOR — KASITLI.
-  ///
-  /// KANIT (v1.6.3, son_adim adli tıbbı, İKİ cihazda da birebir aynı):
-  ///   SON ADIM: "EKRAN: kamera onizleme baslatiliyor"
-  /// Bu işaret `startPreview()`'den hemen ÖNCE yazılıyor → süreç tam orada
-  /// ölüyor. try/catch yakalamıyor çünkü NATIVE çökme (Dart hatası değil).
-  ///
-  /// SEBEP: `joinChannel(publishCameraTrack: true)` ile kanala katılınca kamera
-  /// ZATEN yayına başlıyor. Üstüne `startPreview()` çağırmak kamerayı İKİNCİ
-  /// kez açmaya çalışıyor ve native katmanda çökertiyor. (v1.6.3'te önizleme
-  /// katılımdan SONRAYA alınınca çökme arayan tarafta da başlamıştı.)
-  ///
-  /// Yerel görüntü, kamera track'i yayınlandığı için `AgoraVideoView`
-  /// (uid: 0) tarafından zaten çiziliyor — önizlemeye ihtiyaç yok.
-  Future<void> onizlemeBaslat() async {
-    HataServisi.instance.iz('onizleme atlandi (kamera yayina ayri alinir)');
-  }
+  // ⚠️ `startPreview()` HİÇBİR YERDE ÇAĞRILMIYOR — KASITLI, GERİ EKLEME.
+  // KANIT (v1.6.3, son_adim adli tıbbı, İKİ cihazda da birebir aynı):
+  //   SON ADIM: "EKRAN: kamera onizleme baslatiliyor"
+  // İşaret `startPreview()`'den hemen ÖNCE yazılıyordu → süreç tam orada
+  // ölüyordu. try/catch yakalamıyor çünkü NATIVE çökme (Dart hatası değil).
+  // SEBEP: `joinChannel(publishCameraTrack: true)` kamerayı ZATEN yayına alır;
+  // üstüne `startPreview()` kamerayı İKİNCİ kez açmaya çalışıp çökertiyor.
 
   /// KAMERAYI YAYINA ALIR — yalnızca arama ekranı GÖRÜNÜR olduktan sonra
   /// çağrılmalı (AramaEkrani postFrame).

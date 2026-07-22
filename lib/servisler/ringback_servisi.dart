@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:audioplayers/audioplayers.dart';
 
 import 'hata_servisi.dart';
@@ -40,8 +38,22 @@ class RingbackServisi {
     final mevcut = _player;
     if (mevcut != null) return mevcut;
     final p = AudioPlayer();
-    await p.setReleaseMode(ReleaseMode.loop);
     await p.setVolume(0.35); // Agora sesini bastırmasın
+    // YEDEK LOOP: ton bitince hâlâ "çalıyor" durumundaysak baştan başlat.
+    // ⚠️ Neden gerekli: ses dosyası ~1 SANİYE. Yalnız `setReleaseMode(loop)`'a
+    // güvenilince ton bir kez çalıp susuyordu ("ilk 1-2 sn ses var, sonra
+    // sessizlik" hatası) — çünkü release mode KAYNAK ATANMADAN önce
+    // veriliyordu ve `play()` yeni kaynak yükleyince sıfırlanıyordu.
+    // Abonelik saklanmaz/iptal edilmez: [_player] uygulama ömrü boyunca yaşayan
+    // TEK örnektir (bkz. sınıf açıklaması), dolayısıyla sızıntı oluşmaz.
+    p.onPlayerComplete.listen((_) async {
+      if (!_caliyor) return;
+      try {
+        await p.seek(Duration.zero);
+        await p.resume();
+        HataServisi.instance.iz('RINGBACK yeniden basladi (yedek loop)');
+      } catch (_) {}
+    });
     _player = p;
     return p;
   }
@@ -61,7 +73,10 @@ class RingbackServisi {
         final p = await _oynatici();
         await p.stop(); // olası kalıntı durumdan temizle
         await p.play(AssetSource('sesler/cingirak.wav'));
-        HataServisi.instance.iz('RINGBACK basladi');
+        // ⚠️ LOOP, play()'den SONRA verilir. Önce verilirse yeni kaynak
+        // yüklenirken sıfırlanıyor ve ton tek sefer çalıp susuyordu.
+        await p.setReleaseMode(ReleaseMode.loop);
+        HataServisi.instance.iz('RINGBACK basladi (loop)');
       });
 
   /// Tonu durdurur. Oynatıcı DISPOSE EDİLMEZ (yeniden kullanılır).
@@ -72,4 +87,5 @@ class RingbackServisi {
         await _player?.stop();
         HataServisi.instance.iz('RINGBACK durdu');
       });
+
 }

@@ -19,9 +19,6 @@ class SohbetServisi {
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  /// İki uid için sohbet kimliği.
-  String sohbetId(String otherUid) => ciftKimligi(_uid ?? '', otherUid);
-
   /// Sohbetlerimi son mesaja göre (yeni → eski) canlı dinler.
   /// ⚠️ Firestore composite index gerekir:
   ///   collection: chats, fields: katilimcilar (array-contains) +

@@ -16,6 +16,7 @@ import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arama_servisi.dart';
+import '../servisler/arkadas_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
@@ -117,6 +118,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // Emoji paneli
   bool _emojiAcik = false;
 
+  // ENGEL DURUMU (canlı). null = engel yok, değilse engeli koyanın uid'i.
+  // Karşı taraf ekran AÇIKKEN engellerse yazma alanı anında kapanır —
+  // kullanıcı "gönderilemedi" hatası almadan sebebi görür.
+  String? _engelleyen;
+  StreamSubscription<String?>? _engelAbone;
+
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   @override
@@ -138,6 +145,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // kalmış stale aramayı temizle
     AramaServisi.instance.eskiAramayiTemizle(widget.chatId);
     _aramaIzinleriniKontrolEt();
+    _engelAbone = ArkadasServisi.instance
+        .engelDinle(widget.karsi.uid)
+        .listen((e) {
+      if (mounted && e != _engelleyen) setState(() => _engelleyen = e);
+    });
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
   }
@@ -211,6 +223,18 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // Görüntülü/sesli arama başlat → arama ekranını aç. Hata olursa ekranda göster.
   Future<void> _aramaBaslat(AramaTipi tip) async {
+    // Engelliyken kural `aramalar` yazmasını reddeder → Agora'yı boşuna
+    // başlatıp izin isteyip sonra hata vermek yerine baştan söyle.
+    if (_engelleyen != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_engelleyen == _uid
+              ? 'Bu kişiyi engelledin, arama yapamazsın.'
+              : 'Bu kişi seni engelledi, arama yapamazsın.'),
+        ),
+      );
+      return;
+    }
     try {
       final kanal = await AramaServisi.instance.aramaBaslat(
         widget.chatId,
@@ -249,6 +273,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _yaziyorTimer?.cancel();
     _kayitTimer?.cancel();
     _ampSub?.cancel();
+    _engelAbone?.cancel();
     _presence.cevrimdisiYap();
     _kayitci.dispose();
     _mesajCtrl.dispose();
@@ -667,6 +692,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             // odur; kayıt sırasında widget ağaçtan çıkarılsaydı parmak
             // kalktığında "bitir" olayı hiç gelmez, kayıt asılı kalırdı.
             // Kayıt göstergesi ÜSTÜNE bindirilir (IgnorePointer → jesti bozmaz).
+            if (_engelleyen != null)
+              _EngelSeridi(
+                benEngelledim: _engelleyen == _uid,
+                karsiAd: widget.karsi.ad,
+              )
+            else
             Stack(
               children: [
                 _YazmaAlani(
@@ -2279,6 +2310,44 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
 }
 
 /// Boş/hata durumu için ortak gösterim.
+/// Yazma alanının YERİNE geçen engel şeridi.
+///
+/// ⚠️ Yazma alanını gizlemek KOZMETİK bir önlem değil, doğru davranıştır:
+/// engelliyken Firestore kuralı mesaj oluşturmayı zaten reddeder
+/// (firestore.rules `engelli()`), dolayısıyla kutuyu açık bırakmak kullanıcıya
+/// yazdırıp sonra "gönderilemedi" demek olurdu. Geçmiş mesajlar görünür kalır.
+class _EngelSeridi extends StatelessWidget {
+  final bool benEngelledim;
+  final String karsiAd;
+  const _EngelSeridi({required this.benEngelledim, required this.karsiAd});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        decoration: Kutular.duzYuzey(kenarli: true),
+        child: Row(
+          children: [
+            const Icon(Icons.block, size: 18, color: Renkler.tehlike),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                benEngelledim
+                    ? '$karsiAd engellendi. Engeli profilinden kaldırabilirsin.'
+                    : 'Bu kişi seni engelledi. Mesaj gönderemezsin.',
+                style: Yazi.kucuk,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _BosDurum extends StatelessWidget {
   final IconData ikon;
   final String yazi;

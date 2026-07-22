@@ -17,7 +17,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Kardeş Mesaj'), findsOneWidget);
+    expect(find.text('ROY MESSANGER'), findsOneWidget);
     expect(find.text('Giriş yap'), findsWidgets); // alt başlık + buton
     expect(find.byType(TextField), findsNWidgets(2)); // e-posta + şifre
   });

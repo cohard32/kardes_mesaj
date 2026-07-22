@@ -9,6 +9,7 @@ import 'firebase_options.dart';
 import 'ekranlar/arama_ekrani.dart';
 import 'ekranlar/sohbet_ekrani.dart';
 import 'kimlik/auth_gate.dart';
+import 'servisler/app_check_servisi.dart';
 import 'servisler/arama_servisi.dart';
 import 'servisler/ayar_servisi.dart';
 import 'servisler/bildirim_servisi.dart';
@@ -23,6 +24,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Firebase'i baslat (firebase_options.dart flutterfire configure ile uretildi)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Sahte istemci koruması. initializeApp'tan HEMEN SONRA, ilk Firestore/Auth
+  // çağrısından ÖNCE olmalı — sonra çağrılırsa erken istekler belirteçsiz gider.
+  await AppCheckServisi.baslat();
   // Uzaktan teşhis: çökmeleri ve akış izlerini topla (Ayarlar > Sorun bildir)
   HataServisi.instance.baslat();
   HataServisi.instance.iz('uygulama açıldı');

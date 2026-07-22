@@ -14,6 +14,7 @@ import 'package:googleapis_auth/auth_io.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../tema.dart';
+import 'app_check_servisi.dart';
 import 'ayar_servisi.dart';
 
 /// Arka plan / uygulama kapalı mesaj handler'ı.
@@ -28,6 +29,10 @@ Future<void> arkaplanMesajHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp();
   } catch (_) {}
+  // Arka plan izolatı AYRI bir Firebase örneğidir → App Check burada da
+  // etkinleştirilmeli, yoksa zorlama açıldığında bu isolate'in Firestore
+  // yazmaları (meşgul sinyali, teşhis raporu) reddedilir.
+  await AppCheckServisi.baslat();
   await aramaMesajiIsle(message.data);
 }
 
@@ -534,7 +539,8 @@ class BildirimServisi {
         'guncelleme': FieldValue.serverTimestamp(),
       };
       await _kullanicilar.doc(kullanici.uid)
-          .set({...veri, 'eposta': kullanici.email}, SetOptions(merge: true));
+          // E-posta EKLENMEZ (users/{uid} herkese okunur — gizlilik).
+          .set(veri, SetOptions(merge: true));
       // FAZ 4: hedefli bildirim token'ı users'tan okuyor → oraya da yaz.
       try {
         await _users.doc(kullanici.uid).set(veri, SetOptions(merge: true));

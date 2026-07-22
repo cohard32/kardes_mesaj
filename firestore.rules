@@ -31,6 +31,16 @@ service cloud.firestore {
     function banaIstekVar(uidler) {
       return exists(/databases/$(database)/documents/friend_requests/$(digerUid(uidler) + '_' + request.auth.uid));
     }
+    // ENGEL: doküman kimliği ÇİFT KİMLİĞİ ile aynı (sıralı uid'ler) →
+    // A'nın B'yi engellemesi ile B'nin A'yı engellemesi AYNI dokümandır.
+    // Sonuç: tek `exists` çağrısı iki yönü birden kapatır (ucuz; Spark
+    // kotasında her kural okuması sayılır) ve "engellediğim kişi bana yazamaz
+    // ama ben ona yazabilirim" gibi tutarsız bir durum oluşamaz.
+    // ⚠️ exists() kural motorunda çalışır, okuma iznine BAKMAZ → engellenen
+    // taraf dokümanı okuyamasa bile kural onu doğru şekilde engeller.
+    function engelli(idPair) {
+      return exists(/databases/$(database)/documents/engellenenler/$(idPair));
+    }
     function chatKatilimcisi(chatId) {
       return girisli() &&
         request.auth.uid in
@@ -130,6 +140,7 @@ service cloud.firestore {
         allow read: if chatKatilimcisi(chatId);
         allow create: if chatKatilimcisi(chatId)
           && arkadasMi(chatId)
+          && !engelli(chatId)
           && request.resource.data.gonderen == request.auth.uid;
         allow update: if chatKatilimcisi(chatId)
           && request.resource.data.diff(resource.data).affectedKeys()
@@ -153,7 +164,30 @@ service cloud.firestore {
     // alabiliyor (→ aramaya katılıp dinleyebilir) veya durum='bitti' yazıp
     // aramalarını düşürebiliyordu. Artık sadece o çiftin ÜYELERİ erişebilir.
     match /aramalar/{chatId} {
-      allow read, write: if ciftinUyesiyim(chatId);
+      // Okuma engelliyken de serbest: devam eden bir aramanın 'bitti' durumunu
+      // iki taraf da GÖREBİLMELİ (engel tam o sırada konursa arama ekranı
+      // sonsuza kadar 'Bağlanıyor…'da kalmasın). YENİ arama başlatmak =
+      // yazmak → engelliyken reddedilir.
+      allow read: if ciftinUyesiyim(chatId);
+      allow write: if ciftinUyesiyim(chatId) && !engelli(chatId);
+    }
+
+    // ---- ENGELLEME ----
+    // id = ciftKimligi(a, b) — friendships/chats ile AYNI kimlik.
+    // Alanlar: {uidler:[a,b], engelleyen: uid, zaman}
+    // ⚠️ Engeli yalnızca KOYAN kaldırabilir; engellenen kişi kendi üzerindeki
+    // engeli silemez (silebilseydi engelleme hiçbir şey ifade etmezdi).
+    match /engellenenler/{id} {
+      // resource == null → var olmayan doküman: "engelli miyim" kontrolü
+      // reddedilmesin (yoksa sohbet ekranı sonsuz yüklenir).
+      allow read: if girisli() &&
+        (resource == null || request.auth.uid in resource.data.uidler);
+      allow create: if girisli()
+        && request.auth.uid in request.resource.data.uidler
+        && request.resource.data.uidler.size() == 2
+        && request.resource.data.engelleyen == request.auth.uid;
+      allow delete: if girisli() && resource.data.engelleyen == request.auth.uid;
+      allow update: if false;
     }
 
     // ---- NATIVE ÇÖKME ADLİ TIBBI ----
@@ -172,13 +206,23 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
-    // ═══ GEÇİŞ UYUMU (cutover'a kadar; sonra kaldırılacak) ═══
-    // Eski tek-sohbet yapısı + FCM token/teşhis dokümanları.
-    match /kullanicilar/{uid} {
-      allow read, write: if girisli();
-    }
+    // ═══ ESKİ (FAZ 4 ÖNCESİ) KOLEKSİYONLAR — KİLİTLİ ═══
+    //
+    // ⚠️ Eskiden ikisi de `allow read, write: if girisli()` idi → giriş yapmış
+    // HERHANGİ bir kullanıcı 326 eski mesajın TAMAMINI okuyabiliyor/silebiliyor
+    // ve HERKESİN fcmToken'ını değiştirebiliyordu. (Yayın öncesi denetimde
+    // bulundu.) Veri SİLİNMEDİ, yalnızca erişim kapatıldı.
+
+    // Eski mesaj geçmişi: uygulama bu koleksiyonu HİÇ kullanmıyor (doğrulandı).
+    // Tamamen kapalı. İleride taşınacaksa admin SDK kuralları atlar.
     match /mesajlar/{id} {
-      allow read, write: if girisli();
+      allow read, write: if false;
+    }
+
+    // Eski kullanıcı dokümanı: kod yalnızca KENDİ dokümanına yazar
+    // (tokenKaydet / kanalYayinla / sonCagriPush teşhisi) → kendi uid'i yeter.
+    match /kullanicilar/{uid} {
+      allow read, write: if benim(uid);
     }
   }
 }

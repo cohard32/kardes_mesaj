@@ -317,6 +317,8 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
             ),
           ),
         ),
+        const SizedBox(height: 16),
+        const _DogrulamaUyarisi(),
         if ((k.bio ?? '').isNotEmpty) ...[
           const SizedBox(height: 16),
           Container(
@@ -380,6 +382,102 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+/// E-POSTA DOĞRULAMA UYARISI (profil üstü).
+///
+/// ⚠️ TASARIM KARARI: Doğrulama uygulamayı KİLİTLEMEZ. Doğrulanmamış hesapla
+/// mesajlaşma/arama tam çalışır; burada yalnızca uyarı ve "tekrar gönder"
+/// vardır. Sebep: kilitleme, maili alamayan (spam kutusu/kota) kullanıcıyı
+/// tamamen dışarıda bırakır ve kartsız planda destek kanalı yok.
+/// Doğrulanmış e-posta yine de değerli: şifre sıfırlama gerçek sahibe gider.
+class _DogrulamaUyarisi extends StatefulWidget {
+  const _DogrulamaUyarisi();
+
+  @override
+  State<_DogrulamaUyarisi> createState() => _DogrulamaUyarisiState();
+}
+
+class _DogrulamaUyarisiState extends State<_DogrulamaUyarisi> {
+  bool _dogrulandi = true; // ilk çerçevede uyarı "yanıp sönmesin"
+  bool _mesgul = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tazele();
+  }
+
+  /// Sunucudan tazeler: kullanıcı maildeki linke başka cihazda tıkladıysa
+  /// yerel token hâlâ "doğrulanmadı" der — reload olmadan uyarı hiç kaybolmaz.
+  Future<void> _tazele() async {
+    final d = await KullaniciServisi.instance.dogrulamaDurumunuTazele();
+    if (!mounted) return;
+    setState(() => _dogrulandi = d);
+  }
+
+  Future<void> _gonder() async {
+    setState(() => _mesgul = true);
+    String mesaj;
+    try {
+      await KullaniciServisi.instance.dogrulamaMailiGonder();
+      mesaj = 'Doğrulama maili gönderildi. Spam kutusuna da bak.';
+    } on KullaniciHatasi catch (e) {
+      mesaj = e.mesaj;
+    } catch (_) {
+      mesaj = 'Mail gönderilemedi, bağlantını kontrol et.';
+    }
+    if (!mounted) return;
+    setState(() => _mesgul = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(mesaj)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dogrulandi) return const SizedBox.shrink();
+    final eposta = KullaniciServisi.instance.oturumEpostasi ?? 'e-postan';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: Kutular.yuzey(kose: Kose.kartKose),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mark_email_unread_outlined,
+                  size: 18, color: Renkler.tehlike),
+              const SizedBox(width: 8),
+              Text('E-posta doğrulanmadı',
+                  style: Yazi.stil(13, FontWeight.w700, Renkler.tehlike)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$eposta adresine gönderdiğimiz linke tıkla. '
+            'Uygulama normal çalışmaya devam eder.',
+            style: Yazi.kucuk,
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              TextButton(
+                onPressed: _mesgul ? null : _gonder,
+                child: Text(_mesgul ? 'Gönderiliyor…' : 'Tekrar gönder',
+                    style: Yazi.neonKucuk),
+              ),
+              const SizedBox(width: 4),
+              TextButton(
+                onPressed: _mesgul ? null : _tazele,
+                child: Text('Doğruladım', style: Yazi.kucuk),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

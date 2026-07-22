@@ -7,7 +7,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///   kullaniciAdi : benzersiz @kullanıcı adı (usernames koleksiyonu garanti eder)
 ///   fotoUrl      : profil fotoğrafı (Cloudinary URL'i) — opsiyonel
 ///   bio          : durum/hakkında yazısı — opsiyonel
-///   eposta       : giriş e-postası
 ///   fcmToken     : bildirim token'ı (hassas — kurallarda korunur)
 ///   cevrimici    : anlık çevrimiçi mi
 ///   sonGorulme   : son çevrimiçi zamanı
@@ -17,7 +16,6 @@ class Kullanici {
   final String kullaniciAdi;
   final String? fotoUrl;
   final String? bio;
-  final String? eposta;
   final bool cevrimici;
   final DateTime? sonGorulme;
 
@@ -27,7 +25,6 @@ class Kullanici {
     required this.kullaniciAdi,
     this.fotoUrl,
     this.bio,
-    this.eposta,
     this.cevrimici = false,
     this.sonGorulme,
   });
@@ -43,7 +40,6 @@ class Kullanici {
       kullaniciAdi: (d['kullaniciAdi'] ?? '') as String,
       fotoUrl: d['fotoUrl'] as String?,
       bio: d['bio'] as String?,
-      eposta: d['eposta'] as String?,
       cevrimici: (d['cevrimici'] ?? false) as bool,
       sonGorulme: (d['sonGorulme'] as Timestamp?)?.toDate(),
     );
@@ -68,7 +64,6 @@ class Kullanici {
         kullaniciAdi: kullaniciAdi,
         fotoUrl: fotoUrl ?? this.fotoUrl,
         bio: bio ?? this.bio,
-        eposta: eposta,
         cevrimici: cevrimici,
         sonGorulme: sonGorulme,
       );

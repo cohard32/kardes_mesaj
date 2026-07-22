@@ -29,6 +29,9 @@ class _KayitEkraniState extends State<KayitEkrani> {
   _AdDurum _adDurum = _AdDurum.bos;
   String _adNot = '';
   bool _yukleniyor = false;
+
+  /// Şifre gücü uyarısı (null = şifre kurallara uyuyor).
+  String? _sifreNot;
   String? _hata;
 
   @override
@@ -191,11 +194,23 @@ class _KayitEkraniState extends State<KayitEkrani> {
                   obscureText: true,
                   enabled: !_yukleniyor,
                   style: Yazi.govde,
+                  // Yazarken anlık geri bildirim: kullanıcı "Kayıt ol"a basıp
+                  // reddedilmeyi beklemesin.
+                  onChanged: (v) =>
+                      setState(() => _sifreNot = _servis.sifreHatasi(v)),
                   decoration: const InputDecoration(
-                    hintText: 'Şifre (en az 6 karakter)',
+                    hintText: 'Şifre (en az 8 karakter, harf + rakam)',
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
                 ),
+                if (_sifreCtrl.text.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _sifreNot ?? 'Şifre yeterince güçlü',
+                    style: Yazi.stil(12, FontWeight.w600,
+                        _sifreNot == null ? Renkler.neon : Renkler.tehlike),
+                  ),
+                ],
                 const SizedBox(height: 14),
 
                 TextField(

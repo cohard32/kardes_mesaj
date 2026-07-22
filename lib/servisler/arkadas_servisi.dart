@@ -139,6 +139,61 @@ class ArkadasServisi {
     await _friendships.doc(ciftKimligi(me, digerUid)).delete();
   }
 
+  // ═══════════════ ENGELLEME ═══════════════
+  // Doküman kimliği = ciftKimligi (friendships/chats ile AYNI) → A'nın B'yi
+  // engellemesi ile B'nin A'yı engellemesi TEK dokümandır. Engel varken
+  // İKİ TARAF da mesaj atamaz ve arama başlatamaz (kural: firestore.rules
+  // `engelli()`), ama eski geçmiş görünmeye devam eder.
+
+  CollectionReference<Map<String, dynamic>> get _engeller =>
+      _db.collection('engellenenler');
+
+  /// Bu kişiyle aramda engel var mı ve varsa KİM koydu (canlı).
+  /// null → engel yok. Değer → engeli koyanın uid'i.
+  Stream<String?> engelDinle(String digerUid) {
+    final me = _uid;
+    if (me == null) return Stream<String?>.value(null);
+    return _engeller
+        .doc(ciftKimligi(me, digerUid))
+        .snapshots()
+        // Hata (izin/ağ) engeli VAR saymamalı — aksi halde ağ titrerse sohbet
+        // kilitlenmiş görünür. Sessizce "engel yok" döner, kural yine korur.
+        .handleError((_) {})
+        .map((d) => d.exists ? (d.data()?['engelleyen'] as String?) : null);
+  }
+
+  /// Engeli koyan kişinin uid'i (tek seferlik okuma). null → engel yok.
+  Future<String?> engelKoyan(String digerUid) async {
+    final me = _uid;
+    if (me == null) return null;
+    try {
+      final d = await _engeller.doc(ciftKimligi(me, digerUid)).get();
+      return d.exists ? (d.data()?['engelleyen'] as String?) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Kişiyi engelle. Arkadaşlık BOZULMAZ (kaldırınca sohbet kaldığı yerden
+  /// devam etsin); yalnızca yeni mesaj/arama durur.
+  Future<void> engelle(String digerUid) async {
+    final me = _uid;
+    if (me == null) return;
+    await _engeller.doc(ciftKimligi(me, digerUid)).set({
+      'uidler': [me, digerUid]..sort(),
+      'engelleyen': me,
+      'zaman': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Engeli kaldır. ⚠️ Kural gereği yalnızca engeli KOYAN silebilir; karşı
+  /// taraf çağırırsa permission-denied alır (istemcide de buton gizlenir).
+  Future<void> engelKaldir(String digerUid) async {
+    final me = _uid;
+    if (me == null) return;
+    await _engeller.doc(ciftKimligi(me, digerUid)).delete();
+  }
+
   /// Bana gelen bekleyen istekler (canlı).
   Stream<List<ArkadaslikIstegi>> gelenIstekler() {
     final me = _uid;
