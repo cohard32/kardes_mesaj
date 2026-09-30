@@ -151,8 +151,14 @@ Future<void> _oldurulmuskenKabulEdileniAc() async {
   try {
     final calls = await FlutterCallkitIncoming.activeCalls();
     HataServisi.instance.iz('soguk baslangic aktif cagri=${calls.length}');
-    if (calls.isEmpty) return;
-    final chatId = calls.first.id;
+    // ⚠️ YALNIZ KABUL EDİLMİŞ çağrı. activeCalls() henüz ÇALAN (cevaplanmamış)
+    // çağrıları da döndürür; eskiden ilk kayıt koşulsuz kabul ediliyordu →
+    // arama çalarken uygulama simgesine dokunmak aramayı "Kabul"e basmadan
+    // AÇIYOR ve mikrofonu yayına alıyordu. Eklenti kabulde isAccepted=true yazar.
+    final kabulEdilen = calls.where((c) => c.isAccepted).toList();
+    if (kabulEdilen.isEmpty) return;
+    final chatId = kabulEdilen.first.id;
+    if (chatId.isEmpty) return;
     await _aramayiKabulEt(chatId);
   } catch (e) {
     debugPrint('Soğuk başlangıç kurtarma hatası: $e');

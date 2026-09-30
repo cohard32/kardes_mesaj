@@ -264,7 +264,11 @@ class _IstekSatiri extends StatelessWidget {
                 Uc3DDugme(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  onTap: () => arkadas.kabulEt(istek),
+                  onTap: () => arkadas.kabulEt(istek).catchError((_) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('Kabul edilemedi, tekrar dene.')));
+                  }),
                   cocuk: Text('Kabul',
                       style: Yazi.stil(12, FontWeight.w800, Renkler.metinKoyu)),
                 ),

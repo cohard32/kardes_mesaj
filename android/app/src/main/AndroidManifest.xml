@@ -42,9 +42,11 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true">
+            android:windowSoftInputMode="adjustResize">
+            <!-- showWhenLocked/turnScreenOn BURADA YOK (kasıtlı): kalıcı açıkken
+                 telefon sohbet ekranında kilitlenince mesajlar kilit ekranının
+                 ÜSTÜNDE, kilit açılmadan görünüyordu. Artık yalnız arama ekranı
+                 açıkken MainActivity "kilitUstunde" ile dinamik açılıyor. -->
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues

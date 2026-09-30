@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (51 senaryo).
+// Firestore güvenlik kuralları birim testi (64 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 51 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 64 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -14,7 +14,7 @@ import {
 import { readFileSync } from 'node:fs';
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
-  Timestamp as TS,
+  writeBatch, Timestamp as TS,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -184,6 +184,51 @@ log(await ok(assertSucceeds(deleteDoc(doc(A(), ENGEL)))),
   'N11 engeli KOYAN kaldirabilir (pozitif)');
 log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}/messages/n_ok`), { gonderen:'alice', metin:'tekrar' }))),
   'N12 engel kalkinca mesajlasma devam eder (pozitif)');
+
+// ---- KIMLIK TUTARLILIGI (guvenlik denetimi v1.8.1) ----
+// Asagidaki saldirilarin HEPSI eski kurallarda BASARILIYDI (emulatorde dogrulandi).
+const M = () => env.authenticatedContext('mallory').firestore();
+const F = () => env.authenticatedContext('frank').firestore();
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  // Eski kurallarla yazilabilmis SAHTE istek: kimlik kurban_mallory ama
+  // gonderen mallory (kurban hic istek gondermedi).
+  await setDoc(doc(db, 'friend_requests/kurban_mallory'), { gonderenUid:'mallory', alanUid:'kurban', durum:'bekliyor' });
+  await setDoc(doc(db, 'friend_requests/erin_frank'), { gonderenUid:'erin', alanUid:'frank', durum:'bekliyor' });
+  await setDoc(doc(db, 'users/yeni'), { cevrimici: false }); // profili kurulmamis hesap
+});
+log(await ok(assertFails(setDoc(doc(M(), 'friend_requests/kurban2_mallory'), { gonderenUid:'mallory', alanUid:'kurban2', durum:'bekliyor' }))),
+  'G1 kimligi {gonderen}_{alan} OLMAYAN istek olusturulamaz');
+log(await ok(assertSucceeds(setDoc(doc(M(), 'friend_requests/mallory_kurban2'), { gonderenUid:'mallory', alanUid:'kurban2', durum:'bekliyor' }))),
+  'G2 dogru kimlikli istek olusturulabilir (pozitif)');
+log(await ok(assertFails(setDoc(doc(M(), `friendships/${pair('kurban','mallory')}`), { uidler:['kurban','mallory'] }))),
+  'G3 SAHTE istege dayanarak onaysiz arkadaslik KURULAMAZ');
+log(await ok(assertFails(setDoc(doc(F(), `friendships/${pair('alice','carol')}`), { uidler:['erin','frank'] }))),
+  'G4 arkadaslik BASKALARININ cift kimligine yazilamaz');
+log(await ok(assertSucceeds(setDoc(doc(F(), `friendships/${pair('erin','frank')}`), { uidler:['erin','frank'] }))),
+  'G5 gercek istegi kabul eden arkadaslik kurabilir (pozitif)');
+log(await ok(assertFails(setDoc(doc(M(), `engellenenler/${AB}`), { uidler:['alice','mallory'], engelleyen:'mallory' }))),
+  'G6 yabanci BASKALARININ arasina engel KOYAMAZ (kimlik != cift)');
+log(await ok(assertFails(updateDoc(doc(A(), 'users/alice'), { kullaniciAdi:'bob' }))),
+  'G7 profilde BASKASININ @adi yazilamaz (taklit)');
+log(await ok(assertFails(setDoc(doc(env.authenticatedContext('yeni').firestore(), 'users/yeni'), { kullaniciAdi:'bob' }, { merge:true }))),
+  'G8 sahibi olunmayan @ad profile yazilamaz');
+log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { ad:'Alice 2', cevrimici:true }, { merge:true }))),
+  'G9 @ad degismeden profil guncellenebilir (pozitif)');
+{
+  const db = env.authenticatedContext('yeni').firestore();
+  const b = writeBatch(db);
+  b.set(doc(db, 'usernames/yeniad'), { uid:'yeni' });
+  b.set(doc(db, 'users/yeni'), { ad:'Yeni', kullaniciAdi:'yeniad' });
+  log(await ok(assertSucceeds(b.commit())),
+    'G10 kayit: @ad rezervi + profil AYNI islemde yazilabilir (pozitif)');
+}
+log(await ok(assertFails(updateDoc(doc(A(), `chats/${AB}`), { katilimcilar:['alice','bob','carol'] }))),
+  'G11 katilimci listesine UCUNCU kisi eklenemez');
+log(await ok(assertFails(updateDoc(doc(A(), `chats/${AB}`), { katilimcilar:['alice'] }))),
+  'G12 karsi taraf sohbetten CIKARILAMAZ');
+log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}`), { okunmamis:{ alice:0 }, yaziyor:{ alice:false } }, { merge:true }))),
+  'G13 okunmamis/yaziyor meta guncellemesi calisir (pozitif)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

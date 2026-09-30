@@ -341,6 +341,14 @@ class BildirimServisi {
     return d.mod != 'normal' || d.seviye == 0;
   }
 
+  /// Uygulamanın kilit ekranının ÜSTÜNDE görünmesini açar/kapatır.
+  /// Yalnız arama ekranı açıkken true olmalı (bkz. MainActivity "kilitUstunde").
+  Future<void> kilitUstunde(bool acik) async {
+    try {
+      await _native.invokeMethod<void>('kilitUstunde', {'acik': acik});
+    } catch (_) {}
+  }
+
   /// Tam ekran bildirim izni ayar ekranını açar.
   Future<void> tamEkranAyarlariniAc() async {
     try {
@@ -570,6 +578,31 @@ class BildirimServisi {
     }
   }
 
+  /// ÇIKIŞ öncesi: bu cihazın push token'ını hesaptan ayırır ve geçersiz kılar.
+  /// ⚠️ Yapılmazsa çıkış yapılan hesabın mesaj/arama bildirimleri bu cihaza
+  /// gelmeye devam eder; aynı cihazda başka hesapla girilirse ÖNCEKİ hesabın
+  /// mesaj içerikleri bildirimde görünür. signOut'tan ÖNCE çağrılmalı
+  /// (sonrasında kurallar kendi dokümanına yazmaya izin vermez).
+  Future<void> oturumuKapat() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      final sil = {
+        'fcmToken': FieldValue.delete(),
+        'bildirimKanali': FieldValue.delete(),
+      };
+      try {
+        await _users.doc(uid).set(sil, SetOptions(merge: true));
+      } catch (_) {}
+      try {
+        await _kullanicilar.doc(uid).set(sil, SetOptions(merge: true));
+      } catch (_) {}
+    }
+    try {
+      // Token'ı sunucuda da geçersiz kıl; sonraki girişte getToken yenisini üretir.
+      await _mesajlasma.deleteToken();
+    } catch (_) {}
+  }
+
   // ÖLÜ KOD SİLİNDİ (FAZ 4 öncesi 2 kişilik akış):
   //   karsiTarafaBildirimGonder / karsiTarafaAramaGonder /
   //   karsiTarafaAramaIptal / _push
@@ -602,7 +635,9 @@ class BildirimServisi {
         'notification': {
           'channel_id': kanal,
           'visibility': 'PUBLIC',
-          'tag': 'km_$hedefUid',
+          // Etiket SOHBET başına: eskiden alıcı başınaydı ('km_$hedefUid') →
+          // farklı arkadaşlardan gelen bildirimler birbirinin YERİNE geçiyordu.
+          'tag': 'km_${ekstraData?['chatId'] ?? hedefUid}',
         },
       },
     });

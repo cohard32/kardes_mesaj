@@ -115,6 +115,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   final _dalgaVN = ValueNotifier<List<double>>(<double>[]);
   final _iptalBolgesindeVN = ValueNotifier<bool>(false);
 
+  // Kayıt BAŞLATILIRKEN (izin/dosya/start await'leri sürerken) parmak
+  // kalkarsa bitir olayı erken gelir ve kaybolurdu → kayıt açık kalıp asılırdı.
+  bool _kayitBaslatiliyor = false;
+  bool _kayitErkenBirakildi = false;
+
+  // Uygulama ön planda mı? Arka plandayken gelen mesajlar "görüldü" sayılmaz.
+  bool _onPlanda = true;
+  // Son alınan mesaj listesi (ön plana dönünce görüldü işaretlemek için).
+  List<Mesaj> _sonMesajlar = const [];
+
   // Emoji paneli
   bool _emojiAcik = false;
 
@@ -130,6 +140,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    final durum = WidgetsBinding.instance.lifecycleState;
+    _onPlanda = durum == null || durum == AppLifecycleState.resumed;
     BildirimServisi.instance.tokenKaydet();
     _presence.cevrimiciYap();
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
@@ -274,7 +286,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _kayitTimer?.cancel();
     _ampSub?.cancel();
     _engelAbone?.cancel();
-    _presence.cevrimdisiYap();
+    // "Yazıyor" açıkken çıkılırsa karşı tarafta sonsuza kadar asılı kalmasın
+    // (zamanlayıcı yukarıda iptal edildiği için false hiç gönderilmiyordu).
+    if (_yaziyorGonderildi) _presence.yaziyorAyarla(widget.chatId, false);
+    // ⚠️ cevrimdisiYap() BURADA ÇAĞRILMAZ: sohbetten çıkınca uygulama hâlâ
+    // açık (AnaKabuk). Eskiden kullanıcı ana ekrana dönünce karşı tarafa
+    // "çevrimdışı" görünüyordu. Ön/arka plan geçişlerini AnaKabuk yönetir.
     _kayitci.dispose();
     _mesajCtrl.dispose();
     _scrollCtrl.dispose();
@@ -288,13 +305,29 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _onPlanda = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       _presence.cevrimiciYap();
+      // Arka plandayken gelenleri şimdi (kullanıcı gerçekten görünce) işaretle.
+      _gorulduGuncelle(_sonMesajlar);
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _presence.cevrimdisiYap();
     }
+  }
+
+  /// Karşıdan gelen görülmemiş mesaj varsa "görüldü" + okunmamış sıfırla.
+  /// ⚠️ Eskiden build içinde KOŞULSUZ çağrılıyordu: her yeniden çizimde
+  /// (emoji paneli, yükleme göstergesi...) bir Firestore yazması yapılıyor
+  /// (Spark kotası) ve uygulama arka plandayken gelen mesajlar da "görüldü"
+  /// sayılıyordu.
+  void _gorulduGuncelle(List<Mesaj> mesajlar) {
+    if (!_onPlanda) return;
+    final uid = _uid;
+    if (!mesajlar.any((m) => m.gonderen != uid && !m.goruldu)) return;
+    _servis.gorulduIsaretle(widget.chatId, mesajlar).catchError((_) {});
+    _sohbetServis.okunduIsaretle(widget.chatId);
   }
 
   void _yaziyorDinle() {
@@ -460,7 +493,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
     if (url != null && url.isNotEmpty) {
       _zorlaKaydir = true;
-      await _servis.gifGonder(widget.chatId, widget.karsi.uid, url);
+      try {
+        await _servis.gifGonder(widget.chatId, widget.karsi.uid, url);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('GIF gönderilemedi. Tekrar dene.')),
+        );
+      }
     }
   }
 
@@ -493,7 +533,22 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   /// Basılı tutma başladı → kaydı başlat.
   /// setState YOK: güncellemeler ValueNotifier üzerinden gider (yanıp sönme yok).
   Future<void> _kayitBaslat() async {
-    if (_kayitYapiliyorVN.value) return;
+    if (_kayitYapiliyorVN.value || _kayitBaslatiliyor) return;
+    _kayitBaslatiliyor = true;
+    _kayitErkenBirakildi = false;
+    try {
+      await _kayitBaslatIc();
+    } finally {
+      _kayitBaslatiliyor = false;
+    }
+    // Parmak, kayıt başlarken kalktıysa: yanlışlıkla dokunma → iptal.
+    if (_kayitErkenBirakildi && _kayitYapiliyorVN.value) {
+      await _kayitIptal();
+      if (mounted) _mikrofonBilgi();
+    }
+  }
+
+  Future<void> _kayitBaslatIc() async {
     if (!await _kayitci.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -534,7 +589,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   /// Parmak kalktı → iptal bölgesindeyse çöpe at, değilse gönder.
   Future<void> _kayitBitir() async {
-    if (!_kayitYapiliyorVN.value) return;
+    if (!_kayitYapiliyorVN.value) {
+      if (_kayitBaslatiliyor) _kayitErkenBirakildi = true;
+      return;
+    }
     if (_iptalBolgesindeVN.value) {
       await _kayitIptal();
       return;
@@ -580,12 +638,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   Future<void> _medyaGonder(File dosya, MesajTipi tip) async {
     setState(() => _yukleniyor = true);
-    final ok = await _servis.medyaGonder(
-      widget.chatId,
-      widget.karsi.uid,
-      dosya,
-      tip,
-    );
+    var ok = false;
+    try {
+      ok = await _servis.medyaGonder(
+        widget.chatId,
+        widget.karsi.uid,
+        dosya,
+        tip,
+      );
+    } catch (_) {
+      // Firestore yazması reddedildi (engel / arkadaşlık bitti / ağ).
+      // ⚠️ Eskiden yakalanmıyordu → yükleme göstergesi SONSUZA kadar kalıyordu.
+      ok = false;
+    }
     if (!mounted) return;
     setState(() => _yukleniyor = false);
     if (!ok) {
@@ -640,7 +705,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               child: StreamBuilder<List<Mesaj>>(
                 stream: _mesajlarAkisi, // önbellekli (her build'de yenilenmez)
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
+                  // Sayfalamada akış yenilenirken ESKİ liste gösterilmeye devam
+                  // eder (StreamBuilder veriyi korur) → spinner'a düşüp kaydırma
+                  // konumunu kaybetmez. Spinner yalnız ilk yüklemede.
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      !snapshot.hasData) {
                     return const Center(
                       child: CircularProgressIndicator(color: Renkler.neon),
                     );
@@ -655,8 +724,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   final mesajlar = snapshot.data ?? [];
                   // Sayfalama durumunu güncelle: gelen sayı istenen limitten azsa
                   // en eski mesaja ulaşılmıştır (daha fazla yükleme yok).
-                  _eskiYukleniyor = false;
-                  _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                  // ⚠️ Yeni (daha büyük limitli) akış henüz gelmediyse ESKİ
+                  // liste gösteriliyor → onunla "hepsi yüklendi" hesaplanırsa
+                  // sayfalama kalıcı olarak durur. Yalnız taze veriyle güncelle.
+                  if (snapshot.connectionState != ConnectionState.waiting) {
+                    _eskiYukleniyor = false;
+                    _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                  }
                   if (mesajlar.isEmpty) {
                     return const _BosDurum(
                       ikon: Icons.chat_bubble_outline_rounded,
@@ -664,8 +738,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     );
                   }
 
-                  _servis.gorulduIsaretle(widget.chatId, mesajlar);
-                  _sohbetServis.okunduIsaretle(widget.chatId);
+                  _sonMesajlar = mesajlar;
+                  _gorulduGuncelle(mesajlar);
                   _yeniMesajKaydir(mesajlar.length);
 
                   return ListView.builder(

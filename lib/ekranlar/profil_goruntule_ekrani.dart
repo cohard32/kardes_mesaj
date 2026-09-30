@@ -55,14 +55,22 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
 
   Future<void> _istekGonder() async {
     setState(() => _islemde = true);
-    await _arkadas.istekGonder(widget.kullanici.uid);
+    var basarili = true;
+    try {
+      await _arkadas.istekGonder(widget.kullanici.uid);
+    } catch (_) {
+      // ⚠️ Yakalanmazsa _islemde true kalıp düğme kalıcı pasif oluyordu.
+      basarili = false;
+    }
     if (!mounted) return;
     setState(() => _islemde = false);
     await _durumYukle();
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('İstek gönderildi ✓')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(basarili
+            ? 'İstek gönderildi ✓'
+            : 'İstek gönderilemedi, tekrar dene.'),
+      ));
     }
   }
 

@@ -28,8 +28,32 @@ service cloud.firestore {
     }
     // Karşı taraftan BANA bekleyen bir arkadaşlık isteği var mı?
     // (istek id = {gonderen}_{alan}, alan = ben) → onaysız arkadaşlığı önler.
+    // ⚠️ Yalnız VARLIK yetmez: isteğin içeriği de kimliğiyle tutarlı olmalı
+    // (gönderen = karşı taraf, alan = ben). Aksi halde saldırgan kendi yazdığı
+    // sahte kimlikli bir isteği "bana gelen istek" gibi kullanabilirdi.
     function banaIstekVar(uidler) {
-      return exists(/databases/$(database)/documents/friend_requests/$(digerUid(uidler) + '_' + request.auth.uid));
+      let istek = get(/databases/$(database)/documents/friend_requests/$(digerUid(uidler) + '_' + request.auth.uid));
+      return istek != null
+        && istek.data.gonderenUid == digerUid(uidler)
+        && istek.data.alanUid == request.auth.uid;
+    }
+    // İki uid'den SIRALI çift kimliği (istemcideki ciftKimligi ile aynı).
+    // Çift kimlikli dokümanların (friendships/chats/engellenenler) kimliği
+    // içeriğiyle eşleşmeli — yoksa biri BAŞKALARININ çift kimliğine yazabilir.
+    function ciftId(uidler) {
+      return uidler[0] < uidler[1]
+        ? uidler[0] + '_' + uidler[1]
+        : uidler[1] + '_' + uidler[0];
+    }
+    // Profilde kullanıcı adı yalnızca SAHİBİ olunan (usernames/{ad}.uid == ben)
+    // bir adla yazılabilir; değişmeyen ad serbest. getAfter → kayıt
+    // transaction'ında usernames ile users AYNI anda yazıldığında da çalışır.
+    function kullaniciAdiSahibi() {
+      let yeni = request.resource.data;
+      return !('kullaniciAdi' in yeni)
+        || (resource != null && 'kullaniciAdi' in resource.data
+            && yeni.kullaniciAdi == resource.data.kullaniciAdi)
+        || getAfter(/databases/$(database)/documents/usernames/$(yeni.kullaniciAdi)).data.uid == request.auth.uid;
     }
     // ENGEL: doküman kimliği ÇİFT KİMLİĞİ ile aynı (sıralı uid'ler) →
     // A'nın B'yi engellemesi ile B'nin A'yı engellemesi AYNI dokümandır.
@@ -59,7 +83,9 @@ service cloud.firestore {
     //    Token'ı arkadaşa kısıtlamak isteğe-bağlı bildirimi kırar → kabul edildi.
     match /users/{uid} {
       allow read: if girisli();
-      allow create, update: if benim(uid);
+      // ⚠️ kullaniciAdi serbest bırakılırsa biri kendine BAŞKASININ @adını
+      // yazıp aramada onun gibi görünebilirdi (usernames benzersizliği boşa).
+      allow create, update: if benim(uid) && kullaniciAdiSahibi();
       allow delete: if false;
     }
 
@@ -88,9 +114,13 @@ service cloud.firestore {
         resource == null ||
         resource.data.gonderenUid == request.auth.uid ||
         resource.data.alanUid == request.auth.uid);
+      // Kimlik {gonderen}_{alan} OLMAK ZORUNDA: yoksa saldırgan
+      // "kurban_saldirgan" kimlikli bir isteği kendisi yazıp onu kurbandan
+      // gelmiş gibi kabul ederek onaysız arkadaşlık kurabiliyordu.
       allow create: if girisli()
         && request.resource.data.gonderenUid == request.auth.uid
-        && request.resource.data.gonderenUid != request.resource.data.alanUid;
+        && request.resource.data.gonderenUid != request.resource.data.alanUid
+        && id == request.resource.data.gonderenUid + '_' + request.resource.data.alanUid;
       allow update, delete: if girisli() && (
         resource.data.gonderenUid == request.auth.uid ||
         resource.data.alanUid == request.auth.uid);
@@ -108,6 +138,7 @@ service cloud.firestore {
       allow create: if girisli()
         && request.auth.uid in request.resource.data.uidler
         && request.resource.data.uidler.size() == 2
+        && id == ciftId(request.resource.data.uidler)
         && banaIstekVar(request.resource.data.uidler);
       allow delete: if girisli() && request.auth.uid in resource.data.uidler;
       allow update: if false;
@@ -125,9 +156,16 @@ service cloud.firestore {
       allow create: if girisli()
         && request.auth.uid in request.resource.data.katilimcilar
         && request.resource.data.katilimcilar.size() == 2
+        && chatId == ciftId(request.resource.data.katilimcilar)
         && arkadasMi(chatId);
-      allow update: if girisli() &&
-        request.auth.uid in resource.data.katilimcilar;
+      // Yalnız meta alanları değişebilir. ⚠️ Eskiden katılımcı, katilimcilar
+      // listesine ÜÇÜNCÜ birini ekleyip tüm geçmişi ona açabiliyor ya da
+      // karşı tarafı listeden çıkarabiliyordu.
+      allow update: if girisli()
+        && request.auth.uid in resource.data.katilimcilar
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['sonMesaj', 'sonMesajZamani', 'sonMesajGonderen',
+                       'okunmamis', 'yaziyor']);
       allow delete: if false;
 
       // ---- MESAJLAR ----
@@ -185,6 +223,7 @@ service cloud.firestore {
       allow create: if girisli()
         && request.auth.uid in request.resource.data.uidler
         && request.resource.data.uidler.size() == 2
+        && id == ciftId(request.resource.data.uidler)
         && request.resource.data.engelleyen == request.auth.uid;
       allow delete: if girisli() && resource.data.engelleyen == request.auth.uid;
       allow update: if false;

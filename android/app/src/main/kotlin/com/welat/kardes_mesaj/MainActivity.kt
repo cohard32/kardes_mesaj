@@ -123,6 +123,24 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    // Kilit ekranının ÜSTÜNDE gösterme — YALNIZ arama ekranı açıkken
+                    // (AramaEkrani açılınca true, kapanınca false). Manifest'te
+                    // kalıcı olsaydı sohbetler kilit açılmadan okunabilirdi.
+                    "kilitUstunde" -> {
+                        val acik = call.argument<Boolean>("acik") ?: false
+                        if (Build.VERSION.SDK_INT >= 27) {
+                            setShowWhenLocked(acik)
+                            setTurnScreenOn(acik)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            val bayraklar =
+                                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                            if (acik) window.addFlags(bayraklar) else window.clearFlags(bayraklar)
+                        }
+                        result.success(null)
+                    }
+
                     // Telefonun zil durumu: 'normal' | 'titresim' | 'sessiz'
                     // + zil ses seviyesi 0 mı? Zil çalmıyor şikayetinin en
                     // yaygın sebebi cihaz ayarıdır; kullanıcıyı bilgilendirmek

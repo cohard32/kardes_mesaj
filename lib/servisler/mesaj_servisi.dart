@@ -26,6 +26,10 @@ class MesajServisi {
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
   String? _benimAdimCache;
+
+  /// Çıkışta çağrılır: önbellekteki ad bir sonraki hesaba taşınmasın
+  /// (yoksa yeni hesabın bildirimleri ESKİ kullanıcının adıyla gider).
+  void oturumuSifirla() => _benimAdimCache = null;
   Future<String> _benimAdim() async {
     if (_benimAdimCache != null) return _benimAdimCache!;
     final uid = _uid;

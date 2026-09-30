@@ -40,7 +40,11 @@ class SohbetListesiEkrani extends StatelessWidget {
         child: StreamBuilder<List<Sohbet>>(
           stream: SohbetServisi.instance.sohbetleriDinle(),
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
+            // Üst kabuk yeniden çizilince akış yeniden kurulur; o sırada eski
+            // liste korunur (StreamBuilder veriyi tutar) → spinner yalnız ilk
+            // yüklemede görünür, sekme değişiminde liste YANIP SÖNMEZ.
+            if (snap.connectionState == ConnectionState.waiting &&
+                !snap.hasData) {
               return const Center(
                 child: CircularProgressIndicator(color: Renkler.neon),
               );

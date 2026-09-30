@@ -9,8 +9,10 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../parcalar/kullanici_avatar.dart';
+import '../servisler/bildirim_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../servisler/medya_servisi.dart';
+import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../tema.dart';
 import 'ayarlar_ekrani.dart';
@@ -207,6 +209,8 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
     );
     if (onay == true) {
       await PresenceServisi.instance.cevrimdisiYap();
+      await BildirimServisi.instance.oturumuKapat();
+      MesajServisi.instance.oturumuSifirla();
       await FirebaseAuth.instance.signOut();
     }
   }

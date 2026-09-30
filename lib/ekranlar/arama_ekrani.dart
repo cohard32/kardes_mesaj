@@ -4,6 +4,7 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 
 import '../servisler/arama_servisi.dart';
+import '../servisler/bildirim_servisi.dart';
 import '../servisler/hata_servisi.dart';
 import '../servisler/ringback_servisi.dart';
 import '../tema.dart';
@@ -50,6 +51,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
     super.initState();
     _hoparlor = _video;
     HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name}');
+    // Arama sürerken ekran kilitliyse de görünsün (yalnız bu ekran açıkken).
+    BildirimServisi.instance.kilitUstunde(true);
     // Ekran çizildikten sonra "hazır" işaretini bırak. Bir daha NATIVE çökme
     // olursa son_adim'da nerede öldüğü net görünsün (önceki çökme tam da
     // burada, kamera önizlemesinde oluyordu — artık önizleme çağrılmıyor).
@@ -103,6 +106,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _arama.karsiUid.removeListener(_baglantiKontrol);
     _sub?.cancel();
     RingbackServisi.instance.durdur(); // güvenlik ağı (çift çağrı güvenli)
+    BildirimServisi.instance.kilitUstunde(false);
     if (!_kapandi) _arama.bitir(widget.chatId);
     super.dispose();
   }

@@ -191,7 +191,11 @@ class _SonucSatiriState extends State<_SonucSatiri> {
 
   Future<void> _istekGonder() async {
     setState(() => _islemde = true);
-    await _arkadas.istekGonder(widget.kullanici.uid);
+    try {
+      await _arkadas.istekGonder(widget.kullanici.uid);
+    } catch (_) {
+      return _islemHatasi();
+    }
     if (!mounted) return;
     setState(() {
       _islemde = false;
@@ -203,12 +207,25 @@ class _SonucSatiriState extends State<_SonucSatiri> {
     setState(() => _islemde = true);
     // Bana gelen isteği bul → kabul et
     final me = widget.kullanici; // gönderen
-    await _arkadas.istekGonder(me.uid); // ters istek varsa doğrudan kabul eder
+    try {
+      await _arkadas.istekGonder(me.uid); // ters istek varsa doğrudan kabul eder
+    } catch (_) {
+      return _islemHatasi();
+    }
     if (!mounted) return;
     setState(() {
       _islemde = false;
       _durum = IliskiDurumu.arkadas;
     });
+  }
+
+  // ⚠️ Hata yakalanmazsa _islemde true kalıyor → düğme KALICI pasif oluyordu.
+  void _islemHatasi() {
+    if (!mounted) return;
+    setState(() => _islemde = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('İşlem yapılamadı, tekrar dene.')),
+    );
   }
 
   @override

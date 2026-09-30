@@ -26,6 +26,12 @@ class AnaKabuk extends StatefulWidget {
 class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
   int _sekme = 0;
 
+  // Rozet akışı BİR KEZ kurulur. Eskiden build içinde oluşturuluyordu →
+  // her sekme değişiminde (setState) Firestore dinleyicisi yeniden kuruluyor,
+  // rozet bir an kaybolup geri geliyordu.
+  late final Stream<int> _okunmamisAkisi =
+      SohbetServisi.instance.toplamOkunmamis();
+
   @override
   void initState() {
     super.initState();
@@ -106,7 +112,7 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
                 ikon: Icons.forum_outlined,
                 seciliIkon: Icons.forum,
                 secili: _sekme == 0,
-                sayacAkisi: SohbetServisi.instance.toplamOkunmamis(),
+                sayacAkisi: _okunmamisAkisi,
               ),
               label: 'Sohbetler',
             ),

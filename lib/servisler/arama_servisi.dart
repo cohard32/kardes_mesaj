@@ -397,6 +397,10 @@ class AramaServisi {
 
   /// Açılışta kalmış (stale) arama kaydını temizler (>90 sn).
   Future<void> eskiAramayiTemizle(String chatId) async {
+    // ⚠️ Bu cihazda SÜREN bir arama varsa dokunma: 90 sn'den uzun bir aramada
+    // aynı kişinin mesaj bildirimine dokunmak sohbeti açıp aramayı 'bitti'
+    // işaretliyor ve konuşmayı düşürüyordu.
+    if (aktifAramaVar) return;
     try {
       final d = await aktifArama(chatId);
       if (d == null) return;
