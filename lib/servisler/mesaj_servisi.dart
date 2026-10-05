@@ -25,14 +25,27 @@ class MesajServisi {
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
+  // Bildirim başlığı için kendi adım. ⚠️ Önbellek UID'ye bağlıdır: eskiden
+  // tek bir alan vardı ve çıkış/başka hesapla giriş sonrası bildirimler
+  // ÖNCEKİ hesabın adıyla gidiyordu; ad değişince de güncellenmiyordu.
   String? _benimAdimCache;
+  String? _benimAdimUid;
   Future<String> _benimAdim() async {
-    if (_benimAdimCache != null) return _benimAdimCache!;
     final uid = _uid;
     if (uid == null) return 'Mesaj';
+    final onbellek = _benimAdimCache;
+    if (onbellek != null && _benimAdimUid == uid) return onbellek;
     final k = await KullaniciServisi.instance.profilGetir(uid);
-    _benimAdimCache = (k?.ad.isNotEmpty ?? false) ? k!.ad : 'Mesaj';
-    return _benimAdimCache!;
+    final ad = (k?.ad.isNotEmpty ?? false) ? k!.ad : 'Mesaj';
+    _benimAdimCache = ad;
+    _benimAdimUid = uid;
+    return ad;
+  }
+
+  /// Profil adı değişince / çıkışta çağrılır.
+  void adOnbelleginiSifirla() {
+    _benimAdimCache = null;
+    _benimAdimUid = null;
   }
 
   /// Bir sohbetin SON [limit] mesajını zaman sırasına göre (eski → yeni) dinler.

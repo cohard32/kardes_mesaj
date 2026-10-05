@@ -131,7 +131,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     BildirimServisi.instance.tokenKaydet();
-    _presence.cevrimiciYap();
+    // NOT: çevrimiçi/çevrimdışı durumu YALNIZCA AnaKabuk yönetir (bu ekran
+    // her zaman onun üstünde açılır). Eskiden burası da yazıyordu ve sohbetten
+    // geri çıkınca kullanıcı uygulama AÇIKKEN "çevrimdışı" görünüyordu.
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
     HataServisi.instance.iz('SOHBET acildi chat=${widget.chatId}');
     _mesajCtrl.addListener(_yaziyorDinle);
@@ -150,6 +152,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         .listen((e) {
       if (mounted && e != _engelleyen) setState(() => _engelleyen = e);
     });
+    _sohbetAbone = _sohbetServis.sohbetDinle(widget.chatId).listen((s) {
+      _benimOkunmamis = s.benimOkunmamis(_uid);
+      _gorulduGuncelle();
+    }, onError: (Object _) {});
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
   }
@@ -271,10 +277,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _yaziyorTimer?.cancel();
+    // ⚠️ Zamanlayıcı iptal edildiği için "yazmayı bıraktım" sinyali artık
+    // ondan gelmeyecek → yazarken ekrandan çıkılırsa karşı tarafta
+    // "yazıyor..." KALICI takılı kalıyordu. Burada açıkça kapatılır.
+    if (_yaziyorGonderildi) {
+      _presence.yaziyorAyarla(widget.chatId, false);
+    }
     _kayitTimer?.cancel();
     _ampSub?.cancel();
     _engelAbone?.cancel();
-    _presence.cevrimdisiYap();
+    _sohbetAbone?.cancel();
     _kayitci.dispose();
     _mesajCtrl.dispose();
     _scrollCtrl.dispose();
@@ -288,12 +300,50 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _presence.cevrimiciYap();
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.detached) {
-      _presence.cevrimdisiYap();
+    _onPlanda = state == AppLifecycleState.resumed;
+    // Uygulamaya dönüldü → bu arada gelen mesajlar ŞİMDİ görüldü sayılır.
+    if (_onPlanda) _gorulduGuncelle();
+  }
+
+  // ---- GÖRÜLDÜ / OKUNDU ----
+  // ⚠️ Eskiden build() içinden HER yeniden çizimde çağrılıyordu:
+  //  (1) uygulama arka plandayken / ekran kilitliyken (sohbet ekranı yığında
+  //      açık kaldığı için) gelen mesajlar ✓✓ "görüldü" işaretleniyordu —
+  //      kullanıcı görmediği halde;
+  //  (2) emoji paneli, yükleme çubuğu gibi her setState chats/{id}'ye bir
+  //      YAZMA yapıyordu (Spark kotası).
+  // Artık yalnız ekran GÖRÜNÜRKEN ve gerçekten görülmemiş mesaj varken yazılır.
+  bool _onPlanda = true;
+  bool _rotaGorunur = true; // build'de ModalRoute'tan güncellenir
+  List<Mesaj> _sonMesajlar = const [];
+  final Set<String> _gorulduGonderilenler = <String>{};
+
+  // Okunmamış sayacı sohbet dokümanından CANLI izlenir: gönderen, sayacı
+  // mesajı ekledikten SONRA artırır. Yalnız "yeni mesaj gelince sıfırla"
+  // denseydi sıfırlama artırmadan önce düşüp listede sahte "1" kalabilirdi.
+  StreamSubscription<Sohbet>? _sohbetAbone;
+  int _benimOkunmamis = 0;
+
+  void _gorulduGuncelle() {
+    // Üstte başka bir ekran (arama, profil, foto) açıksa görülmedi sayılır.
+    if (!mounted || !_onPlanda || !_rotaGorunur) return;
+    final yeni = _sonMesajlar
+        .where((m) =>
+            m.gonderen != _uid &&
+            !m.goruldu &&
+            !_gorulduGonderilenler.contains(m.id))
+        .toList();
+    if (yeni.isNotEmpty) {
+      _gorulduGonderilenler.addAll(yeni.map((m) => m.id));
+      _servis.gorulduIsaretle(widget.chatId, yeni).catchError((Object e) {
+        // Başarısızsa sonraki çizimde tekrar denensin.
+        _gorulduGonderilenler.removeAll(yeni.map((m) => m.id));
+        HataServisi.instance.iz('goruldu yazilamadi: $e');
+      });
+    }
+    if (_benimOkunmamis > 0) {
+      _benimOkunmamis = 0; // aynı sayaç için tekrar yazma
+      _sohbetServis.okunduIsaretle(widget.chatId);
     }
   }
 
@@ -603,6 +653,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   @override
   Widget build(BuildContext context) {
+    // ModalRoute'a bağımlılık: üstteki ekran kapanıp bu sohbet tekrar en üste
+    // gelince build yeniden çalışır → bekleyen mesajlar o an "görüldü" olur.
+    _rotaGorunur = ModalRoute.of(context)?.isCurrent ?? true;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
@@ -640,23 +693,30 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               child: StreamBuilder<List<Mesaj>>(
                 stream: _mesajlarAkisi, // önbellekli (her build'de yenilenmez)
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: Renkler.neon),
-                    );
-                  }
                   if (snapshot.hasError) {
                     return const _BosDurum(
                       ikon: Icons.error_outline,
                       yazi: 'Mesajlar yüklenemedi',
                     );
                   }
+                  // ⚠️ `waiting` DEĞİL `hasData`: sayfalamada limit artınca
+                  // akış yenilenir ve StreamBuilder eski veriyi koruyarak
+                  // `waiting`e döner. Eskiden bu anda liste yerine spinner
+                  // çiziliyor (yanıp sönme) ve kaydırma konumu kayboluyordu.
+                  if (!snapshot.hasData) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: Renkler.neon),
+                    );
+                  }
 
-                  final mesajlar = snapshot.data ?? [];
-                  // Sayfalama durumunu güncelle: gelen sayı istenen limitten azsa
-                  // en eski mesaja ulaşılmıştır (daha fazla yükleme yok).
-                  _eskiYukleniyor = false;
-                  _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                  final mesajlar = snapshot.data!;
+                  // Sayfalama durumunu YALNIZ yeni limitin verisi gelince
+                  // güncelle: `waiting`teki ESKİ veri (50 < 100) "hepsi
+                  // yüklendi" sanılıp sayfalama erkenden durmasın.
+                  if (snapshot.connectionState == ConnectionState.active) {
+                    _eskiYukleniyor = false;
+                    _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                  }
                   if (mesajlar.isEmpty) {
                     return const _BosDurum(
                       ikon: Icons.chat_bubble_outline_rounded,
@@ -664,8 +724,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     );
                   }
 
-                  _servis.gorulduIsaretle(widget.chatId, mesajlar);
-                  _sohbetServis.okunduIsaretle(widget.chatId);
+                  _sonMesajlar = mesajlar;
+                  WidgetsBinding.instance
+                      .addPostFrameCallback((_) => _gorulduGuncelle());
                   _yeniMesajKaydir(mesajlar.length);
 
                   return ListView.builder(
@@ -969,6 +1030,11 @@ class _MesajBalonu extends StatelessWidget {
 
   // Mesaj türüne göre içerik
   Widget _icerik(BuildContext context) {
+    // ⚠️ BELLEK: fotoğraflar artık ORİJİNAL kalitede (ör. 4000×3000) gidiyor.
+    // cacheWidth verilmezse 220 px'lik balon için görüntü TAM boyutta
+    // çözülür (~48 MB RGBA / foto) → foto dolu sohbette takılma ve OOM.
+    // Balon genişliğine göre çözülür; tam boyut yalnız büyütünce yüklenir.
+    final dpr = MediaQuery.devicePixelRatioOf(context);
     switch (mesaj.tip) {
       case MesajTipi.resim:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
@@ -979,6 +1045,7 @@ class _MesajBalonu extends StatelessWidget {
             child: Image.network(
               mesaj.medyaUrl!,
               width: 220,
+              cacheWidth: (220 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1020,6 +1087,7 @@ class _MesajBalonu extends StatelessWidget {
             child: Image.network(
               mesaj.medyaUrl!,
               width: 170,
+              cacheWidth: (170 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1200,14 +1268,20 @@ class _VideoOynatici extends StatefulWidget {
 class _VideoOynaticiState extends State<_VideoOynatici> {
   VideoPlayerController? _ctrl;
   bool _hazir = false;
+  bool _hata = false;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url))
-      ..initialize().then((_) {
-        if (mounted) setState(() => _hazir = true);
-      });
+    // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
+    // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
+    _ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _ctrl!.initialize().then((_) {
+      if (mounted) setState(() => _hazir = true);
+    }, onError: (Object e) {
+      HataServisi.instance.iz('VIDEO acilamadi: $e');
+      if (mounted) setState(() => _hata = true);
+    });
   }
 
   @override
@@ -1227,7 +1301,10 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
           color: Renkler.zeminDerin,
           borderRadius: widget.kose,
         ),
-        child: const CircularProgressIndicator(color: Renkler.neon),
+        child: _hata
+            ? const Icon(Icons.videocam_off_outlined,
+                color: Renkler.metinSoluk, size: 36)
+            : const CircularProgressIndicator(color: Renkler.neon),
       );
     }
     return GestureDetector(

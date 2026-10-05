@@ -27,10 +27,20 @@ class KullaniciAvatar extends StatelessWidget {
 
     Widget icerik;
     if (foto != null && foto.isNotEmpty) {
+      // ⚠️ Profil fotoğrafı boyut sınırı olmadan yüklenebiliyor (12 MP+).
+      // 40-52 px'lik avatar için tam çözünürlükte decode etmek, sohbet
+      // listesinde her satırda megabaytlarca bellek demekti. Hedefin 2 katına
+      // sığacak şekilde küçültülür (BoxFit.cover kırparken bulanıklaşmasın).
+      final hedef = (boyut * MediaQuery.devicePixelRatioOf(context) * 2).round();
       icerik = ClipRRect(
         borderRadius: kose,
-        child: Image.network(
-          foto,
+        child: Image(
+          image: ResizeImage(
+            NetworkImage(foto),
+            width: hedef,
+            height: hedef,
+            policy: ResizeImagePolicy.fit,
+          ),
           width: boyut,
           height: boyut,
           fit: BoxFit.cover,

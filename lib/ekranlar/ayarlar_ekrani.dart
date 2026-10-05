@@ -8,6 +8,7 @@ import '../servisler/bildirim_servisi.dart';
 import '../servisler/guncelleme_servisi.dart';
 import '../servisler/hata_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/tr_metin.dart';
 
 /// Ayarlar ekranı: bildirim aç/kapa, titreşim, bildirim sesi
 /// (varsayılan / sessiz / yavru kedi / çıngırak / telefondan özel ses).
@@ -34,6 +35,15 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
   Future<void> _sesSec(String deger) async {
     await _ayar.bildirimSesiAyarla(deger);
     await BildirimServisi.instance.sesGuncelle();
+  }
+
+  /// Anahtar karşı tarafa da duyurulur (yayınlanan kanal değişir) →
+  /// uygulama kapalıyken gelen push'lar da ayara uyar.
+  Future<void> _bildirimAcikDegistir(bool acik) async {
+    await _ayar.bildirimAcikAyarla(acik);
+    try {
+      await BildirimServisi.instance.kanalYayinla();
+    } catch (_) {}
   }
 
   Future<void> _onizle(String asset) async {
@@ -85,7 +95,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                 subtitle: Text('Yeni mesaj geldiğinde bildirim göster',
                     style: Yazi.kucuk),
                 value: acik,
-                onChanged: _ayar.bildirimAcikAyarla,
+                onChanged: _bildirimAcikDegistir,
               ),
             ),
           ),
@@ -394,7 +404,7 @@ class _BolumBaslik extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 22, 20, 10),
       child: Text(
-        yazi.toUpperCase(),
+        trBuyuk(yazi),
         style: Yazi.stil(12, FontWeight.w800, Renkler.neon, aralik: 0.8),
       ),
     );

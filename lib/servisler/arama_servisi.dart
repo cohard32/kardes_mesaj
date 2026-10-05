@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:agora_token_service/agora_token_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -285,7 +287,19 @@ class AramaServisi {
     aktifAramaVar = true;
   }
 
-  String _kanalUret() => 'k_${DateTime.now().millisecondsSinceEpoch}';
+  /// Agora kanal adı. ⚠️ Eskiden `k_<milisaniye>` idi → TAHMİN EDİLEBİLİR:
+  /// App Certificate APK'dan çıkarılabildiği için (bkz. gizli.dart) token
+  /// üretebilen biri, arama saatini kabaca bilerek kanal adını deneyip
+  /// görüşmeye sessizce katılabilirdi. 128 bit rastgele ad bunu imkânsız kılar
+  /// (Agora sınırı 64 karakter; bu 34).
+  String _kanalUret() {
+    final r = Random.secure();
+    final hex = List<String>.generate(
+      16,
+      (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+    return 'k_$hex';
+  }
 
   /// ARAYAN: [chatId]'de [alanUid]'i arar. Kanal döner (ekran için).
   Future<String?> aramaBaslat(
