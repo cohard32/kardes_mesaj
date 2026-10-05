@@ -11,7 +11,7 @@
 
 [![Sürüm](https://img.shields.io/github/v/release/cohard32/kardes_mesaj?style=flat-square&color=B4FF3C&labelColor=0D2818&label=s%C3%BCr%C3%BCm)](https://github.com/cohard32/kardes_mesaj/releases/latest)
 [![İndirme](https://img.shields.io/github/downloads/cohard32/kardes_mesaj/total?style=flat-square&color=B4FF3C&labelColor=0D2818&label=indirme)](https://github.com/cohard32/kardes_mesaj/releases)
-![Kural testi](https://img.shields.io/badge/kural%20testi-51%2F51-B4FF3C?style=flat-square&labelColor=0D2818)
+![Kural testi](https://img.shields.io/badge/kural%20testi-77%2F77-B4FF3C?style=flat-square&labelColor=0D2818)
 
 **Aile içi kullanım için yazılmış, reklamsız ve takipsiz bir Android mesajlaşma uygulaması.**
 
@@ -109,11 +109,11 @@ Veriye erişim tamamen [`firestore.rules`](firestore.rules) tarafından belirlen
 - Mesaj silme süresi **sunucuda** doğrulanır — istemci saatine güvenilmez
 - Arama kanalı bilgisi yalnızca o çiftin üyelerine görünür
 
-Kurallar `@firebase/rules-unit-testing` ile emülatörde **51 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
+Kurallar `@firebase/rules-unit-testing` ile emülatörde **77 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
 
 ```bash
 firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-# → 51 PASS / 0 FAIL
+# → 77 PASS / 0 FAIL
 ```
 
 ---

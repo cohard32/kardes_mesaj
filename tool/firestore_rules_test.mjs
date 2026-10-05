@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (51 senaryo).
+// Firestore güvenlik kuralları birim testi (77 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 51 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 77 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -14,7 +14,7 @@ import {
 import { readFileSync } from 'node:fs';
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
-  Timestamp as TS,
+  Timestamp as TS, serverTimestamp, writeBatch, increment,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -65,8 +65,8 @@ const ok = (p) => p.then(()=>true,()=>false);
 log(await ok(assertFails(getDoc(doc(C(), `chats/${AB}`)))), 'T1 yabanci sohbet okuyamaz');
 log(await ok(assertFails(getDoc(doc(C(), `chats/${AB}/messages/m1`)))), 'T2 yabanci mesaj okuyamaz');
 log(await ok(assertFails(setDoc(doc(C(), `chats/${pair('alice','carol')}`), { katilimcilar: ['alice','carol'].sort() }))), 'T3 arkadas olmadan chat acilamaz');
-log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m2`), { gonderen: 'alice', metin: 'sahte' }))), 'T4 baskasi adina mesaj yazilamaz');
-log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}/messages/m3`), { gonderen: 'bob', metin: 'gercek' }))), 'T4b katilimci+arkadas kendi adina yazabilir');
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m2`), { gonderen: 'alice', metin: 'sahte', zaman: serverTimestamp() }))), 'T4 baskasi adina mesaj yazilamaz');
+log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}/messages/m3`), { gonderen: 'bob', metin: 'gercek', zaman: serverTimestamp() }))), 'T4b katilimci+arkadas kendi adina yazabilir');
 log(await ok(assertFails(updateDoc(doc(C(), 'users/alice'), { ad: 'HACKED' }))), 'T5 baskasinin profili degistirilemez');
 const t6 = await getDoc(doc(C(), 'users/alice')).then(s=>({ok:true,token:s.data()?.fcmToken}),()=>({ok:false}));
 log(t6.ok, 'T6 fcmToken (BILINEN SINIR: okunabilir, kabul edildi)', t6.ok?`token='${t6.token}'`:'');
@@ -86,7 +86,7 @@ log(await ok(assertFails(updateDoc(doc(B(), `chats/${AB}/messages/m1`), { gonder
 await env.withSecurityRulesDisabled(async (ctx) => {
   await deleteDoc(doc(ctx.firestore(), `friendships/${AB}`)); // alice-bob artik arkadas degil
 });
-log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m9`), { gonderen: 'bob', metin: 'artik arkadas degiliz' }))), 'T11 arkadas cikinca yeni mesaj GONDERILEMEZ');
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m9`), { gonderen: 'bob', metin: 'artik arkadas degiliz', zaman: serverTimestamp() }))), 'T11 arkadas cikinca yeni mesaj GONDERILEMEZ');
 log(await ok(assertSucceeds(getDoc(doc(B(), `chats/${AB}/messages/m1`)))), 'T11b eski gecmis hala OKUNABILIR');
 log(await ok(assertFails(setDoc(doc(B(), `aramalar/${AB}`), { arayanUid: 'bob', tip: 'ses' }))), 'T11c arkadas cikinca arama baslatilamaz');
 
@@ -168,9 +168,9 @@ log(await ok(assertSucceeds(setDoc(doc(A(), ENGEL), { uidler:['alice','bob'], en
   'N3 kisi karsi tarafi engelleyebilir (pozitif)');
 log(await ok(assertFails(deleteDoc(doc(B(), ENGEL)))),
   'N4 ENGELLENEN taraf engeli KALDIRAMAZ (yoksa engelleme anlamsiz olurdu)');
-log(await ok(assertFails(setDoc(doc(A(), `chats/${AB}/messages/n_a`), { gonderen:'alice', metin:'x' }))),
+log(await ok(assertFails(setDoc(doc(A(), `chats/${AB}/messages/n_a`), { gonderen:'alice', metin:'x', zaman: serverTimestamp() }))),
   'N5 ENGELLEYEN de mesaj atamaz (engel iki yonlu)');
-log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/n_b`), { gonderen:'bob', metin:'x' }))),
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/n_b`), { gonderen:'bob', metin:'x', zaman: serverTimestamp() }))),
   'N6 ENGELLENEN mesaj atamaz');
 log(await ok(assertFails(setDoc(doc(B(), `aramalar/${AB}`), { durum:'cagriliyor' }))),
   'N7 engelliyken ARAMA baslatilamaz');
@@ -182,8 +182,134 @@ log(await ok(assertFails(getDoc(doc(C(), ENGEL)))),
   'N10 yabanci baskalarinin engel dokumanini okuyamaz');
 log(await ok(assertSucceeds(deleteDoc(doc(A(), ENGEL)))),
   'N11 engeli KOYAN kaldirabilir (pozitif)');
-log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}/messages/n_ok`), { gonderen:'alice', metin:'tekrar' }))),
+log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}/messages/n_ok`), { gonderen:'alice', metin:'tekrar', zaman: serverTimestamp() }))),
   'N12 engel kalkinca mesajlasma devam eder (pozitif)');
+
+// ---- KİMLİK / BÜTÜNLÜK DENETİMİ (G-serisi) ----
+// Aşağıdaki açıkların HEPSİ eski kurallarda emülatörde "izin verildi" idi.
+// Her saldırı testinin yanında meşru akışın çalıştığını gösteren pozitif
+// test vardır (kural sıkılaştırması uygulamayı kırmasın).
+const M = () => env.authenticatedContext('mallory').firestore();
+const AM = pair('alice','mallory');
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  await setDoc(doc(db, 'users/mallory'), { ad: 'Mallory', kullaniciAdi: 'mallory' });
+  await setDoc(doc(db, 'usernames/mallory'), { uid: 'mallory' });
+});
+
+// G1: istek kimliği sahteciliği → onaysız arkadaşlık
+log(await ok(assertFails(setDoc(doc(M(), 'friend_requests/alice_mallory'),
+  { gonderenUid:'mallory', alanUid:'alice', durum:'bekliyor' }))),
+  'G1a istek kimligi {gonderen}_{alan} olmali (sahte yon REDDEDILIR)');
+log(await ok(assertFails(setDoc(doc(M(), `friendships/${AM}`), { uidler:['alice','mallory'] }))),
+  'G1b sahte istek olmadan onaysiz arkadaslik KURULAMAZ');
+log(await ok(assertSucceeds(setDoc(doc(M(), 'friend_requests/mallory_alice'),
+  { gonderenUid:'mallory', alanUid:'alice', durum:'bekliyor', tarih: serverTimestamp() }))),
+  'G1c dogru kimlikli istek gonderilebilir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(M(), 'friend_requests/mallory_alice'),
+  { gonderenUid:'mallory', alanUid:'alice', durum:'bekliyor', tarih: serverTimestamp() }))),
+  'G1d gonderen ayni istegi tekrar set edebilir (pozitif)');
+log(await ok(assertFails(updateDoc(doc(A(), 'friend_requests/mallory_alice'), { alanUid:'carol' }))),
+  'G1e istegin taraflari degistirilemez');
+log(await ok(assertSucceeds(deleteDoc(doc(A(), 'friend_requests/mallory_alice')))),
+  'G1f alan kisi istegi reddedebilir/silebilir (pozitif)');
+
+// G2: arkadaşlık/sohbet kimliği uid'lerden türetilmeli
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), 'friend_requests/alice_mallory'),
+    { gonderenUid:'alice', alanUid:'mallory', durum:'bekliyor' });
+});
+log(await ok(assertFails(setDoc(doc(M(), 'friendships/carol_dave'), { uidler:['alice','mallory'] }))),
+  'G2a gercek istekle bile BASKA kimlikli arkadaslik acilamaz');
+log(await ok(assertSucceeds(setDoc(doc(M(), `friendships/${AM}`), { uidler:['alice','mallory'], tarih: serverTimestamp() }))),
+  'G2b gercek istegi kabul etmek calisir (pozitif)');
+log(await ok(assertFails(setDoc(doc(M(), 'chats/carol_dave'), { katilimcilar:['alice','mallory'] }))),
+  'G2c baskalarinin sohbet kimligi ISGAL edilemez');
+log(await ok(assertSucceeds(setDoc(doc(M(), `chats/${AM}`), { katilimcilar:['alice','mallory'], olusturma: serverTimestamp() }))),
+  'G2d arkadas kendi sohbetini acabilir (pozitif)');
+
+// G2e: GERÇEK uid'ler büyük/küçük harf karışıktır. Kurallardaki `a < b`
+// sıralaması istemcideki Dart `sort()` (kod birimi sırası) ile AYNI olmalı —
+// aksi halde her yeni arkadaşlık reddedilirdi. ('A'=65 < 'a'=97)
+{
+  const uBuyuk = 'Ab1xYz', uKucuk = 'aZ9Qrs';
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), `friend_requests/${uKucuk}_${uBuyuk}`),
+      { gonderenUid: uKucuk, alanUid: uBuyuk, durum: 'bekliyor' });
+  });
+  const U = env.authenticatedContext(uBuyuk).firestore();
+  const jsSirali = [uKucuk, uBuyuk].sort().join('_'); // Dart ile aynı sıra
+  log(jsSirali === `${uBuyuk}_${uKucuk}` &&
+      await ok(assertSucceeds(setDoc(doc(U, `friendships/${jsSirali}`), { uidler: [uKucuk, uBuyuk] }))),
+    'G2e karisik harfli uidlerde istemci sirasi kuralla AYNI (pozitif)');
+}
+
+// G3: sahte engel (DoS) — yabancı başkalarının çiftine engel koyamaz
+log(await ok(assertFails(setDoc(doc(M(), `engellenenler/${AB}`), { uidler:['mallory','zz'], engelleyen:'mallory' }))),
+  'G3a yabanci baskalarinin ciftine kendi uidiyle ENGEL KOYAMAZ');
+log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}/messages/g3`), { gonderen:'bob', metin:'hala yazabilirim', zaman: serverTimestamp() }))),
+  'G3b alice-bob mesajlasmasi etkilenmez (pozitif)');
+
+// G4: mesaj zaman damgası sunucu zamanı olmalı (60 sn silme kuralı delinmesin)
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/g4`),
+  { gonderen:'bob', metin:'x', zaman: TS.fromDate(new Date('2100-01-01')) }))),
+  'G4a gelecek tarihli zaman damgasi REDDEDILIR');
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/g4b`),
+  { gonderen:'bob', metin:'x' }))),
+  'G4b zaman damgasiz mesaj REDDEDILIR');
+log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/g4c`),
+  { gonderen:'bob', metin:'x', zaman: serverTimestamp(), goruldu: false, admin: true }))),
+  'G4c bilinmeyen alan eklenemez');
+log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}/messages/g4d`),
+  { gonderen:'bob', metin:'', tip:'resim', medyaUrl:'https://x/y.jpg', zaman: serverTimestamp(), goruldu: false }))),
+  'G4d medya mesaji (istemcinin yazdigi alanlar) gonderilebilir (pozitif)');
+
+// G5: @kullanıcı adı sahteciliği
+log(await ok(assertFails(updateDoc(doc(M(), 'users/mallory'), { kullaniciAdi:'alice' }))),
+  'G5a profilde BASKASININ @adi gosterilemez');
+log(await ok(assertSucceeds(updateDoc(doc(M(), 'users/mallory'), { ad:'Mallory 2', bio:'merhaba', fcmToken:'t' }))),
+  'G5b ad/bio/token guncelleme calisir (pozitif)');
+{
+  // Kayıt akışı: usernames + users AYNI batch/transaction'da (KullaniciServisi.kayitOl)
+  const E = env.authenticatedContext('erin').firestore();
+  const b = writeBatch(E);
+  b.set(doc(E, 'usernames/erin'), { uid:'erin' });
+  b.set(doc(E, 'users/erin'), { ad:'Erin', kullaniciAdi:'erin', cevrimici:false, olusturma: serverTimestamp() });
+  log(await ok(assertSucceeds(b.commit())), 'G5c kayit (usernames+users ayni batch) calisir (pozitif)');
+  const b2 = writeBatch(E);
+  b2.set(doc(E, 'users/erin'), { ad:'Erin', kullaniciAdi:'bob' });
+  log(await ok(assertFails(b2.commit())), 'G5d sonradan @ad DEGISTIRILEMEZ');
+}
+{
+  // Eski hesap: users/{uid} var ama kullaniciAdi YOK (yalnız token) → profilKur
+  const F = env.authenticatedContext('frank').firestore();
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'users/frank'), { fcmToken:'eski' });
+  });
+  const b = writeBatch(F);
+  b.set(doc(F, 'usernames/frank'), { uid:'frank' });
+  b.set(doc(F, 'users/frank'), { ad:'Frank', kullaniciAdi:'frank', cevrimici:false });
+  log(await ok(assertSucceeds(b.commit())), 'G5e eski hesap profil kurulumu calisir (pozitif)');
+}
+
+// G6: katılımcı sohbetten karşı tarafı atamaz / üçüncü kişi ekleyemez
+log(await ok(assertFails(updateDoc(doc(B(), `chats/${AB}`), { katilimcilar:['bob','mallory'] }))),
+  'G6a katilimcilar DEGISTIRILEMEZ');
+log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}`),
+  { sonMesaj:'selam', sonMesajZamani: serverTimestamp(), sonMesajGonderen:'bob', okunmamis:{ alice: increment(1) } },
+  { merge: true }))),
+  'G6b mesaj meta guncellemesi calisir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(A(), `chats/${AB}`), { okunmamis:{ alice: 0 }, yaziyor:{ alice: true } }, { merge: true }))),
+  'G6c okundu + yaziyor guncellemesi calisir (pozitif)');
+
+// G7: engellenen kişi istek (ve dolayısıyla bildirim) gönderemez
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), `engellenenler/${pair('carol','mallory')}`),
+    { uidler:['carol','mallory'], engelleyen:'carol' });
+});
+log(await ok(assertFails(setDoc(doc(M(), 'friend_requests/mallory_carol'),
+  { gonderenUid:'mallory', alanUid:'carol', durum:'bekliyor' }))),
+  'G7 engelliyken arkadaslik istegi GONDERILEMEZ');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();
