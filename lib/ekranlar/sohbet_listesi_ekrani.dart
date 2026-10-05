@@ -12,11 +12,23 @@ import 'sohbet_ekrani.dart';
 
 /// Sohbet listesi — ana ekran (FAZ 4.3). Son mesaja göre sıralı sohbetler.
 /// Boşsa "Arkadaşlarına git" yönlendirmesi. Bir satıra dokununca sohbet açılır.
-class SohbetListesiEkrani extends StatelessWidget {
+class SohbetListesiEkrani extends StatefulWidget {
   /// Alt bardan "Arkadaşlar" sekmesine geçmek için (boş durum butonu).
   final VoidCallback? onArkadaslara;
 
   const SohbetListesiEkrani({super.key, this.onArkadaslara});
+
+  @override
+  State<SohbetListesiEkrani> createState() => _SohbetListesiEkraniState();
+}
+
+class _SohbetListesiEkraniState extends State<SohbetListesiEkrani> {
+  // ⚠️ Akış ÖNBELLEKTE: eskiden build içinde oluşturuluyordu. AnaKabuk her
+  // sekme değişiminde yeniden çizildiği için Firestore dinleyicisi kopup
+  // yeniden kuruluyor, liste yerine bir an spinner görünüyordu.
+  // (SohbetEkrani'ndaki mesaj akışı için daha önce çözülen sorunun aynısı.)
+  late final Stream<List<Sohbet>> _akis =
+      SohbetServisi.instance.sohbetleriDinle();
 
   @override
   Widget build(BuildContext context) {
@@ -38,9 +50,9 @@ class SohbetListesiEkrani extends StatelessWidget {
       ),
       body: Zemin(
         child: StreamBuilder<List<Sohbet>>(
-          stream: SohbetServisi.instance.sohbetleriDinle(),
+          stream: _akis,
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
+            if (!snap.hasData && !snap.hasError) {
               return const Center(
                 child: CircularProgressIndicator(color: Renkler.neon),
               );
@@ -48,7 +60,7 @@ class SohbetListesiEkrani extends StatelessWidget {
             final sohbetler =
                 (snap.data ?? []).where((s) => s.sonMesajZamani != null).toList();
             if (sohbetler.isEmpty) {
-              return _BosDurum(onArkadaslara: onArkadaslara);
+              return _BosDurum(onArkadaslara: widget.onArkadaslara);
             }
             return ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

@@ -189,27 +189,30 @@ class _SonucSatiriState extends State<_SonucSatiri> {
     }
   }
 
-  Future<void> _istekGonder() async {
+  /// İstek gönder / gelen isteği kabul et (ters istek varsa istekGonder
+  /// doğrudan kabul eder). ⚠️ Hata eskiden yakalanmıyordu → _islemde true
+  /// kalıp buton sonsuza kadar dönüyordu.
+  Future<void> _iliskiIslemi(IliskiDurumu basariliysa) async {
     setState(() => _islemde = true);
-    await _arkadas.istekGonder(widget.kullanici.uid);
-    if (!mounted) return;
-    setState(() {
-      _islemde = false;
-      _durum = IliskiDurumu.istekGonderdim;
-    });
+    try {
+      await _arkadas.istekGonder(widget.kullanici.uid);
+      if (!mounted) return;
+      setState(() {
+        _islemde = false;
+        _durum = basariliysa;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _islemde = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('İşlem yapılamadı, tekrar dene.')),
+      );
+    }
   }
 
-  Future<void> _kabulEt() async {
-    setState(() => _islemde = true);
-    // Bana gelen isteği bul → kabul et
-    final me = widget.kullanici; // gönderen
-    await _arkadas.istekGonder(me.uid); // ters istek varsa doğrudan kabul eder
-    if (!mounted) return;
-    setState(() {
-      _islemde = false;
-      _durum = IliskiDurumu.arkadas;
-    });
-  }
+  Future<void> _istekGonder() => _iliskiIslemi(IliskiDurumu.istekGonderdim);
+
+  Future<void> _kabulEt() => _iliskiIslemi(IliskiDurumu.arkadas);
 
   @override
   Widget build(BuildContext context) {

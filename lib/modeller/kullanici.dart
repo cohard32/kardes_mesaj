@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../yardimcilar/tr_metin.dart';
+
 /// Bir kullanıcıyı temsil eder. Firestore'daki `users/{uid}` dokümanı.
 ///
 /// Yapı (FAZ 4.4):
@@ -49,9 +51,11 @@ class Kullanici {
   factory Kullanici.bos(String uid) =>
       Kullanici(uid: uid, ad: '…', kullaniciAdi: '');
 
-  /// Görünecek baş harf (avatar için).
-  String get harf =>
-      ad.trim().isNotEmpty ? ad.trim()[0].toUpperCase() : '?';
+  /// Görünecek baş harf (avatar için). `runes` ile alınır: `[0]` emoji ile
+  /// başlayan adlarda vekil çiftin YARISINI verip bozuk karakter çiziyordu.
+  String get harf => ad.trim().isNotEmpty
+      ? trBuyuk(String.fromCharCode(ad.trim().runes.first))
+      : '?';
 
   Kullanici copyWith({
     String? ad,

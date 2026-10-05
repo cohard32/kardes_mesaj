@@ -98,8 +98,16 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
       return true;
     case 'arama_iptal':
       // Arayan kapattı/vazgeçti → zil sussun, ekran kapansın.
+      // ⚠️ YALNIZ O SOHBETİN çağrısı (CallKit id = chatId). Eskiden
+      // endAllCalls() idi: A ile konuşurken C arayıp "meşgul" alınca C'nin
+      // iptal push'u A ile süren görüşmenin CallKit oturumunu da bitiriyordu.
       try {
-        await FlutterCallkitIncoming.endAllCalls();
+        final chatId = data['chatId']?.toString();
+        if (chatId != null && chatId.isNotEmpty) {
+          await FlutterCallkitIncoming.endCall(chatId);
+        } else {
+          await FlutterCallkitIncoming.endAllCalls(); // eski sürüm push'u
+        }
         HataServisi.instance.iz('CALLKIT iptal: zil susturuldu');
       } catch (_) {}
       return true;
@@ -287,9 +295,19 @@ class BildirimServisi {
   String _kanalIdFor(String secim) =>
       secim == 'varsayilan' ? _kanalVarsayilan : 'km_${_kanalVer}_$secim';
 
-  /// Seçili sese göre aktif bildirim kanalı id'si.
-  String get aktifKanalId =>
-      _kanalIdFor(AyarServisi.instance.bildirimSesi.value);
+  /// "Bildirimler" anahtarı KAPALIYKEN yayınlanan kanal. Android'de önem
+  /// derecesi NONE olan kanal ENGELLİ kanaldır → bu kanala gelen bildirim
+  /// sistem tarafından hiç gösterilmez.
+  /// ⚠️ NEDEN: Mesaj push'u `notification` yükü taşıdığı için uygulama
+  /// arka plandayken/kapalıyken bildirimi Flutter değil SİSTEM çizer;
+  /// anahtar yalnız ön plandaki [_foregroundGoster]'e bakıyordu, yani
+  /// "Bildirimler: kapalı" çoğu zaman HİÇBİR ŞEY yapmıyordu.
+  static const String _kanalKapali = 'km_${_kanalVer}_kapali';
+
+  /// Seçili sese (ve bildirim anahtarına) göre aktif bildirim kanalı id'si.
+  String get aktifKanalId => AyarServisi.instance.bildirimAcik.value
+      ? _kanalIdFor(AyarServisi.instance.bildirimSesi.value)
+      : _kanalKapali;
 
   /// Seçili sesin AndroidNotificationSound karşılığı (Android <8 + detayda).
   AndroidNotificationSound? _sesFor(String secim) {
@@ -429,6 +447,12 @@ class BildirimServisi {
       description: 'Yeni mesaj bildirimleri',
       importance: Importance.high,
       playSound: true, // AÇIKÇA: sistem varsayılan bildirim sesi çalsın
+    ));
+    // Kapalı (Ayarlar > Bildirimler kapalıyken; bkz. [_kanalKapali])
+    await a.createNotificationChannel(const AndroidNotificationChannel(
+      _kanalKapali, 'Kapalı',
+      description: 'Bildirimler ayarlardan kapatıldığında kullanılır',
+      importance: Importance.none,
     ));
     // Sessiz
     await a.createNotificationChannel(AndroidNotificationChannel(
@@ -570,6 +594,35 @@ class BildirimServisi {
     }
   }
 
+  /// ÇIKIŞTA çağrılır: bu cihazın token'ını hesaptan SÖKER.
+  ///
+  /// ⚠️ Eskiden çıkışta token `users/{uid}`'de kalıyordu → çıkış yapılmış
+  /// hesabın mesaj bildirimleri ve GELEN ARAMALARI bu cihaza gelmeye devam
+  /// ediyordu. Aynı telefonda başka bir aile üyesi giriş yapınca iki hesabın
+  /// bildirimleri birden geliyordu (gizlilik sorunu).
+  /// Yalnızca kayıtlı token BU cihazınkiyse silinir — hesap başka bir
+  /// telefonda daha sonra açıldıysa onun token'ına dokunulmaz.
+  Future<void> tokenSil() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final benim = await _mesajlasma.getToken();
+      final sil = {'fcmToken': FieldValue.delete()};
+      for (final ref in [_users.doc(uid), _kullanicilar.doc(uid)]) {
+        try {
+          final kayitli = (await ref.get()).data()?['fcmToken'];
+          if (benim != null && kayitli == benim) {
+            await ref.set(sil, SetOptions(merge: true));
+          }
+        } catch (_) {}
+      }
+      // Yeni hesap girişte TAZE token alır (tokenKaydet).
+      await _mesajlasma.deleteToken();
+    } catch (e) {
+      HataServisi.instance.iz('token silinemedi: $e');
+    }
+  }
+
   // ÖLÜ KOD SİLİNDİ (FAZ 4 öncesi 2 kişilik akış):
   //   karsiTarafaBildirimGonder / karsiTarafaAramaGonder /
   //   karsiTarafaAramaIptal / _push
@@ -622,40 +675,60 @@ class BildirimServisi {
     });
   }
 
+  /// FCM için yetkili HTTP istemcisi + proje kimliği (uygulama ömrü boyunca
+  /// TEK örnek). ⚠️ Eskiden HER mesajda asset okunup JSON çözülüyor, RSA ile
+  /// JWT imzalanıyor ve Google'a ayrı bir OAuth token isteği atılıyordu →
+  /// her bildirimden önce fazladan bir ağ gidiş-dönüşü (mobil veride
+  /// yüzlerce ms). [AutoRefreshingAuthClient] token'ı süresi dolmadan kendisi
+  /// yeniler; hata olursa önbellek sıfırlanır ve sonraki gönderim yeniden kurar.
+  Future<({AutoRefreshingAuthClient istemci, String projectId})>? _fcmKurulum;
+
+  Future<({AutoRefreshingAuthClient istemci, String projectId})> _fcmBaglanti() =>
+      _fcmKurulum ??= () async {
+        final saJson =
+            await rootBundle.loadString('assets/service_account.json');
+        final saMap = jsonDecode(saJson) as Map<String, dynamic>;
+        final projectId = saMap['project_id'] as String?;
+        if (projectId == null) {
+          throw StateError('service_account.json içinde project_id yok');
+        }
+        final istemci = await clientViaServiceAccount(
+          ServiceAccountCredentials.fromJson(saMap),
+          ['https://www.googleapis.com/auth/firebase.messaging'],
+        );
+        return (istemci: istemci, projectId: projectId);
+      }();
+
+  void _fcmSifirla() {
+    final eski = _fcmKurulum;
+    _fcmKurulum = null;
+    eski?.then((b) => b.istemci.close(), onError: (Object _) {});
+  }
+
   /// DÜŞÜK SEVİYE: verilen token'a, service account OAuth2 ile FCM HTTP v1 gönderir.
   Future<void> _gonderMesaj(
     String hedefToken,
     Map<String, dynamic> mesajAlanlari,
   ) async {
     try {
-      final saJson =
-          await rootBundle.loadString('assets/service_account.json');
-      final saMap = jsonDecode(saJson) as Map<String, dynamic>;
-      final projectId = saMap['project_id'] as String?;
-      if (projectId == null) return;
-
-      final credentials = ServiceAccountCredentials.fromJson(saMap);
-      final client = await clientViaServiceAccount(
-        credentials,
-        ['https://www.googleapis.com/auth/firebase.messaging'],
+      final fcm = await _fcmBaglanti();
+      final yanit = await fcm.istemci.post(
+        Uri.parse(
+          'https://fcm.googleapis.com/v1/projects/${fcm.projectId}/messages:send',
+        ),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'message': {'token': hedefToken, ...mesajAlanlari},
+        }),
       );
-      try {
-        final yanit = await client.post(
-          Uri.parse(
-            'https://fcm.googleapis.com/v1/projects/$projectId/messages:send',
-          ),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'message': {'token': hedefToken, ...mesajAlanlari},
-          }),
-        );
-        if (yanit.statusCode != 200) {
-          debugPrint('FCM gönderim hatası ${yanit.statusCode}: ${yanit.body}');
-        }
-      } finally {
-        client.close();
+      if (yanit.statusCode == 401 || yanit.statusCode == 403) {
+        _fcmSifirla(); // kimlik bozulduysa sonraki gönderim yeniden kursun
+      }
+      if (yanit.statusCode != 200) {
+        debugPrint('FCM gönderim hatası ${yanit.statusCode}: ${yanit.body}');
       }
     } catch (e) {
+      _fcmSifirla();
       debugPrint('Bildirim gönderilemedi: $e');
     }
   }

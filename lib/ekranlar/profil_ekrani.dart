@@ -9,8 +9,10 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../parcalar/kullanici_avatar.dart';
+import '../servisler/bildirim_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../servisler/medya_servisi.dart';
+import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../tema.dart';
 import 'ayarlar_ekrani.dart';
@@ -176,6 +178,8 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
         ad: adCtrl.text.trim(),
         bio: bioCtrl.text.trim(),
       );
+      // Bildirim başlıkları yeni adla gitsin.
+      MesajServisi.instance.adOnbelleginiSifirla();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profil güncellendi ✓')),
@@ -207,6 +211,10 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
     );
     if (onay == true) {
       await PresenceServisi.instance.cevrimdisiYap();
+      // Oturum kapanmadan ÖNCE (kural gereği kendi dokümanına yazabilmek
+      // için): bu cihaz artık bu hesabın bildirim/aramalarını almasın.
+      await BildirimServisi.instance.tokenSil();
+      MesajServisi.instance.adOnbelleginiSifirla();
       await FirebaseAuth.instance.signOut();
     }
   }
