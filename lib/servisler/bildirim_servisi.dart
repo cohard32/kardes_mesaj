@@ -292,6 +292,9 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   // ARANANIN kendi zil tercihi. ⚠️ Burası ARKA PLAN izolatı olabilir →
   // AyarServisi.baslat() çalışmamıştır; ayar DİSKTEN taze okunur.
   final zilYolu = await AyarServisi.aramaZiliDiskten();
+  // Seçili TEMA da aynı sebeple diskten (arka plan izolatında Renkler
+  // varsayılan palettedir; ön planda da diskteki değer günceldir).
+  final palet = RoyPalet.bul(await AyarServisi.temaDiskten());
   final params = CallKitParams(
     id: chatId,
     nameCaller: arayan,
@@ -349,10 +352,10 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       // Eklenti bunu `res/raw/<ad>` olarak çözer; `system_ringtone_default`
       // ise telefonun kendi zilini çalar. STREAM_RING'de, döngüde.
       ringtonePath: zilYolu,
-      // TEMA: varsayılan MAVİ (#0955fa) yerine uygulamanın neon-yeşil dili
-      backgroundColor: TemaHex.zemin,
-      actionColor: TemaHex.neon,
-      textColor: TemaHex.metin,
+      // TEMA: varsayılan MAVİ (#0955fa) yerine kullanıcının seçtiği palet
+      backgroundColor: TemaHex.zeminIcin(palet),
+      actionColor: TemaHex.neonIcin(palet),
+      textColor: TemaHex.metinIcin(palet),
       textAccept: 'Kabul Et',
       textDecline: 'Reddet',
     ),

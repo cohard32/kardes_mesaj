@@ -102,7 +102,7 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     return Scaffold(
       body: IndexedStack(index: _sekme, children: ekranlar),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: Renkler.zeminDerin,
           border: Border(top: BorderSide(color: Renkler.kenar)),
         ),

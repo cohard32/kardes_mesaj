@@ -510,7 +510,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo, color: Renkler.neon),
+              leading: Icon(Icons.photo, color: Renkler.neon),
               title: const Text('Fotoğraf'),
               onTap: () {
                 Navigator.pop(context);
@@ -518,7 +518,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.videocam, color: Renkler.neon),
+              leading: Icon(Icons.videocam, color: Renkler.neon),
               title: const Text('Video'),
               onTap: () {
                 Navigator.pop(context);
@@ -526,7 +526,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.gif_box_outlined, color: Renkler.neon),
+              leading: Icon(Icons.gif_box_outlined, color: Renkler.neon),
               title: const Text('GIF / Sticker'),
               onTap: () {
                 Navigator.pop(context);
@@ -754,7 +754,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         child: Column(
           children: [
             if (_yukleniyor)
-              const LinearProgressIndicator(
+              LinearProgressIndicator(
                 color: Renkler.neon,
                 backgroundColor: Renkler.yuzey,
               ),
@@ -773,7 +773,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   // `waiting`e döner. Eskiden bu anda liste yerine spinner
                   // çiziliyor (yanıp sönme) ve kaydırma konumu kayboluyordu.
                   if (!snapshot.hasData) {
-                    return const Center(
+                    return Center(
                       child: CircularProgressIndicator(color: Renkler.neon),
                     );
                   }
@@ -932,7 +932,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             // Engelliyken yazma alanı yok → yanıt da verilemez.
             if (_engelleyen == null)
               ListTile(
-                leading: const Icon(Icons.reply_rounded, color: Renkler.neon),
+                leading: Icon(Icons.reply_rounded, color: Renkler.neon),
                 title: Text('Yanıtla', style: Yazi.isim),
                 onTap: () {
                   Navigator.pop(context);
@@ -941,7 +941,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               ),
             if (indirilebilir)
               ListTile(
-                leading: const Icon(Icons.download_rounded, color: Renkler.neon),
+                leading: Icon(Icons.download_rounded, color: Renkler.neon),
                 title: Text('Galeriye indir', style: Yazi.isim),
                 subtitle: Text('Orijinal kalitede kaydedilir', style: Yazi.kucuk),
                 onTap: () {
@@ -951,7 +951,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               ),
             if (silinebilir)
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: Renkler.tehlike),
+                leading: Icon(Icons.delete_outline, color: Renkler.tehlike),
                 title: Text('Mesajı sil',
                     style: Yazi.stil(16, FontWeight.w700, Renkler.tehlike)),
                 subtitle:
@@ -1033,7 +1033,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
           TextButton(
             onPressed: () => Navigator.pop(d, true),
-            child: const Text('Sil', style: TextStyle(color: Renkler.tehlike)),
+            child: Text('Sil', style: TextStyle(color: Renkler.tehlike)),
           ),
         ],
       ),
@@ -1114,7 +1114,7 @@ class _AppBarBaslik extends StatelessWidget {
                           ),
                           if (sessiz) ...[
                             const SizedBox(width: 6),
-                            const Icon(
+                            Icon(
                               Icons.notifications_off_outlined,
                               size: 15,
                               color: Renkler.metinSoluk,
@@ -1250,11 +1250,11 @@ class _MesajBalonu extends StatelessWidget {
                       height: 160,
                       alignment: Alignment.center,
                       color: Renkler.zemin,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: Renkler.neon,
                       ),
                     ),
-              errorBuilder: (c, e, s) => const SizedBox(
+              errorBuilder: (c, e, s) => SizedBox(
                 width: 220,
                 height: 100,
                 child: Icon(Icons.broken_image, color: Renkler.metinSoluk),
@@ -1292,11 +1292,11 @@ class _MesajBalonu extends StatelessWidget {
                       height: 170,
                       alignment: Alignment.center,
                       color: Renkler.zemin,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: Renkler.neon,
                       ),
                     ),
-              errorBuilder: (c, e, s) => const SizedBox(
+              errorBuilder: (c, e, s) => SizedBox(
                 width: 170,
                 height: 90,
                 child: Icon(Icons.broken_image, color: Renkler.metinSoluk),
@@ -1406,7 +1406,7 @@ class _MesajBalonu extends StatelessWidget {
                               if (mesaj.tip == MesajTipi.ses &&
                                   mesaj.sesDinlendi) ...[
                                 const SizedBox(width: 4),
-                                const Icon(
+                                Icon(
                                   Icons.headset_rounded,
                                   size: 13,
                                   color: Renkler.metinKoyu,
@@ -1520,7 +1520,7 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
       boxShadow: Golgeler.neonGlow,
     ),
     padding: const EdgeInsets.all(10),
-    child: const Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
+    child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
   );
 
   Widget _koyuKutu() =>
@@ -1558,14 +1558,14 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
                 height: 160,
                 color: Renkler.zeminDerin.withValues(alpha: 0.7),
                 alignment: Alignment.center,
-                child: const Icon(
+                child: Icon(
                   Icons.videocam_off_outlined,
                   color: Renkler.metinSoluk,
                   size: 36,
                 ),
               )
             else if (_yukleniyor)
-              const CircularProgressIndicator(color: Renkler.neon)
+              CircularProgressIndicator(color: Renkler.neon)
             else
               _oynatRozeti,
           ],
@@ -1805,12 +1805,12 @@ class _YanitCubugu extends StatelessWidget {
         ),
         child: Container(
           padding: const EdgeInsets.fromLTRB(10, 6, 0, 6),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(left: BorderSide(color: Renkler.neon, width: 3)),
           ),
           child: Row(
             children: [
-              const Icon(Icons.reply_rounded, size: 18, color: Renkler.neon),
+              Icon(Icons.reply_rounded, size: 18, color: Renkler.neon),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -1836,7 +1836,7 @@ class _YanitCubugu extends StatelessWidget {
               IconButton(
                 tooltip: 'Yanıtı kapat',
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(
+                icon: Icon(
                   Icons.close,
                   size: 20,
                   color: Renkler.metinSoluk,
@@ -1908,7 +1908,7 @@ class _YazmaAlani extends StatelessWidget {
               tooltip: 'Ekle',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              icon: const Icon(Icons.add_circle_outline, color: Renkler.neon),
+              icon: Icon(Icons.add_circle_outline, color: Renkler.neon),
               onPressed: onEk,
             ),
             const SizedBox(width: 8),
@@ -1956,7 +1956,7 @@ class _YazmaAlani extends StatelessWidget {
                           kose: Kose.dugme,
                           padding: const EdgeInsets.all(13),
                           onTap: onGonder,
-                          cocuk: const Icon(
+                          cocuk: Icon(
                             Icons.send_rounded,
                             color: Renkler.metinKoyu,
                             size: 22,
@@ -1973,7 +1973,7 @@ class _YazmaAlani extends StatelessWidget {
                             kose: Kose.dugme,
                             padding: const EdgeInsets.all(13),
                             onTap: onMikrofonBilgi, // kısa dokunuş → ipucu
-                            cocuk: const Icon(
+                            cocuk: Icon(
                               Icons.mic,
                               color: Renkler.metinKoyu,
                               size: 22,
@@ -2071,7 +2071,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                       children: [
                         FadeTransition(
                           opacity: _yanip,
-                          child: const Icon(
+                          child: Icon(
                             Icons.fiber_manual_record,
                             color: Renkler.tehlike,
                             size: 12,
@@ -2129,7 +2129,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.keyboard_arrow_left,
                                 size: 16,
                                 color: Renkler.metinSoluk,
@@ -2640,7 +2640,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
           ),
           Container(
             height: 50,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: Renkler.zeminDerin,
               border: Border(top: BorderSide(color: Renkler.kenar)),
             ),
@@ -2683,7 +2683,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
                 ),
                 IconButton(
                   tooltip: 'Sil',
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.backspace_outlined,
                     color: Renkler.metinSoluk,
                   ),
@@ -2720,7 +2720,7 @@ class _EngelSeridi extends StatelessWidget {
         decoration: Kutular.duzYuzey(kenarli: true),
         child: Row(
           children: [
-            const Icon(Icons.block, size: 18, color: Renkler.tehlike),
+            Icon(Icons.block, size: 18, color: Renkler.tehlike),
             const SizedBox(width: 10),
             Expanded(
               child: Text(

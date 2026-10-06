@@ -98,7 +98,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
             ),
             TextButton(
               onPressed: () => Navigator.of(c).pop(true),
-              child: const Text('Engelle',
+              child: Text('Engelle',
                   style: TextStyle(color: Renkler.tehlike)),
             ),
           ],
@@ -203,7 +203,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
 
   Widget _aksiyon(Kullanici k) {
     if (_durum == null) {
-      return const Center(
+      return Center(
         child: SizedBox(
           width: 22,
           height: 22,
@@ -212,7 +212,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
       );
     }
     final yukleniyor = _islemde
-        ? const SizedBox(
+        ? SizedBox(
             width: 20,
             height: 20,
             child: CircularProgressIndicator(
@@ -230,7 +230,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
         decoration: Kutular.yuzey(kose: Kose.kartKose),
         child: Row(
           children: [
-            const Icon(Icons.block, size: 18, color: Renkler.tehlike),
+            Icon(Icons.block, size: 18, color: Renkler.tehlike),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -253,7 +253,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
           cocuk: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.chat_bubble, size: 20, color: Renkler.metinKoyu),
+              Icon(Icons.chat_bubble, size: 20, color: Renkler.metinKoyu),
               const SizedBox(width: 8),
               Text('Mesaj gönder', style: Yazi.dugme),
             ],
@@ -268,7 +268,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.person_add_alt_1,
                     size: 20,
                     color: Renkler.metinKoyu,

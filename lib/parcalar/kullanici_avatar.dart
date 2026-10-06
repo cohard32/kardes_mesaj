@@ -68,10 +68,14 @@ class KullaniciAvatar extends StatelessWidget {
               color: Renkler.neon,
               shape: BoxShape.circle,
               border: Border.all(color: Renkler.zemin, width: 2),
-              boxShadow: [
-                BoxShadow(
-                    color: Renkler.neon.withValues(alpha: 0.6), blurRadius: 6),
-              ],
+              // "Neon parıltısını azalt" açıkken nokta parlamaz.
+              boxShadow: Renkler.pariltiAzalt
+                  ? null
+                  : [
+                      BoxShadow(
+                          color: Renkler.neon.withValues(alpha: 0.6),
+                          blurRadius: 6),
+                    ],
             ),
           ),
         ),

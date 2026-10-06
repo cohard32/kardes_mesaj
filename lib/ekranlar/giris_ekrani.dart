@@ -103,7 +103,7 @@ class _GirisEkraniState extends State<GirisEkrani> {
                           const Positioned.fill(
                             child: IcIsik(kose: Kose.dugme),
                           ),
-                          const Center(
+                          Center(
                             child: Icon(Icons.forum_rounded,
                                 size: 36, color: Renkler.metinKoyu),
                           ),
@@ -165,7 +165,7 @@ class _GirisEkraniState extends State<GirisEkrani> {
                     onTap: _yukleniyor ? null : _girisYap,
                     padding: const EdgeInsets.symmetric(vertical: 17),
                     cocuk: _yukleniyor
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 22,
                             height: 22,
                             child: CircularProgressIndicator(

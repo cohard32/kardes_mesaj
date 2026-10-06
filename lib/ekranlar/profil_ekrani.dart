@@ -55,7 +55,7 @@ class ProfilEkrani extends StatelessWidget {
                     );
                   }
                   if (!snap.hasData) {
-                    return const Center(
+                    return Center(
                         child: CircularProgressIndicator(color: Renkler.neon));
                   }
                   return _ProfilGovde(kullanici: snap.data!);
@@ -117,14 +117,14 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
                   decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
                   child: Row(
                     children: [
-                      const Icon(Icons.alternate_email,
+                      Icon(Icons.alternate_email,
                           size: 18, color: Renkler.metinSoluk),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text('@${widget.kullanici.kullaniciAdi}',
                             style: Yazi.govde),
                       ),
-                      const Icon(Icons.lock_outline,
+                      Icon(Icons.lock_outline,
                           size: 16, color: Renkler.metinSoluk),
                     ],
                   ),
@@ -203,7 +203,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Çıkış',
+            child: Text('Çıkış',
                 style: TextStyle(color: Renkler.tehlike)),
           ),
         ],
@@ -235,27 +235,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
               const SizedBox(height: 4),
               Text('Bu kodu okutan seni ekleyebilir', style: Yazi.kucuk),
               const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Renkler.metin,
-                  borderRadius: Kose.kartKose,
-                ),
-                child: QrImageView(
-                  data: 'kardesmesaj:@${k.kullaniciAdi}',
-                  version: QrVersions.auto,
-                  size: 220,
-                  backgroundColor: Renkler.metin,
-                  eyeStyle: const QrEyeStyle(
-                    eyeShape: QrEyeShape.square,
-                    color: Renkler.zeminDerin,
-                  ),
-                  dataModuleStyle: const QrDataModuleStyle(
-                    dataModuleShape: QrDataModuleShape.square,
-                    color: Renkler.zeminDerin,
-                  ),
-                ),
-              ),
+              ProfilQrKodu(kullaniciAdi: k.kullaniciAdi),
             ],
           ),
         ),
@@ -295,13 +275,13 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
                       boxShadow: Golgeler.neonGlow,
                     ),
                     child: _fotoYukleniyor
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Renkler.metinKoyu),
                           )
-                        : const Icon(Icons.camera_alt,
+                        : Icon(Icons.camera_alt,
                             size: 18, color: Renkler.metinKoyu),
                   ),
                 ),
@@ -320,7 +300,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
               children: [
                 Text('@${k.kullaniciAdi}', style: Yazi.neonKucuk),
                 const SizedBox(width: 4),
-                const Icon(Icons.copy, size: 13, color: Renkler.metinSoluk),
+                Icon(Icons.copy, size: 13, color: Renkler.metinSoluk),
               ],
             ),
           ),
@@ -354,7 +334,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
                 cocuk: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.qr_code_2,
+                    Icon(Icons.qr_code_2,
                         size: 20, color: Renkler.metinKoyu),
                     const SizedBox(width: 8),
                     Text('QR kodum', style: Yazi.dugme),
@@ -372,7 +352,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Ayarlar'),
-                trailing: const Icon(Icons.chevron_right,
+                trailing: Icon(Icons.chevron_right,
                     color: Renkler.metinSoluk),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -381,8 +361,8 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
               ),
               const Divider(height: 1),
               ListTile(
-                leading: const Icon(Icons.logout, color: Renkler.tehlike),
-                title: const Text('Çıkış yap',
+                leading: Icon(Icons.logout, color: Renkler.tehlike),
+                title: Text('Çıkış yap',
                     style: TextStyle(color: Renkler.tehlike)),
                 onTap: _cikis,
               ),
@@ -456,7 +436,7 @@ class _DogrulamaUyarisiState extends State<_DogrulamaUyarisi> {
         children: [
           Row(
             children: [
-              const Icon(Icons.mark_email_unread_outlined,
+              Icon(Icons.mark_email_unread_outlined,
                   size: 18, color: Renkler.tehlike),
               const SizedBox(width: 8),
               Text('E-posta doğrulanmadı',
@@ -485,6 +465,42 @@ class _DogrulamaUyarisiState extends State<_DogrulamaUyarisi> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Profil QR kodu (`kardesmesaj:@kullaniciAdi`) — QR tarayıcı ekranı okur.
+///
+/// ⚠️ Renkler BİLEREK sabit ([QrRenkleri]): her temada KOYU desen + AÇIK
+/// zemin. Paletten alınsaydı açık temada QR ters dönerdi (açık desen / koyu
+/// zemin) ve birçok tarayıcı onu hiç okumazdı. Ayrı widget: testte her
+/// palette renklerin değişmediği doğrulanabilsin diye.
+class ProfilQrKodu extends StatelessWidget {
+  final String kullaniciAdi;
+  const ProfilQrKodu({super.key, required this.kullaniciAdi});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16), // QR'ın "sessiz bölgesi" de bu
+      decoration: const BoxDecoration(
+        color: QrRenkleri.zemin,
+        borderRadius: Kose.kartKose,
+      ),
+      child: QrImageView(
+        data: 'kardesmesaj:@$kullaniciAdi',
+        version: QrVersions.auto,
+        size: 220,
+        backgroundColor: QrRenkleri.zemin,
+        eyeStyle: const QrEyeStyle(
+          eyeShape: QrEyeShape.square,
+          color: QrRenkleri.desen,
+        ),
+        dataModuleStyle: const QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: QrRenkleri.desen,
+        ),
       ),
     );
   }

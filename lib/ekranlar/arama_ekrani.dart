@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../servisler/arama_servisi.dart';
 import '../servisler/hata_servisi.dart';
@@ -228,7 +229,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   /// Görüntülü arama: uzak görüntü tam ekran, üstte bilgi, altta kontroller.
   Widget _videoDuzeni() {
-    return Stack(
+    final sahne = Stack(
       children: [
         Positioned.fill(child: _uzakGorunum()),
         // Kendi görüntün — organik köşe + neon kenar
@@ -253,6 +254,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
         Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
         Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
       ],
+    );
+    // ⚠️ Açık temada sahne koyu kalır (bkz. VideoSahne) → durum çubuğu
+    // ikonları da açık olmalı; yoksa koyu ikon videonun üstünde kaybolur.
+    // Koyu paletlerde global stil zaten açık ikonlu → sarmalama yok.
+    if (!VideoSahne.koyuyaZorla) return sahne;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: VideoSahne.sistemCubuklari,
+      child: sahne,
     );
   }
 
@@ -310,6 +319,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
         // bekleme + avatar. (Boş kanal adıyla AgoraVideoView kurmak Agora'da
         // hataya/siyah ekrana yol açıyordu.)
         if (uid == null || e == null || kanal == null || kanal.isEmpty) {
+          // ⚠️ Açık temada video sahnesi koyu kalır (başlık yazısı bu
+          // zeminin ve sonra gelecek videonun üstünde açık renkte durur).
+          if (VideoSahne.koyuyaZorla) {
+            return ColoredBox(
+              color: VideoSahne.zemin,
+              child: Center(child: _avatar(cap: 132)),
+            );
+          }
           return Zemin(
             child: Center(child: _avatar(cap: 132)),
           );
@@ -341,7 +358,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
         final e = _arama.engine;
         if (e == null || !katildi) {
           // Henüz hazır değil → native yüzey OLUŞTURMA.
-          return const ColoredBox(color: Renkler.yuzey);
+          return ColoredBox(color: VideoSahne.yerTutucu);
         }
         _yerelGorunumIsaretle(); // çökerse son_adim tam burayı gösterir
         return AgoraVideoView(
@@ -379,7 +396,15 @@ class _AramaEkraniState extends State<AramaEkrani> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(widget.baslik, style: Yazi.baslik),
+            // ⚠️ Görüntülü aramada başlık doğrudan VİDEONUN üstünde (zemini
+            // yok) → açık temada da açık renk (VideoSahne). Sesli aramada
+            // paletin zemini üstünde → normal metin rengi.
+            Text(
+              widget.baslik,
+              style: _video
+                  ? Yazi.baslik.copyWith(color: VideoSahne.metin)
+                  : Yazi.baslik,
+            ),
             const SizedBox(height: 10),
             // Durum rozeti — cam yüzey
             Container(
@@ -398,7 +423,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
                     Text(_sure,
                         style: Yazi.stil(14, FontWeight.w700, Renkler.neon)),
                   ] else ...[
-                    const SizedBox(
+                    SizedBox(
                       width: 12,
                       height: 12,
                       child: CircularProgressIndicator(
@@ -476,7 +501,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
             kose: Kose.dugme,
             padding: const EdgeInsets.all(19),
             onTap: _kapat,
-            cocuk: const Icon(Icons.call_end,
+            cocuk: Icon(Icons.call_end,
                 color: Renkler.metinTehlikeUstu, size: 28),
           ),
         ),

@@ -12,7 +12,7 @@ void main() {
   testWidgets('Giris ekrani aciliyor', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
-        theme: AppTema.karanlik(),
+        theme: AppTema.olustur(),
         home: const GirisEkrani(),
       ),
     );

@@ -47,7 +47,7 @@ class AuthGate extends StatelessWidget {
 class _Bekle extends StatelessWidget {
   const _Bekle();
   @override
-  Widget build(BuildContext context) => const Scaffold(
+  Widget build(BuildContext context) => Scaffold(
         body: Zemin(
           child: Center(child: CircularProgressIndicator(color: Renkler.neon)),
         ),
