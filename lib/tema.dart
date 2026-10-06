@@ -432,6 +432,13 @@ class VideoSahne {
   /// Video üstündeki başlık (karşı tarafın adı)
   static Color get metin => _p.metin;
 
+  /// Sahnedeki ikincil yazı (ör. QR tarayıcının kamera hatası açıklaması)
+  static Color get metinSoluk => _p.metinSoluk;
+
+  /// Sahnedeki vurgu (koyu zeminde okunur neon; açık paletin neonu koyu
+  /// sahnede sönük kalır)
+  static Color get vurgu => _p.neon;
+
   /// Sistem çubukları: video üstünde her zaman AÇIK ikon.
   static SystemUiOverlayStyle get sistemCubuklari =>
       AppTema.sistemCubuklari.copyWith(

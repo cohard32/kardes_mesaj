@@ -31,10 +31,23 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
   bool get _engeliBenKoydum =>
       _engelleyen != null && _engelleyen == FirebaseAuth.instance.currentUser?.uid;
 
+  /// ⚠️ Profil akışı State'te: build içinde kurulunca her setState
+  /// (_islemde, _durum) ve tema değişimi Firestore'a yeniden abone oluyordu.
+  late Stream<Kullanici> _profil =
+      KullaniciServisi.instance.profilDinle(widget.kullanici.uid);
+
   @override
   void initState() {
     super.initState();
     _durumYukle();
+  }
+
+  @override
+  void didUpdateWidget(covariant ProfilGoruntuleEkrani eski) {
+    super.didUpdateWidget(eski);
+    if (eski.kullanici.uid != widget.kullanici.uid) {
+      _profil = KullaniciServisi.instance.profilDinle(widget.kullanici.uid);
+    }
   }
 
   Future<void> _durumYukle() async {
@@ -158,7 +171,7 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
       ),
       body: Zemin(
         child: StreamBuilder<Kullanici>(
-          stream: KullaniciServisi.instance.profilDinle(widget.kullanici.uid),
+          stream: _profil,
           initialData: widget.kullanici,
           builder: (context, snap) {
             final k = snap.data ?? widget.kullanici;
