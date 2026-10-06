@@ -48,26 +48,41 @@ class MesajServisi {
     _benimAdimUid = null;
   }
 
-  /// Bir sohbetin SON [limit] mesajını zaman sırasına göre (eski → yeni) dinler.
-  /// [limit] artırılınca daha eski mesajlar yüklenir (sohbet ekranı yukarı
-  /// kaydırınca artırır) — tüm geçmişi tek seferde çekmez (pil/kota/bellek).
+  /// Bir sohbetin SON [limit] mesajını YENİDEN ESKİYE sırayla dinler
+  /// (liste[0] = en yeni). [limit] artırılınca daha eski mesajlar yüklenir
+  /// (sohbet ekranı yukarı kaydırınca artırır) — tüm geçmişi tek seferde
+  /// çekmez (pil/kota/bellek).
+  ///
+  /// ⚠️ Eskiden `orderBy(asc).limitToLast` ile ESKİDEN YENİYE geliyordu ve
+  /// liste normal yönde çiziliyordu: eski sayfa listenin BAŞINA eklenince
+  /// kaydırma konumu aynı pikselde kalıyor, içerik aşağı kayıyordu
+  /// (sayfalamada "zıplama"). Artık sohbet ekranı `reverse: true` liste
+  /// kullanıyor: en yeni mesaj offset 0'da, eski sayfa listenin SONUNA
+  /// (ekranın üstüne) eklenir → görünen mesajlar yerinden oynamaz.
   Stream<List<Mesaj>> mesajlariDinle(String chatId, {int limit = 50}) {
     return _mesajlar(chatId)
-        .orderBy('zaman', descending: false)
-        .limitToLast(limit)
+        .orderBy('zaman', descending: true)
+        .limit(limit)
         .snapshots()
         .map((s) => s.docs.map(Mesaj.firestoreDan).toList());
   }
 
   /// Metin mesajı gönderir + sohbet meta güncelle + karşı tarafa bildirim.
-  Future<void> gonder(String chatId, String alanUid, String metin) async {
+  /// [yanit] verilirse mesaj o mesaja yanıt (alıntı) olarak gider.
+  Future<void> gonder(
+    String chatId,
+    String alanUid,
+    String metin, {
+    Mesaj? yanit,
+  }) async {
     final temiz = metin.trim();
     final uid = _uid;
     if (temiz.isEmpty || uid == null) return;
 
-    HataServisi.instance.iz('MESAJ gonderiliyor chat=$chatId');
+    HataServisi.instance.iz(
+        'MESAJ gonderiliyor chat=$chatId${yanit != null ? ' (yanit)' : ''}');
     await _mesajlar(chatId).add(
-      Mesaj.yeniMesajVerisi(gonderen: uid, metin: temiz),
+      Mesaj.yeniMesajVerisi(gonderen: uid, metin: temiz, yanit: yanit),
     );
     await _metaGuncelle(chatId, alanUid, temiz);
     _bildir(alanUid, chatId, temiz);
@@ -89,13 +104,7 @@ class MesajServisi {
     await _mesajlar(chatId).add(
       Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),
     );
-    final etiket = switch (tip) {
-      MesajTipi.resim => '📷 Fotoğraf',
-      MesajTipi.video => '🎥 Video',
-      MesajTipi.ses => '🎤 Sesli mesaj',
-      MesajTipi.gif => '🎞️ GIF',
-      MesajTipi.metin => 'Mesaj',
-    };
+    final etiket = Mesaj.medyaEtiketi(tip);
     await _metaGuncelle(chatId, alanUid, etiket);
     _bildir(alanUid, chatId, etiket);
     return true;
@@ -108,8 +117,9 @@ class MesajServisi {
     await _mesajlar(chatId).add(
       Mesaj.yeniMedyaVerisi(gonderen: uid, tip: MesajTipi.gif, medyaUrl: url),
     );
-    await _metaGuncelle(chatId, alanUid, '🎞️ GIF');
-    _bildir(alanUid, chatId, '🎞️ GIF');
+    final etiket = Mesaj.medyaEtiketi(MesajTipi.gif);
+    await _metaGuncelle(chatId, alanUid, etiket);
+    _bildir(alanUid, chatId, etiket);
   }
 
   /// Karşı taraftan gelen sesli mesajı "dinlendi" işaretler.
@@ -155,15 +165,8 @@ class MesajServisi {
         return;
       }
       final m = Mesaj.firestoreDan(son.docs.first);
-      final onizleme = switch (m.tip) {
-        MesajTipi.resim => '📷 Fotoğraf',
-        MesajTipi.video => '🎥 Video',
-        MesajTipi.ses => '🎤 Sesli mesaj',
-        MesajTipi.gif => '🎞️ GIF',
-        MesajTipi.metin => m.metin,
-      };
       await _chat(chatId).set({
-        'sonMesaj': onizleme,
+        'sonMesaj': m.onizleme,
         'sonMesajZamani': m.zaman == null
             ? FieldValue.serverTimestamp()
             : Timestamp.fromDate(m.zaman!),

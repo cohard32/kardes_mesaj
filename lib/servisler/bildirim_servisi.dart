@@ -14,8 +14,106 @@ import 'package:googleapis_auth/auth_io.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../tema.dart';
+import 'aktarici_servisi.dart';
+import 'aktif_arama_kaydi.dart';
 import 'app_check_servisi.dart';
 import 'ayar_servisi.dart';
+
+/// Bildirim KANAL KİMLİĞİ seçimi — SAF mantık (Firebase/eklenti yok →
+/// `test/bildirim_kanal_test.dart` ile birim testi yapılır).
+///
+/// Kimlikler: `km_v3_<secim>`, titreşimsiz varyant `km_v3_<secim>_tsz`,
+/// bildirimler kapalıyken `km_v3_kapali`. Bu kimlikler ALICININ Firestore'da
+/// yayınladığı değerdir; gönderen push'u o kanala yollar → Android 8+'da ses ve
+/// titreşim KANALDAN gelir (uygulama kapalıyken bile).
+abstract final class BildirimKanali {
+  // ⚠️ Kanalın sesi/titreşimi sonradan DEĞİŞTİRİLEMEZ. Ses çalmıyorsa kilitli
+  // eski kanal sebebidir → sürümü artır (yeni id'ler TAZE oluşur, ses gelir).
+  static const String surum = 'v3';
+  static const String onek = 'km_${surum}_';
+
+  // ⚠️ VARSAYILAN kanal da SÜRÜMLÜ olmalı. Eskiden sabit 'kardes_mesaj_kanal'
+  // idi; v1.x'te oluşturulduğu için Android sesini KALICI KİLİTLEMİŞTİ ve
+  // "Varsayılan" seçiliyken hiç ses gelmiyordu (diğer sesler km_v2_* sürümlü
+  // olduğu için çalışıyordu). Sürümlü id ile kanal TAZE oluşur, ses gelir.
+  // (AndroidManifest default_notification_channel_id ile AYNI olmalı.)
+  static const String varsayilan = '${onek}varsayilan';
+
+  /// "Bildirimler" anahtarı KAPALIYKEN yayınlanan kanal. Android'de önem
+  /// derecesi NONE olan kanal ENGELLİ kanaldır → bu kanala gelen bildirim
+  /// sistem tarafından hiç gösterilmez.
+  /// ⚠️ NEDEN: Mesaj push'u `notification` yükü taşıdığı için uygulama
+  /// arka plandayken/kapalıyken bildirimi Flutter değil SİSTEM çizer;
+  /// anahtar yalnız ön plandaki gösterime bakıyordu, yani
+  /// "Bildirimler: kapalı" çoğu zaman HİÇBİR ŞEY yapmıyordu.
+  static const String kapali = '${onek}kapali';
+
+  /// Titreşimsiz varyant eki.
+  /// ⚠️ NEDEN: Android 8+'da titreşim de ses gibi KANALA kilitlidir;
+  /// `enableVibration` yalnız kanal OLUŞTURULURKEN okunur. Eskiden "Titreşim"
+  /// anahtarı yalnız ön plandaki bildirim detayına yazılıyordu → arka planda/
+  /// kapalıyken (sistemin çizdiği bildirimde) HİÇBİR etkisi yoktu. Artık her
+  /// ses için ikinci, titreşimsiz bir kanal var; anahtar hangisinin
+  /// yayınlanacağını seçer.
+  static const String tszEki = '_tsz';
+
+  /// Ayarlar'daki ses seçimleri (kanalı kurulanlar).
+  static const List<String> secimler = [
+    'varsayilan', 'sessiz', 'kedi', 'kedi2', 'kedi3', 'kedi4', 'cingirak',
+    'ozel',
+  ];
+
+  /// SESSİZE ALINMIŞ sohbetin mesajları bu kanala düşer: ses YOK, titreşim
+  /// YOK (bildirim yine görünür, sohbet okunmamış olarak işaretlenir).
+  static const String sessizSohbet = '${onek}sessiz$tszEki';
+
+  /// Ses seçiminin titreşimli kanal kimliği. Bilinmeyen seçim (eski/bozuk
+  /// kayıt) varsayılana düşer — var olmayan kanala push GİTMESİN.
+  static String sesKanali(String secim) =>
+      secimler.contains(secim) ? '$onek$secim' : varsayilan;
+
+  /// Alıcının yayınlayacağı aktif kanal: kapalı > titreşimsiz varyant > normal.
+  static String aktif({
+    required String secim,
+    required bool bildirimAcik,
+    required bool titresim,
+  }) {
+    if (!bildirimAcik) return kapali;
+    final id = sesKanali(secim);
+    return titresim ? id : '$id$tszEki';
+  }
+
+  /// Karşı tarafın Firestore'da YAYINLADIĞI kanal id'sini doğrular.
+  ///
+  /// ⚠️ NEDEN GEREKLİ: Alıcı uygulamayı güncelledikten sonra AÇMADIYSA,
+  /// `bildirimKanali` alanında ESKİ SÜRÜM kanal id'si (`km_v2_*`,
+  /// `kardes_mesaj_kanal`) kalır. O kanallar açılışta SİLİNDİĞİ için push
+  /// var olmayan bir kanala gider → bildirim sessiz kalabilir/görünmeyebilir.
+  /// Geçersizse güvenli varsayılana düşeriz (o kanal her zaman kurulur).
+  /// Yalnız GÜNCEL sürüm öneki kabul edilir (bilinçli olarak tam liste değil:
+  /// alıcı daha YENİ bir sürümle yeni bir ses eklerse eski gönderen onu
+  /// varsayılana çevirip bozmasın). `_tsz` ve `kapali` de bu öneki taşır.
+  static String gecerli(String? kanal) {
+    if (kanal == null || kanal.isEmpty) return varsayilan;
+    return kanal.startsWith(onek) ? kanal : varsayilan;
+  }
+
+  /// GÖNDERENİN push'a yazacağı kanal (alıcının `users` dokümanından).
+  /// Sohbet alıcının `sessizSohbetler` listesindeyse sessiz kanala düşer;
+  /// ama alıcı bildirimleri TAMAMEN kapattıysa (`kapali`) o öncelikli kalır —
+  /// sessize almak bildirimi "açmamalı".
+  static String alicininKanali({
+    required String? yayinlanan,
+    Object? sessizSohbetler,
+    String? chatId,
+  }) {
+    final kanal = gecerli(yayinlanan);
+    if (kanal == kapali) return kanal;
+    if (chatId == null || chatId.isEmpty) return kanal;
+    final liste = sessizSohbetler is List ? sessizSohbetler : const [];
+    return liste.contains(chatId) ? sessizSohbet : kanal;
+  }
+}
 
 /// Arka plan / uygulama kapalı mesaj handler'ı.
 /// Top-level (sınıf dışı) olmak ZORUNDA — Android arka planda izole çalıştırır.
@@ -41,6 +139,20 @@ Future<void> arkaplanMesajHandler(RemoteMessage message) async {
 /// Dairesel import olmasın diye burada top-level tutulur.
 bool aktifAramaVar = false;
 
+/// Bu isolate'teki aktif görüşmenin chatId'si (AramaServisi katılınca yazar,
+/// bitirince null yapar). Ön plan meşgul kararı [gelenAramaMesgulMu] ile
+/// arka planla AYNI kurala bağlansın diye tutulur.
+String? aktifAramaChatId;
+
+/// TEK meşgul kuralı (ön plan ve arka plan aynı): başka bir sohbetle süren
+/// görüşme varsa meşgul. AYNI sohbetten gelen arama meşgul SAYILMAZ: karşı
+/// taraf görüşmeyi yeniden kuruyordur (onun uygulaması çökmüş/kopmuş).
+bool gelenAramaMesgulMu({
+  required String? aktifChat,
+  required String? gelenChat,
+}) =>
+    aktifChat != null && aktifChat != gelenChat;
+
 /// Çağrı ile ilgili FCM verisini işler. Hem arka plan handler'ı hem de
 /// uygulama açıkken (onMessage) AYNI yolu kullanır → tek tutarlı akış.
 /// İşlendiyse true döner.
@@ -55,6 +167,28 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
             'arayan=${data['arayan']} kanal=${data['kanal']}',
         'aktifAramaVar=$aktifAramaVar',
       ];
+      // MEŞGUL (İSOLATE'LER ARASI): `aktifAramaVar` bellekte → arka plan
+      // isolate'inde HEP false. Sesli görüşmede ekran kilitlenince (çok
+      // yaygın) ikinci çağrı CallKit'i görüşmenin ÜSTÜNE açıyordu. Görüşme
+      // kaydı diskte (SharedPreferences) → bu isolate da görür.
+      // ⚠️ Aşağıdaki "gösterimden önce async iş yapma" kuralının BİLİNÇLİ
+      // istisnası: bu okuma ağ değil, YEREL bir prefs okumasıdır (ms
+      // mertebesi; platform tarafındaki SharedPreferences zaten bellekte).
+      // Ayrıca kural zilin GECİKMEMESİ içindir; meşgulsek zil hiç çalmayacak.
+      // Zaten gelenAramayiGoster de zil tercihini aynı yoldan diskten okuyor.
+      final gelenChat = (data['chatId'] ?? data['kanal'])?.toString();
+      final aktifChat = await AktifAramaKaydi.oku();
+      adimlar.add('aktifArama(disk)=$aktifChat');
+      // AYNI sohbetten tekrar arama (ör. kopan görüşmeyi yeniden arama, ya da
+      // çökme sonrası kalmış kayıt) meşgul SAYILMAZ → gösterilir.
+      if (aktifChat != null && aktifChat != gelenChat) {
+        adimlar.add('MESGUL: baska gorusme suruyor → CallKit GOSTERILMEDI');
+        HataServisi.instance.iz('MESGUL (disk) aktif=$aktifChat gelen=$gelenChat');
+        await _mesgulBildir(data['chatId']?.toString());
+        await HataServisi.instance
+            .arkaplanRapor('GELEN ARAMA (mesgul)', adimlar);
+        return true;
+      }
       // ⚠️ SIRALAMA KRİTİK: Gelen aramayı GÖSTERMEDEN ÖNCE hiçbir async iş
       // yapılmaz. FCM en iyi uygulaması: yüksek öncelikli çağrı mesajı
       // handler'a düşer düşmez bildirim/çağrı HEMEN gösterilmeli; öncesinde
@@ -172,6 +306,9 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   // ARANANIN kendi zil tercihi. ⚠️ Burası ARKA PLAN izolatı olabilir →
   // AyarServisi.baslat() çalışmamıştır; ayar DİSKTEN taze okunur.
   final zilYolu = await AyarServisi.aramaZiliDiskten();
+  // Seçili TEMA da aynı sebeple diskten (arka plan izolatında Renkler
+  // varsayılan palettedir; ön planda da diskteki değer günceldir).
+  final palet = RoyPalet.bul(await AyarServisi.temaDiskten());
   final params = CallKitParams(
     id: chatId,
     nameCaller: arayan,
@@ -229,10 +366,10 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       // Eklenti bunu `res/raw/<ad>` olarak çözer; `system_ringtone_default`
       // ise telefonun kendi zilini çalar. STREAM_RING'de, döngüde.
       ringtonePath: zilYolu,
-      // TEMA: varsayılan MAVİ (#0955fa) yerine uygulamanın neon-yeşil dili
-      backgroundColor: TemaHex.zemin,
-      actionColor: TemaHex.neon,
-      textColor: TemaHex.metin,
+      // TEMA: varsayılan MAVİ (#0955fa) yerine kullanıcının seçtiği palet
+      backgroundColor: TemaHex.zeminIcin(palet),
+      actionColor: TemaHex.neonIcin(palet),
+      textColor: TemaHex.metinIcin(palet),
       textAccept: 'Kabul Et',
       textDecline: 'Reddet',
     ),
@@ -247,16 +384,9 @@ class BildirimServisi {
   BildirimServisi._();
   static final BildirimServisi instance = BildirimServisi._();
 
-  // AndroidManifest default_notification_channel_id = _kanalVarsayilan.
-  // Android 8+'da bildirim sesi KANALA kilitlidir → her ses için ayrı kanal.
-  // ⚠️ Kanalın sesi sonradan DEĞİŞTİRİLEMEZ. Ses çalmıyorsa kilitli eski
-  // kanal sebebidir → _kanalVer'i artır (yeni id'ler TAZE oluşur, ses gelir).
-  static const String _kanalVer = 'v3';
-  // ⚠️ VARSAYILAN kanal da SÜRÜMLÜ olmalı. Eskiden sabit 'kardes_mesaj_kanal'
-  // idi; v1.x'te oluşturulduğu için Android sesini KALICI KİLİTLEMİŞTİ ve
-  // "Varsayılan" seçiliyken hiç ses gelmiyordu (diğer sesler km_v2_* sürümlü
-  // olduğu için çalışıyordu). Sürümlü id ile kanal TAZE oluşur, ses gelir.
-  static const String _kanalVarsayilan = 'km_${_kanalVer}_varsayilan';
+  // AndroidManifest default_notification_channel_id = BildirimKanali.varsayilan.
+  // Android 8+'da bildirim sesi KANALA kilitlidir → her ses için ayrı kanal
+  // (kimlik kuralları ve gerekçeleri: [BildirimKanali]).
 
   // Eski (kilitli/sessiz kalmış olabilecek) kanallar — açılışta silinir.
   static const List<String> _eskiKanallar = [
@@ -278,36 +408,24 @@ class BildirimServisi {
     'kedi4': 'Yavru Kedi 4 🐾',
   };
 
-  /// Karşı tarafın Firestore'da YAYINLADIĞI kanal id'sini doğrular.
-  ///
-  /// ⚠️ NEDEN GEREKLİ: Alıcı uygulamayı güncelledikten sonra AÇMADIYSA,
-  /// `bildirimKanali` alanında ESKİ SÜRÜM kanal id'si (`km_v2_*`,
-  /// `kardes_mesaj_kanal`) kalır. O kanallar açılışta SİLİNDİĞİ için push
-  /// var olmayan bir kanala gider → bildirim sessiz kalabilir/görünmeyebilir.
-  /// Geçersizse güvenli varsayılana düşeriz (o kanal her zaman kurulur).
-  String _gecerliKanal(String? kanal) {
-    if (kanal == null || kanal.isEmpty) return _kanalVarsayilan;
-    if (kanal == _kanalVarsayilan) return kanal;
-    // Yalnız GÜNCEL sürüm öneki kabul edilir.
-    return kanal.startsWith('km_${_kanalVer}_') ? kanal : _kanalVarsayilan;
+  String _kanalIdFor(String secim) => BildirimKanali.sesKanali(secim);
+
+  static const String _kanalKapali = BildirimKanali.kapali;
+
+  /// Seçili sese, bildirim ve TİTREŞİM anahtarlarına göre aktif kanal id'si.
+  String get aktifKanalId {
+    final ayar = AyarServisi.instance;
+    var secim = ayar.bildirimSesi.value;
+    // 'ozel' kanalı yalnız URI varken kurulur ([_ozelKanaliKur]) → URI yoksa
+    // var olmayan kanalı yayınlama, varsayılana düş.
+    final uri = ayar.ozelSesUri.value;
+    if (secim == 'ozel' && (uri == null || uri.isEmpty)) secim = 'varsayilan';
+    return BildirimKanali.aktif(
+      secim: secim,
+      bildirimAcik: ayar.bildirimAcik.value,
+      titresim: ayar.titresimAcik.value,
+    );
   }
-
-  String _kanalIdFor(String secim) =>
-      secim == 'varsayilan' ? _kanalVarsayilan : 'km_${_kanalVer}_$secim';
-
-  /// "Bildirimler" anahtarı KAPALIYKEN yayınlanan kanal. Android'de önem
-  /// derecesi NONE olan kanal ENGELLİ kanaldır → bu kanala gelen bildirim
-  /// sistem tarafından hiç gösterilmez.
-  /// ⚠️ NEDEN: Mesaj push'u `notification` yükü taşıdığı için uygulama
-  /// arka plandayken/kapalıyken bildirimi Flutter değil SİSTEM çizer;
-  /// anahtar yalnız ön plandaki [_foregroundGoster]'e bakıyordu, yani
-  /// "Bildirimler: kapalı" çoğu zaman HİÇBİR ŞEY yapmıyordu.
-  static const String _kanalKapali = 'km_${_kanalVer}_kapali';
-
-  /// Seçili sese (ve bildirim anahtarına) göre aktif bildirim kanalı id'si.
-  String get aktifKanalId => AyarServisi.instance.bildirimAcik.value
-      ? _kanalIdFor(AyarServisi.instance.bildirimSesi.value)
-      : _kanalKapali;
 
   /// Seçili sesin AndroidNotificationSound karşılığı (Android <8 + detayda).
   AndroidNotificationSound? _sesFor(String secim) {
@@ -441,57 +559,68 @@ class BildirimServisi {
       await a.deleteNotificationChannel(channelId: id);
     }
 
-    // Varsayılan (sistem sesi)
-    await a.createNotificationChannel(const AndroidNotificationChannel(
-      _kanalVarsayilan, 'Varsayılan',
-      description: 'Yeni mesaj bildirimleri',
-      importance: Importance.high,
-      playSound: true, // AÇIKÇA: sistem varsayılan bildirim sesi çalsın
-    ));
-    // Kapalı (Ayarlar > Bildirimler kapalıyken; bkz. [_kanalKapali])
+    // Kapalı (Ayarlar > Bildirimler kapalıyken; bkz. [BildirimKanali.kapali])
     await a.createNotificationChannel(const AndroidNotificationChannel(
       _kanalKapali, 'Kapalı',
       description: 'Bildirimler ayarlardan kapatıldığında kullanılır',
       importance: Importance.none,
     ));
-    // Sessiz
-    await a.createNotificationChannel(AndroidNotificationChannel(
-      _kanalIdFor('sessiz'), 'Sessiz',
-      importance: Importance.high,
-      playSound: false,
-    ));
+    // Her ses İKİ kanalla kurulur: titreşimli + titreşimsiz (_tsz).
+    // Varsayılan (sistem sesi) — AÇIKÇA playSound: sistem varsayılan sesi çalsın
+    await _ciftKanalKur(a, 'varsayilan', 'Varsayılan',
+        aciklama: 'Yeni mesaj bildirimleri');
+    // Sessiz (sessiz_tsz aynı zamanda SESSİZE ALINMIŞ sohbetlerin kanalı)
+    await _ciftKanalKur(a, 'sessiz', 'Sessiz', sesCalsin: false);
     // Kedi sesleri (4 adet)
     for (final e in _kediSesleri.entries) {
-      await a.createNotificationChannel(AndroidNotificationChannel(
-        _kanalIdFor(e.key), e.value,
-        importance: Importance.high,
-        playSound: true,
-        sound: RawResourceAndroidNotificationSound(e.key),
-      ));
+      await _ciftKanalKur(a, e.key, e.value,
+          ses: RawResourceAndroidNotificationSound(e.key));
     }
     // Çıngırak
-    await a.createNotificationChannel(AndroidNotificationChannel(
-      _kanalIdFor('cingirak'), 'Çıngırak',
-      importance: Importance.high,
-      playSound: true,
-      sound: const RawResourceAndroidNotificationSound('cingirak'),
-    ));
+    await _ciftKanalKur(a, 'cingirak', 'Çıngırak',
+        ses: const RawResourceAndroidNotificationSound('cingirak'));
     await _ozelKanaliKur();
   }
 
-  /// Özel ses kanalını kullanıcının seçtiği URI ile (yeniden) kurar.
-  /// Android kanalın sesini sonradan değiştirmez → önce sil, sonra oluştur.
+  /// [secim] için titreşimli (`km_v3_<secim>`) ve titreşimsiz
+  /// (`km_v3_<secim>_tsz`) kanalı birlikte kurar. Zaten varsa Android
+  /// ses/titreşimi DEĞİŞTİRMEZ (yalnız ad/açıklama güncellenir) → güvenli.
+  Future<void> _ciftKanalKur(
+    AndroidFlutterLocalNotificationsPlugin a,
+    String secim,
+    String ad, {
+    String? aciklama,
+    bool sesCalsin = true,
+    AndroidNotificationSound? ses,
+  }) async {
+    final id = _kanalIdFor(secim);
+    for (final titresim in [true, false]) {
+      await a.createNotificationChannel(AndroidNotificationChannel(
+        titresim ? id : '$id${BildirimKanali.tszEki}',
+        titresim ? ad : '$ad (titreşimsiz)',
+        description: aciklama,
+        importance: Importance.high,
+        playSound: sesCalsin,
+        sound: sesCalsin ? ses : null,
+        enableVibration: titresim,
+      ));
+    }
+  }
+
+  /// Özel ses kanallarını (titreşimli + _tsz) kullanıcının seçtiği URI ile
+  /// (yeniden) kurar. Android kanalın sesini sonradan değiştirmez → önce sil,
+  /// sonra oluştur.
   Future<void> _ozelKanaliKur() async {
     final a = _android;
     if (a == null) return;
-    await a.deleteNotificationChannel(channelId: _kanalIdFor('ozel'));
+    final id = _kanalIdFor('ozel');
+    await a.deleteNotificationChannel(channelId: id);
+    await a.deleteNotificationChannel(
+        channelId: '$id${BildirimKanali.tszEki}');
     final uri = AyarServisi.instance.ozelSesUri.value;
     if (uri != null && uri.isNotEmpty) {
-      await a.createNotificationChannel(AndroidNotificationChannel(
-        _kanalIdFor('ozel'), 'Özel Ses',
-        importance: Importance.high,
-        sound: UriAndroidNotificationSound(uri),
-      ));
+      await _ciftKanalKur(a, 'ozel', 'Özel Ses',
+          ses: UriAndroidNotificationSound(uri));
     }
   }
 
@@ -522,22 +651,29 @@ class BildirimServisi {
     final ayar = AyarServisi.instance;
     if (!ayar.bildirimAcik.value) return; // bildirim kapalıysa gösterme
 
+    // SESSİZE ALINMIŞ sohbet: gönderen bunu alıcının listesine bakıp push'un
+    // kanalına yazdı ([BildirimKanali.alicininKanali]). Ön planda bildirimi
+    // biz çizdiğimiz için o kararı burada da uygula — yoksa uygulama açıkken
+    // sessize alınmış sohbet yine çalardı.
+    final sessizSohbet =
+        bildirim.android?.channelId == BildirimKanali.sessizSohbet;
+
     // Ses hem kanaldan (Android 8+) hem detaydan (8 altı) gelir.
-    final secim = ayar.bildirimSesi.value;
+    final secim = sessizSohbet ? 'sessiz' : ayar.bildirimSesi.value;
     _yerel.show(
       id: bildirim.hashCode,
       title: bildirim.title,
       body: bildirim.body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          aktifKanalId,
+          sessizSohbet ? BildirimKanali.sessizSohbet : aktifKanalId,
           'ROY MESSANGER',
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',
           playSound: secim != 'sessiz',
           sound: _sesFor(secim),
-          enableVibration: ayar.titresimAcik.value,
+          enableVibration: !sessizSohbet && ayar.titresimAcik.value,
           // Kilit ekranında içerik GİZLENMESİN (yarım görünme sorunu)
           visibility: NotificationVisibility.public,
           // Uzun mesaj tek satıra kırpılmasın, açılabilir olsun
@@ -633,46 +769,81 @@ class BildirimServisi {
 
   /// FAZ 4: BELİRLİ bir kullanıcıya (uid) mesaj bildirimi gönderir.
   /// [ekstraData] verilirse data payload olarak eklenir (sohbet açma vb.).
+  /// ⚠️ ASLA fırlatmaz: çağıranlar (mesaj/arkadaşlık servisi) bunu
+  /// `await` ETMEDEN çağırıyor → buradan kaçan bir hata (ör. çevrimdışı
+  /// Firestore okuması) yakalanmamış async hata olarak HataServisi'ne düşer.
   Future<void> hedefeBildirimGonder({
     required String hedefUid,
     required String baslik,
     required String govde,
     Map<String, String>? ekstraData,
   }) async {
-    final d = (await _users.doc(hedefUid).get()).data();
-    final token = d?['fcmToken'] as String?;
-    if (token == null) return;
-    final kanal = _gecerliKanal(d?['bildirimKanali'] as String?);
-    await _gonderMesaj(token, {
-      'notification': {'title': baslik, 'body': govde},
-      'data': ?ekstraData,
-      'android': {
-        // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
-        // düşük önceliğe düşebiliyor → mesaj Doze'da gecikir/hiç gelmez.
-        // (Bu tuzak projede daha önce ÇAĞRI push'unda yaşanmıştı; mesaj
-        // push'u küçük harfte kalmış.)
-        'priority': 'HIGH',
-        'notification': {
-          'channel_id': kanal,
-          'visibility': 'PUBLIC',
-          'tag': 'km_$hedefUid',
+    try {
+      // Alıcının dokümanı aktarıcı yolunda da okunur: kanal (ses/titreşim/
+      // kapalı tercihi) ve sessize aldığı sohbetler push'un İÇİNE yazılır.
+      final d = (await _users.doc(hedefUid).get()).data();
+      final kanal = BildirimKanali.alicininKanali(
+        yayinlanan: d?['bildirimKanali'] as String?,
+        sessizSohbetler: d?['sessizSohbetler'],
+        chatId: ekstraData?['chatId'],
+      );
+      final mesaj = <String, dynamic>{
+        'notification': {'title': baslik, 'body': govde},
+        'data': ?ekstraData,
+        'android': {
+          // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
+          // düşük önceliğe düşebiliyor → mesaj Doze'da gecikir/hiç gelmez.
+          // (Bu tuzak projede daha önce ÇAĞRI push'unda yaşanmıştı; mesaj
+          // push'u küçük harfte kalmış.)
+          'priority': 'HIGH',
+          'notification': {
+            'channel_id': kanal,
+            'visibility': 'PUBLIC',
+            'tag': 'km_$hedefUid',
+          },
         },
-      },
-    });
+      };
+      if (AktariciServisi.etkin) {
+        // Token'ı aktarıcı kendisi bulur → istemcinin fcmToken okumasına
+        // gerek yok (ileride `users` kuralında istemcilere kapatılabilir).
+        await AktariciServisi.instance
+            .bildirimGonder(hedefUid: hedefUid, mesaj: mesaj);
+        return;
+      }
+      final token = d?['fcmToken'] as String?;
+      if (token == null) return;
+      await _gonderMesaj(token, mesaj);
+    } catch (e) {
+      HataServisi.instance.iz('BILDIRIM gonderilemedi hedef=$hedefUid: $e');
+    }
   }
 
   /// FAZ 4: BELİRLİ bir kullanıcıya data-only push (arama/iptal gibi).
+  /// ⚠️ ASLA fırlatmaz (arama başlatma bunu `await` etmeden çağırıyor).
   Future<void> hedefeVeriGonder({
     required String hedefUid,
     required Map<String, String> veri,
   }) async {
-    final token = (await _users.doc(hedefUid).get()).data()?['fcmToken']
-        as String?;
-    if (token == null) return;
-    await _gonderMesaj(token, {
+    final mesaj = <String, dynamic>{
       'data': veri,
       'android': {'priority': 'HIGH', 'ttl': '45s'},
-    });
+    };
+    try {
+      if (AktariciServisi.etkin) {
+        // Veri push'unda kanal yok (bildirimi CallKit çizer) → alıcı
+        // dokümanını okumaya gerek yok. ÇAĞRI push'u olduğu için fazladan bir
+        // Firestore gidiş-dönüşü zili geciktirirdi; bilinçli olarak atlandı.
+        await AktariciServisi.instance
+            .bildirimGonder(hedefUid: hedefUid, mesaj: mesaj);
+        return;
+      }
+      final token = (await _users.doc(hedefUid).get()).data()?['fcmToken']
+          as String?;
+      if (token == null) return;
+      await _gonderMesaj(token, mesaj);
+    } catch (e) {
+      HataServisi.instance.iz('VERI push gonderilemedi hedef=$hedefUid: $e');
+    }
   }
 
   /// FCM için yetkili HTTP istemcisi + proje kimliği (uygulama ömrü boyunca

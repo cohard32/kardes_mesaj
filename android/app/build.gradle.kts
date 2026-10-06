@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -5,6 +7,49 @@ plugins {
     // END: FlutterFire Configuration
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// SURUM IMZASI: android/key.properties (git'e GIRMEZ, bkz. android/.gitignore)
+//   storeFile=<keystore yolu; android/app'e gore goreli ya da mutlak>
+//   storePassword=...   keyAlias=...   keyPassword=...
+// ⚠️ Eskiden release APK DEBUG anahtariyla imzalaniyordu. Debug keystore
+// (~/.android/debug.keystore) makineye ozel: bilgisayar degisir/sifirlanirsa
+// yeni APK eskisinin USTUNE KURULAMAZ (imza uyusmazligi) → otomatik guncelleme
+// kirilir, herkes uygulamayi silip yerel veriyi kaybeder. key.properties varsa
+// gercek anahtar kullanilir; YOKSA (yerel/CI derlemesi) debug'a dusulur ve
+// uyarilir — derleme kirilmasin diye.
+val imzaDosyasi = rootProject.file("key.properties")
+val imza = Properties().apply {
+    if (imzaDosyasi.exists()) imzaDosyasi.inputStream().use { load(it) }
+}
+val imzaAnahtarlari = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val imzaHazir = imzaDosyasi.exists() &&
+    imzaAnahtarlari.all { !imza.getProperty(it).isNullOrBlank() }
+// ⚠️ GERCEK ANAHTARA GECTIKTEN SONRA debug'a sessizce dusmek, onlemek
+// istedigimiz arizayi (guncelleme kurulamaz) AYNEN geri getirir. Bu yuzden:
+//  - android/gradle.properties'te royImzaZorunlu=true ise release derlemesi
+//    key.properties olmadan HATA verir (gecis yapildiktan sonra acin);
+//  - degilse uyari logger.quiet ile basilir: flutter araci Gradle'i '-q' ile
+//    calistirir ve WARN duzeyi orada HIC gorunmez, QUIET duzeyi gorunur.
+val imzaZorunlu = (findProperty("royImzaZorunlu") as String?)?.toBoolean() == true
+val releaseIstendi = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true)
+}
+if (!imzaHazir) {
+    val neden = if (imzaDosyasi.exists())
+        "android/key.properties eksik alan iceriyor ($imzaAnahtarlari)"
+    else
+        "android/key.properties yok"
+    if (imzaZorunlu && releaseIstendi) {
+        throw GradleException(
+            "$neden ama royImzaZorunlu=true: release DEBUG anahtariyla " +
+                "imzalanamaz (yuklu uygulamalar bu APK'yi KURAMAZ)."
+        )
+    }
+    logger.quiet(
+        "UYARI: $neden → release DEBUG anahtariyla imzalanacak " +
+            "(dagitim icin uygun DEGIL)."
+    )
 }
 
 android {
@@ -61,11 +106,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (imzaHazir) {
+            create("release") {
+                storeFile = file(imza.getProperty("storeFile"))
+                storePassword = imza.getProperty("storePassword")
+                keyAlias = imza.getProperty("keyAlias")
+                keyPassword = imza.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (imzaHazir)
+                signingConfigs.getByName("release")
+            else signingConfigs.getByName("debug")
             // Bildirim ses kaynakları (res/raw) atılmasın diye küçültme KAPALI.
             isMinifyEnabled = false
             isShrinkResources = false

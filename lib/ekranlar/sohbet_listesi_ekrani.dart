@@ -53,7 +53,7 @@ class _SohbetListesiEkraniState extends State<SohbetListesiEkrani> {
           stream: _akis,
           builder: (context, snap) {
             if (!snap.hasData && !snap.hasError) {
-              return const Center(
+              return Center(
                 child: CircularProgressIndicator(color: Renkler.neon),
               );
             }
@@ -190,7 +190,7 @@ class _BosDurum extends StatelessWidget {
               borderRadius: Kose.kartKose,
               border: Border.all(color: Renkler.kenar),
             ),
-            child: const Icon(Icons.forum_outlined,
+            child: Icon(Icons.forum_outlined,
                 size: 38, color: Renkler.neon),
           ),
           const SizedBox(height: 16),

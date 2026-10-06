@@ -1,0 +1,18 @@
+{
+  "name": "roy-aktarici",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ROY MESSANGER sunucusuz aktarıcısı (Cloudflare Worker): FCM bildirimi + Agora token",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "agora-token": "^2.0.6",
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "wrangler": "^4.147.0"
+  }
+}

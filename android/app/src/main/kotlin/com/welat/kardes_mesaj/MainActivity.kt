@@ -59,68 +59,28 @@ class MainActivity : FlutterActivity() {
                     // MediaStore kullanılır → Android 10+ (API 29) izin GEREKMEZ.
                     // Dosya Dart tarafında geçici dizine İNDİRİLİP yolu verilir;
                     // burada sadece kopyalanır (büyük videolarda RAM şişmesin).
+                    //
+                    // ⚠️ Kopyalama eskiden bu işleyicide, yani ANA (UI) iş
+                    // parçacığında yapılıyordu: yüzlerce MB'lık videoda ekran
+                    // donuyor, 5 sn'yi aşınca Android "uygulama yanıt vermiyor"
+                    // (ANR) gösteriyordu. Artık kopya arka plan iş parçacığında;
+                    // MethodChannel.Result ise YALNIZ ana iş parçacığında
+                    // çağrılabildiği için yanıt runOnUiThread ile döner.
                     "galeriyeKaydet" -> {
-                        try {
-                            val yol = call.argument<String>("yol")
-                            val ad = call.argument<String>("ad") ?: "roy_medya"
-                            val mime = call.argument<String>("mime")
-                                ?: "application/octet-stream"
-                            val kaynak = if (yol != null) java.io.File(yol) else null
-                            if (kaynak == null || !kaynak.exists()) {
-                                result.success(false)
-                                return@setMethodCallHandler
+                        val yol = call.argument<String>("yol")
+                        val ad = call.argument<String>("ad") ?: "roy_medya"
+                        val mime = call.argument<String>("mime")
+                            ?: "application/octet-stream"
+                        Thread {
+                            try {
+                                val tamam = galeriyeKopyala(yol, ad, mime)
+                                runOnUiThread { result.success(tamam) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error("KAYDEDILEMEDI", e.message, null)
+                                }
                             }
-                            val video = mime.startsWith("video")
-                            val klasor = if (video)
-                                android.os.Environment.DIRECTORY_MOVIES
-                            else android.os.Environment.DIRECTORY_PICTURES
-
-                            if (Build.VERSION.SDK_INT >= 29) {
-                                val koleksiyon = if (video)
-                                    android.provider.MediaStore.Video.Media
-                                        .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                                else android.provider.MediaStore.Images.Media
-                                    .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                                val degerler = android.content.ContentValues().apply {
-                                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, ad)
-                                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
-                                    put(
-                                        android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                                        "$klasor/ROY MESSANGER"
-                                    )
-                                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
-                                }
-                                val uri = contentResolver.insert(koleksiyon, degerler)
-                                if (uri == null) { result.success(false); return@setMethodCallHandler }
-                                contentResolver.openOutputStream(uri).use { cikis ->
-                                    if (cikis == null) { result.success(false); return@setMethodCallHandler }
-                                    kaynak.inputStream().use { it.copyTo(cikis) }
-                                }
-                                degerler.clear()
-                                degerler.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
-                                contentResolver.update(uri, degerler, null, null)
-                                result.success(true)
-                            } else {
-                                // Android 9 ve altı: klasöre yaz + galeriye tarat
-                                // (WRITE_EXTERNAL_STORAGE manifestte maxSdk=28).
-                                val dizin = java.io.File(
-                                    android.os.Environment
-                                        .getExternalStoragePublicDirectory(klasor),
-                                    "ROY MESSANGER"
-                                )
-                                if (!dizin.exists()) dizin.mkdirs()
-                                val hedef = java.io.File(dizin, ad)
-                                kaynak.inputStream().use { g ->
-                                    hedef.outputStream().use { c -> g.copyTo(c) }
-                                }
-                                android.media.MediaScannerConnection.scanFile(
-                                    this, arrayOf(hedef.absolutePath), arrayOf(mime), null
-                                )
-                                result.success(true)
-                            }
-                        } catch (e: Exception) {
-                            result.error("KAYDEDILEMEDI", e.message, null)
-                        }
+                        }.start()
                     }
 
                     // Telefonun zil durumu: 'normal' | 'titresim' | 'sessiz'
@@ -177,6 +137,80 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * [galeriyeKaydet] kopyası — ARKA PLAN iş parçacığında çağrılır, bu yüzden
+     * MethodChannel.Result'a DOKUNMAZ (yanıtı çağıran ana iş parçacığında verir).
+     *
+     * @return kaydedildiyse true; kaynak yoksa / MediaStore girdi açamazsa false.
+     * Kopya sırasında hata olursa istisna çağırana fırlatılır.
+     */
+    private fun galeriyeKopyala(yol: String?, ad: String, mime: String): Boolean {
+        val kaynak = if (yol != null) java.io.File(yol) else null
+        if (kaynak == null || !kaynak.exists()) return false
+        val video = mime.startsWith("video")
+        val klasor = if (video)
+            android.os.Environment.DIRECTORY_MOVIES
+        else android.os.Environment.DIRECTORY_PICTURES
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            val koleksiyon = if (video)
+                android.provider.MediaStore.Video.Media
+                    .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            else android.provider.MediaStore.Images.Media
+                .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val degerler = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, ad)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(
+                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                    "$klasor/ROY MESSANGER"
+                )
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(koleksiyon, degerler) ?: return false
+            // ⚠️ Kopya yarıda kalırsa (disk dolu, kaynak silindi…) IS_PENDING=1
+            // girdisi MediaStore'da ASILI kalıyordu: galeride görünmeyen ama yer
+            // kaplayan yarım dosya. Başarısız her yolda girdi silinir.
+            var tamam = false
+            try {
+                val cikis = contentResolver.openOutputStream(uri)
+                if (cikis != null) {
+                    cikis.use { c -> kaynak.inputStream().use { g -> g.copyTo(c) } }
+                    degerler.clear()
+                    degerler.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                    contentResolver.update(uri, degerler, null, null)
+                    tamam = true
+                }
+            } finally {
+                if (!tamam) {
+                    try {
+                        contentResolver.delete(uri, null, null)
+                    } catch (silinemedi: Exception) {
+                        // Temizlik en iyi çaba; asıl hata/sonuç çağırana gider.
+                    }
+                }
+            }
+            return tamam
+        }
+
+        // Android 9 ve altı: klasöre yaz + galeriye tarat
+        // (WRITE_EXTERNAL_STORAGE manifestte maxSdk=28).
+        val dizin = java.io.File(
+            android.os.Environment
+                .getExternalStoragePublicDirectory(klasor),
+            "ROY MESSANGER"
+        )
+        if (!dizin.exists()) dizin.mkdirs()
+        val hedef = java.io.File(dizin, ad)
+        kaynak.inputStream().use { g ->
+            hedef.outputStream().use { c -> g.copyTo(c) }
+        }
+        android.media.MediaScannerConnection.scanFile(
+            this, arrayOf(hedef.absolutePath), arrayOf(mime), null
+        )
+        return true
     }
 
     @Deprecated("Deprecated in Java")

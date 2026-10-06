@@ -1,0 +1,107 @@
+# ROY MESSANGER — sürekli entegrasyon.
+#
+# flutter            : analiz + birim testleri (sürüm tutarlılığı dahil:
+#                      test/surum_test.dart unutulan sürüm artışını yakalar).
+# kurallar           : Firestore güvenlik kuralları emülatörde (77 senaryo,
+#                      tool/firestore_rules_test.mjs).
+# kurallari-yayinla  : main'e push'ta, iki iş de yeşilse kuralları + indeksleri
+#                      Firebase'e yayınlar. ⚠️ Eskiden kurallar elle (konsoldan)
+#                      yayınlanıyordu; depodaki test edilmiş kural ile canlıdaki
+#                      kural ayrışabiliyordu.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # Depoda OLMAYAN (gitignore'daki) sır dosyaları için yer tutucular —
+      # yalnız analiz/test içindir; derlenen APK'ya girmez.
+      - name: Sır dosyası yer tutucuları
+        run: |
+          [ -f lib/gizli.dart ] || echo "const String agoraSertifika = '';" > lib/gizli.dart
+          [ -f assets/service_account.json ] || echo '{}' > assets/service_account.json
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  kurallar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Firestore emülatörü güncel firebase-tools ile Java 21 ister.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Kural testleri (emülatör)
+        run: |
+          K="$RUNNER_TEMP/kurallar"
+          mkdir -p "$K"
+          cp firestore.rules tool/firestore_rules_test.mjs "$K/"
+          cd "$K"
+          npm init -y > /dev/null
+          npm pkg set type=module
+          npm i --no-audit --no-fund @firebase/rules-unit-testing firebase firebase-tools
+          echo '{"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}' > firebase.json
+          npx firebase emulators:exec --only firestore --project demo-kurallar "node firestore_rules_test.mjs"
+
+  kurallari-yayinla:
+    needs: [flutter, kurallar]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Aynı anda iki yayın birbirini ezmesin (sıra korunur, iptal edilmez).
+    concurrency:
+      group: kurallari-yayinla
+      cancel-in-progress: false
+    # ⚠️ `secrets` bağlamı `if:` içinde KULLANILAMAZ; bu yüzden secret env'e
+    # alınıp adımlarda env.SA ile denetlenir. Adımın KENDİ env'i aynı adımın
+    # `if:`inde görünmediği için iş düzeyinde tanımlı.
+    env:
+      SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Secret yoksa atla (iş başarısız sayılmaz)
+        if: env.SA == ''
+        run: echo "::notice title=kurallari-yayinla::FIREBASE_SERVICE_ACCOUNT secret tanımlı değil, deploy atlandı."
+
+      - uses: actions/checkout@v4
+        if: env.SA != ''
+
+      - uses: actions/setup-node@v4
+        if: env.SA != ''
+        with:
+          node-version: '22'
+
+      - name: Kuralları ve indeksleri yayınla
+        if: env.SA != ''
+        run: |
+          SA_DOSYA="$RUNNER_TEMP/sa.json"
+          printf '%s' "$SA" > "$SA_DOSYA"
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA_DOSYA"
+          npx --yes firebase-tools deploy \
+            --only firestore:rules,firestore:indexes \
+            --project kardes-mesaj --non-interactive
+
+      - name: Kimlik dosyasını sil
+        if: always() && env.SA != ''
+        run: rm -f "$RUNNER_TEMP/sa.json"

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math';
 import '../servisler/hata_servisi.dart';
 
-import 'package:audioplayers/audioplayers.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -21,8 +20,11 @@ import '../servisler/bildirim_servisi.dart';
 import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
+import '../servisler/ses_oynatici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/mesaj_metni.dart';
+import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
 import 'profil_goruntule_ekrani.dart';
@@ -92,8 +94,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     return _mesajAkisi!;
   }
 
-  // Otomatik kaydırma kontrolü (klavye/scroll zıplamasını önler)
-  int _oncekiMesajSayisi = 0;
+  // Otomatik kaydırma kontrolü (klavye/scroll zıplamasını önler).
+  // Liste TERS (reverse: true): en yeni mesaj offset 0'da. "Yeni mesaj geldi"
+  // = en yeni mesajın kimliği değişti. ⚠️ Eskiden mesaj SAYISINA bakılıyordu;
+  // sayfalamada eski sayfa gelince sayı da arttığı için "yeni mesaj" sanılıp
+  // kaydırma tetiklenebiliyordu.
+  String? _enYeniId;
   bool _ilkKaydirma = true;
   bool _zorlaKaydir = false;
 
@@ -117,6 +123,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // Emoji paneli
   bool _emojiAcik = false;
+
+  // YANIT: yazma alanının üstündeki alıntı çubuğu. ValueNotifier: çubuğu
+  // açıp kapatmak tüm sohbet ekranını (mesaj listesi) yeniden çizmesin.
+  final _yanitVN = ValueNotifier<Mesaj?>(null);
+
+  // SESSİZE ALMA (canlı; başlıktaki ikon + menü metni için).
+  bool _sessiz = false;
+  StreamSubscription<bool>? _sessizAbone;
 
   // ENGEL DURUMU (canlı). null = engel yok, değilse engeli koyanın uid'i.
   // Karşı taraf ekran AÇIKKEN engellerse yazma alanı anında kapanır —
@@ -155,6 +169,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _sohbetAbone = _sohbetServis.sohbetDinle(widget.chatId).listen((s) {
       _benimOkunmamis = s.benimOkunmamis(_uid);
       _gorulduGuncelle();
+    }, onError: (Object _) {});
+    _sessizAbone = _sohbetServis.sessizMi(widget.chatId).listen((v) {
+      if (mounted && v != _sessiz) setState(() => _sessiz = v);
     }, onError: (Object _) {});
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
@@ -287,6 +304,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _ampSub?.cancel();
     _engelAbone?.cancel();
     _sohbetAbone?.cancel();
+    _sessizAbone?.cancel();
+    // Ekrandan çıkınca bu sohbetin sesli mesajı çalmaya devam etmesin
+    // (oynatıcı paylaşılan TEK örnektir; dispose edilmez, yalnız durdurulur).
+    SesOynaticiServisi.instance.durdur(chatId: widget.chatId);
     _kayitci.dispose();
     _mesajCtrl.dispose();
     _scrollCtrl.dispose();
@@ -295,6 +316,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _kayitSaniyeVN.dispose();
     _dalgaVN.dispose();
     _iptalBolgesindeVN.dispose();
+    _yanitVN.dispose();
     super.dispose();
   }
 
@@ -363,18 +385,26 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _gonder() async {
     final metin = _mesajCtrl.text;
     if (metin.trim().isEmpty) return;
+    final yanit = _yanitVN.value;
     _mesajCtrl.clear();
+    _yanitVN.value = null;
     _yaziyorTimer?.cancel();
     _yaziyorGonderildi = false;
     _presence.yaziyorAyarla(widget.chatId, false);
     _zorlaKaydir = true;
     try {
-      await _servis.gonder(widget.chatId, widget.karsi.uid, metin);
+      await _servis.gonder(
+        widget.chatId,
+        widget.karsi.uid,
+        metin,
+        yanit: yanit,
+      );
     } catch (e) {
       // Firestore çevrimdışıyken kuyruğa alır; yine de hata olursa kullanıcıya
-      // bildir ve metni kaybetme.
+      // bildir ve metni (ve yanıtlanan mesajı) kaybetme.
       if (!mounted) return;
       _mesajCtrl.text = metin;
+      _yanitVN.value = yanit;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Mesaj gönderilemedi. Tekrar dene.')),
       );
@@ -382,31 +412,41 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 
   // Kullanıcı en üste yaklaşınca daha eski mesajları yükle (sayfalama).
+  // Liste ters olduğu için "en üst" = maxScrollExtent.
   void _eskiMesajKontrol() {
     if (_hepsiYuklendi || _eskiYukleniyor) return;
     if (!_scrollCtrl.hasClients) return;
-    if (_scrollCtrl.position.pixels <= 120) {
+    final pos = _scrollCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 120) {
       _eskiYukleniyor = true;
       setState(() => _mesajLimit += _sayfaBoyu);
     }
   }
 
-  // Sadece yeni mesaj geldiğinde (ya da kullanıcı en alttayken) kaydırır.
-  // Böylece klavye açılınca / yukarı kaydırırken liste zıplamaz.
-  void _yeniMesajKaydir(int yeniSayi) {
-    final artti = yeniSayi > _oncekiMesajSayisi;
-    _oncekiMesajSayisi = yeniSayi;
-    if (!artti && !_ilkKaydirma && !_zorlaKaydir) return;
+  // Sadece EN ALTA yeni mesaj geldiğinde (kullanıcı en alttaysa ya da
+  // mesajı kendisi gönderdiyse) en alta kaydırır. Böylece klavye açılınca /
+  // yukarıda geçmişi okurken / eski sayfa yüklenirken liste zıplamaz.
+  // Ters listede en alt = offset 0; ilk açılışta liste zaten oradadır
+  // (eskiden ilk karede maxScrollExtent'e jumpTo gerekiyordu ve resimler
+  // yüklendikçe uzunluk değiştiği için tam dibe oturmuyordu).
+  void _yeniMesajKaydir(List<Mesaj> mesajlar) {
+    final enYeni = mesajlar.isEmpty ? null : mesajlar.first.id;
+    final yeniGeldi = enYeni != _enYeniId;
+    _enYeniId = enYeni;
+    if (_ilkKaydirma) {
+      _ilkKaydirma = false;
+      return;
+    }
+    // ⚠️ _zorlaKaydir YALNIZ yeni mesaj gelince tüketilir: eskiden ilgisiz
+    // bir yeniden çizimde (yükleme çubuğu vb.) harcanabiliyor, gönderilen
+    // mesaj birkaç kare sonra gelince artık kaydırılmıyordu.
+    if (!yeniGeldi) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollCtrl.hasClients) return;
-      final pos = _scrollCtrl.position;
-      final enAltaYakin = pos.maxScrollExtent - pos.pixels < 220;
-      if (_ilkKaydirma) {
-        _ilkKaydirma = false;
-        _scrollCtrl.jumpTo(pos.maxScrollExtent);
-      } else if (_zorlaKaydir || enAltaYakin) {
+      final enAltaYakin = _scrollCtrl.position.pixels < 220;
+      if ((_zorlaKaydir || enAltaYakin) && _scrollCtrl.position.pixels > 0) {
         _scrollCtrl.animateTo(
-          pos.maxScrollExtent,
+          0,
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
@@ -470,7 +510,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo, color: Renkler.neon),
+              leading: Icon(Icons.photo, color: Renkler.neon),
               title: const Text('Fotoğraf'),
               onTap: () {
                 Navigator.pop(context);
@@ -478,7 +518,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.videocam, color: Renkler.neon),
+              leading: Icon(Icons.videocam, color: Renkler.neon),
               title: const Text('Video'),
               onTap: () {
                 Navigator.pop(context);
@@ -486,7 +526,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.gif_box_outlined, color: Renkler.neon),
+              leading: Icon(Icons.gif_box_outlined, color: Renkler.neon),
               title: const Text('GIF / Sticker'),
               onTap: () {
                 Navigator.pop(context);
@@ -665,7 +705,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               builder: (_) => ProfilGoruntuleEkrani(kullanici: widget.karsi),
             ),
           ),
-          child: _AppBarBaslik(chatId: widget.chatId, karsi: widget.karsi),
+          child: _AppBarBaslik(
+            chatId: widget.chatId,
+            karsi: widget.karsi,
+            sessiz: _sessiz,
+          ),
         ),
         actions: [
           IconButton(
@@ -678,6 +722,31 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             icon: const Icon(Icons.videocam_outlined),
             onPressed: () => _aramaBaslat(AramaTipi.video),
           ),
+          PopupMenuButton<String>(
+            tooltip: 'Diğer',
+            color: Renkler.yuzey,
+            onSelected: (secim) {
+              if (secim == 'sessiz') _sessizDegistir();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem<String>(
+                value: 'sessiz',
+                child: Row(
+                  children: [
+                    Icon(
+                      _sessiz
+                          ? Icons.notifications_active_outlined
+                          : Icons.notifications_off_outlined,
+                      color: Renkler.neon,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(_sessiz ? 'Sessizi kapat' : 'Sohbeti sessize al'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: Zemin(
@@ -685,7 +754,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         child: Column(
           children: [
             if (_yukleniyor)
-              const LinearProgressIndicator(
+              LinearProgressIndicator(
                 color: Renkler.neon,
                 backgroundColor: Renkler.yuzey,
               ),
@@ -704,7 +773,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   // `waiting`e döner. Eskiden bu anda liste yerine spinner
                   // çiziliyor (yanıp sönme) ve kaydırma konumu kayboluyordu.
                   if (!snapshot.hasData) {
-                    return const Center(
+                    return Center(
                       child: CircularProgressIndicator(color: Renkler.neon),
                     );
                   }
@@ -724,13 +793,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     );
                   }
 
+                  // NOT: liste artık YENİDEN ESKİYE sıralı; görüldü mantığı
+                  // sıraya bakmaz (yalnız "karşıdan gelen + görülmemiş"
+                  // filtresi), dolayısıyla etkilenmez.
                   _sonMesajlar = mesajlar;
-                  WidgetsBinding.instance
-                      .addPostFrameCallback((_) => _gorulduGuncelle());
-                  _yeniMesajKaydir(mesajlar.length);
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _gorulduGuncelle(),
+                  );
+                  _yeniMesajKaydir(mesajlar);
 
+                  // TERS liste: index 0 (en yeni) en altta çizilir.
                   return ListView.builder(
                     controller: _scrollCtrl,
+                    reverse: true,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 12,
@@ -742,6 +817,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                         mesaj: m,
                         benimMi: m.gonderen == _uid,
                         chatId: widget.chatId,
+                        benimUid: _uid,
+                        karsiAd: widget.karsi.ad,
                         onUzunBas: () => _tepkiSec(m),
                       );
                     },
@@ -758,37 +835,50 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 benEngelledim: _engelleyen == _uid,
                 karsiAd: widget.karsi.ad,
               )
-            else
-            Stack(
-              children: [
-                _YazmaAlani(
-                  controller: _mesajCtrl,
-                  odak: _odak,
-                  emojiAcik: _emojiAcik,
-                  onGonder: _gonder,
-                  onEk: _ekMenu,
-                  onEmoji: _emojiToggle,
-                  onMikrofonBilgi: _mikrofonBilgi,
-                  onKayitBasla: _kayitBaslat,
-                  onKayitSurukle: _kayitSurukle,
-                  onKayitBitir: _kayitBitir,
-                ),
-                Positioned.fill(
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: _kayitYapiliyorVN,
-                    builder: (_, kayitta, _) => kayitta
-                        ? IgnorePointer(
-                            child: _KayitKaplamasi(
-                              saniye: _kayitSaniyeVN,
-                              dalga: _dalgaVN,
-                              iptalBolgesinde: _iptalBolgesindeVN,
-                            ),
-                          )
-                        : const SizedBox.shrink(),
+            else ...[
+              ValueListenableBuilder<Mesaj?>(
+                valueListenable: _yanitVN,
+                builder: (_, yanit, _) => yanit == null
+                    ? const SizedBox.shrink()
+                    : _YanitCubugu(
+                        kimden: yanit.gonderen == _uid
+                            ? 'Sen'
+                            : widget.karsi.ad,
+                        onizleme: yanit.yanitIcinOnizleme,
+                        onKapat: () => _yanitVN.value = null,
+                      ),
+              ),
+              Stack(
+                children: [
+                  _YazmaAlani(
+                    controller: _mesajCtrl,
+                    odak: _odak,
+                    emojiAcik: _emojiAcik,
+                    onGonder: _gonder,
+                    onEk: _ekMenu,
+                    onEmoji: _emojiToggle,
+                    onMikrofonBilgi: _mikrofonBilgi,
+                    onKayitBasla: _kayitBaslat,
+                    onKayitSurukle: _kayitSurukle,
+                    onKayitBitir: _kayitBitir,
                   ),
-                ),
-              ],
-            ),
+                  Positioned.fill(
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _kayitYapiliyorVN,
+                      builder: (_, kayitta, _) => kayitta
+                          ? IgnorePointer(
+                              child: _KayitKaplamasi(
+                                saniye: _kayitSaniyeVN,
+                                dalga: _dalgaVN,
+                                iptalBolgesinde: _iptalBolgesindeVN,
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             ValueListenableBuilder<bool>(
               valueListenable: _kayitYapiliyorVN,
               builder: (_, kayitta, _) => (_emojiAcik && !kayitta)
@@ -838,10 +928,20 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 ],
               ),
             ),
-            if (indirilebilir || silinebilir) const Divider(height: 1),
+            const Divider(height: 1),
+            // Engelliyken yazma alanı yok → yanıt da verilemez.
+            if (_engelleyen == null)
+              ListTile(
+                leading: Icon(Icons.reply_rounded, color: Renkler.neon),
+                title: Text('Yanıtla', style: Yazi.isim),
+                onTap: () {
+                  Navigator.pop(context);
+                  _yanitla(mesaj);
+                },
+              ),
             if (indirilebilir)
               ListTile(
-                leading: const Icon(Icons.download_rounded, color: Renkler.neon),
+                leading: Icon(Icons.download_rounded, color: Renkler.neon),
                 title: Text('Galeriye indir', style: Yazi.isim),
                 subtitle: Text('Orijinal kalitede kaydedilir', style: Yazi.kucuk),
                 onTap: () {
@@ -851,7 +951,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               ),
             if (silinebilir)
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: Renkler.tehlike),
+                leading: Icon(Icons.delete_outline, color: Renkler.tehlike),
                 title: Text('Mesajı sil',
                     style: Yazi.stil(16, FontWeight.w700, Renkler.tehlike)),
                 subtitle:
@@ -865,6 +965,38 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         ),
       ),
     );
+  }
+
+  /// Mesajı yanıtlamak üzere seç: yazma alanının üstünde alıntı çubuğu
+  /// açılır ve klavye gelir. Gönderilen METİN mesajı bu alıntıyı taşır.
+  void _yanitla(Mesaj mesaj) {
+    _yanitVN.value = mesaj;
+    if (_emojiAcik) setState(() => _emojiAcik = false);
+    _odak.requestFocus();
+  }
+
+  /// Sohbeti sessize al / sessizi kapat. Ekrandaki durum canlı akıştan
+  /// (sessizMi) güncellenir; hata olursa kullanıcıya söylenir.
+  Future<void> _sessizDegistir() async {
+    final yeni = !_sessiz;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _sohbetServis.sessizeAl(widget.chatId, yeni);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            yeni
+                ? 'Sohbet sessize alındı — bildirimler sessiz gelecek.'
+                : 'Sohbetin sesi açıldı.',
+          ),
+        ),
+      );
+    } catch (e) {
+      HataServisi.instance.iz('sessize alinamadi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Ayar kaydedilemedi. Tekrar dene.')),
+      );
+    }
   }
 
   /// Medyayı galeriye indirir (ilerleme + sonuç bildirimi).
@@ -901,7 +1033,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
           TextButton(
             onPressed: () => Navigator.pop(d, true),
-            child: const Text('Sil', style: TextStyle(color: Renkler.tehlike)),
+            child: Text('Sil', style: TextStyle(color: Renkler.tehlike)),
           ),
         ],
       ),
@@ -927,16 +1059,20 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 class _AppBarBaslik extends StatelessWidget {
   final String chatId;
   final Kullanici karsi;
-  const _AppBarBaslik({required this.chatId, required this.karsi});
 
+  /// Sohbet sessizdeyse adın yanında küçük bir sessiz ikonu gösterilir.
+  final bool sessiz;
+  const _AppBarBaslik({
+    required this.chatId,
+    required this.karsi,
+    this.sessiz = false,
+  });
+
+  // Gün bilgisi de yazılır (bugün/dün/tarih) — bkz. zaman_metni.dart.
   String _sonGorulmeMetni(Kullanici k) {
     if (k.cevrimici) return 'çevrimiçi';
     final t = k.sonGorulme;
-    if (t != null) {
-      final s = t.hour.toString().padLeft(2, '0');
-      final d = t.minute.toString().padLeft(2, '0');
-      return 'son görülme $s:$d';
-    }
+    if (t != null) return sonGorulmeMetni(t);
     return 'çevrimdışı';
   }
 
@@ -967,10 +1103,25 @@ class _AppBarBaslik extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        k.ad,
-                        overflow: TextOverflow.ellipsis,
-                        style: Yazi.isim,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              k.ad,
+                              overflow: TextOverflow.ellipsis,
+                              style: Yazi.isim,
+                            ),
+                          ),
+                          if (sessiz) ...[
+                            const SizedBox(width: 6),
+                            Icon(
+                              Icons.notifications_off_outlined,
+                              size: 15,
+                              color: Renkler.metinSoluk,
+                              semanticLabel: 'Sessizde',
+                            ),
+                          ],
+                        ],
                       ),
                       if (durum.isNotEmpty)
                         Row(
@@ -1009,20 +1160,65 @@ class _MesajBalonu extends StatelessWidget {
   final Mesaj mesaj;
   final bool benimMi;
   final String chatId;
+
+  /// Alıntı başlığı için: alıntılanan mesaj benimse "Sen", değilse [karsiAd].
+  final String benimUid;
+  final String karsiAd;
   final VoidCallback onUzunBas;
 
   const _MesajBalonu({
     required this.mesaj,
     required this.benimMi,
     required this.chatId,
+    required this.benimUid,
+    required this.karsiAd,
     required this.onUzunBas,
   });
 
-  String _saat(DateTime? t) {
-    if (t == null) return '';
-    final s = t.hour.toString().padLeft(2, '0');
-    final d = t.minute.toString().padLeft(2, '0');
-    return '$s:$d';
+  String _saat(DateTime? t) => t == null ? '' : saatMetni(t);
+
+  /// Yanıt balonunun üstündeki alıntı kutusu (kimden + önizleme).
+  /// Neon balonda koyu, karşı tarafın koyu balonunda neon tonlarla çizilir.
+  Widget _alintiKutusu() {
+    final vurgu = benimMi ? Renkler.metinKoyu : Renkler.neon;
+    final metinRengi = benimMi ? Renkler.metinKoyuYumusak : Renkler.metin;
+    final kimden = mesaj.yanitGonderen == benimUid ? 'Sen' : karsiAd;
+    // ⚠️ Sol şerit İÇ kutunun kenarı, yuvarlak köşe DIŞ kutunun kırpması:
+    // tek BoxDecoration'da tek taraflı Border + borderRadius Flutter'da
+    // "uniform border" doğrulamasına takılıp çizimde hata fırlatabiliyor.
+    return Container(
+      margin: EdgeInsets.only(bottom: mesaj.tip == MesajTipi.metin ? 6 : 4),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: vurgu.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(8, 5, 8, 6),
+        decoration: BoxDecoration(
+          border: Border(left: BorderSide(color: vurgu, width: 3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              kimden,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Yazi.stil(12, FontWeight.w800, vurgu),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              mesaj.yanitOnizleme ?? '',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Yazi.stil(13, FontWeight.w500, metinRengi),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Balon içindeki medyanın organik köşesi (balonla uyumlu, bir köşe kısa).
@@ -1054,11 +1250,11 @@ class _MesajBalonu extends StatelessWidget {
                       height: 160,
                       alignment: Alignment.center,
                       color: Renkler.zemin,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: Renkler.neon,
                       ),
                     ),
-              errorBuilder: (c, e, s) => const SizedBox(
+              errorBuilder: (c, e, s) => SizedBox(
                 width: 220,
                 height: 100,
                 child: Icon(Icons.broken_image, color: Renkler.metinSoluk),
@@ -1096,11 +1292,11 @@ class _MesajBalonu extends StatelessWidget {
                       height: 170,
                       alignment: Alignment.center,
                       color: Renkler.zemin,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: Renkler.neon,
                       ),
                     ),
-              errorBuilder: (c, e, s) => const SizedBox(
+              errorBuilder: (c, e, s) => SizedBox(
                 width: 170,
                 height: 90,
                 child: Icon(Icons.broken_image, color: Renkler.metinSoluk),
@@ -1175,6 +1371,7 @@ class _MesajBalonu extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (mesaj.yanitMi) _alintiKutusu(),
                       _icerik(context),
                       Padding(
                         padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
@@ -1209,7 +1406,7 @@ class _MesajBalonu extends StatelessWidget {
                               if (mesaj.tip == MesajTipi.ses &&
                                   mesaj.sesDinlendi) ...[
                                 const SizedBox(width: 4),
-                                const Icon(
+                                Icon(
                                   Icons.headset_rounded,
                                   size: 13,
                                   color: Renkler.metinKoyu,
@@ -1253,7 +1450,7 @@ class _MesajBalonu extends StatelessWidget {
   }
 }
 
-/// İnline video oynatıcı (dokununca oynat/duraklat).
+/// İnline video oynatıcı: önce KAPAK, dokununca yükle + oynat/duraklat.
 class _VideoOynatici extends StatefulWidget {
   final String url;
 
@@ -1266,23 +1463,17 @@ class _VideoOynatici extends StatefulWidget {
 }
 
 class _VideoOynaticiState extends State<_VideoOynatici> {
+  // ⚠️ TEMBEL BAŞLATMA: eskiden her video balonu initState'te
+  // VideoPlayerController oluşturup initialize ediyordu → video dolu bir
+  // sohbeti açmak, ekrana giren HER video için ağdan dosya başı indirip yerel
+  // bir ExoPlayer örneği açıyordu (mobil veri, bellek, takılma; donanım
+  // çözücü sayısı sınırlı cihazlarda videolar açılamayabilir).
+  // Artık başta yalnız Cloudinary'nin ürettiği hafif JPEG kapak çizilir;
+  // oynatıcı kullanıcı dokununca kurulur.
   VideoPlayerController? _ctrl;
+  bool _yukleniyor = false;
   bool _hazir = false;
   bool _hata = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
-    // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
-    _ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-    _ctrl!.initialize().then((_) {
-      if (mounted) setState(() => _hazir = true);
-    }, onError: (Object e) {
-      HataServisi.instance.iz('VIDEO acilamadi: $e');
-      if (mounted) setState(() => _hata = true);
-    });
-  }
 
   @override
   void dispose() {
@@ -1290,53 +1481,116 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
     super.dispose();
   }
 
+  Future<void> _baslat() async {
+    if (_yukleniyor || _ctrl != null) return;
+    setState(() {
+      _yukleniyor = true;
+      _hata = false;
+    });
+    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _ctrl = c;
+    // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
+    // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
+    try {
+      await c.initialize();
+      if (!mounted) return;
+      await c.play();
+      if (!mounted) return;
+      setState(() {
+        _hazir = true;
+        _yukleniyor = false;
+      });
+    } catch (e) {
+      HataServisi.instance.iz('VIDEO acilamadi: $e');
+      if (!mounted) return; // dispose() denetleyiciyi zaten serbest bıraktı
+      _ctrl = null; // dokununca yeniden denenebilsin
+      setState(() {
+        _hata = true;
+        _yukleniyor = false;
+      });
+      await c.dispose();
+    }
+  }
+
+  /// Neon 3D oynat rozeti
+  Widget get _oynatRozeti => Container(
+    decoration: BoxDecoration(
+      gradient: Gradyanlar.accent,
+      shape: BoxShape.circle,
+      boxShadow: Golgeler.neonGlow,
+    ),
+    padding: const EdgeInsets.all(10),
+    child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
+  );
+
+  Widget _koyuKutu() =>
+      Container(width: 220, height: 160, color: Renkler.zeminDerin);
+
+  /// Oynatıcı kurulmadan önceki görünüm: kapak + rozet (yükleniyorsa spinner,
+  /// hatadaysa eski "video açılamadı" ikonu — dokununca yeniden denenir).
+  Widget _kapak(BuildContext context) {
+    final kapakUrl = videoKapakUrl(widget.url);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return GestureDetector(
+      onTap: _baslat,
+      child: ClipRRect(
+        borderRadius: widget.kose,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (kapakUrl == null)
+              _koyuKutu()
+            else
+              Image.network(
+                kapakUrl,
+                width: 220,
+                height: 160,
+                // Balon boyutunda çöz (bkz. fotoğraflardaki cacheWidth notu).
+                cacheWidth: (220 * dpr).round(),
+                fit: BoxFit.cover,
+                // Kapak üretilemezse (eski/harici URL, ağ hatası) düz koyu
+                // kutu: video yine dokununca açılabilir.
+                errorBuilder: (c, e, s) => _koyuKutu(),
+              ),
+            if (_hata)
+              Container(
+                width: 220,
+                height: 160,
+                color: Renkler.zeminDerin.withValues(alpha: 0.7),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.videocam_off_outlined,
+                  color: Renkler.metinSoluk,
+                  size: 36,
+                ),
+              )
+            else if (_yukleniyor)
+              CircularProgressIndicator(color: Renkler.neon)
+            else
+              _oynatRozeti,
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!_hazir || _ctrl == null) {
-      return Container(
-        width: 220,
-        height: 160,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Renkler.zeminDerin,
-          borderRadius: widget.kose,
-        ),
-        child: _hata
-            ? const Icon(Icons.videocam_off_outlined,
-                color: Renkler.metinSoluk, size: 36)
-            : const CircularProgressIndicator(color: Renkler.neon),
-      );
-    }
+    final c = _ctrl;
+    if (!_hazir || c == null) return _kapak(context);
     return GestureDetector(
       onTap: () => setState(() {
-        _ctrl!.value.isPlaying ? _ctrl!.pause() : _ctrl!.play();
+        c.value.isPlaying ? c.pause() : c.play();
       }),
       child: ClipRRect(
         borderRadius: widget.kose,
         child: SizedBox(
           width: 220,
           child: AspectRatio(
-            aspectRatio: _ctrl!.value.aspectRatio,
+            aspectRatio: c.value.aspectRatio,
             child: Stack(
               alignment: Alignment.center,
-              children: [
-                VideoPlayer(_ctrl!),
-                // Neon 3D oynat rozeti
-                if (!_ctrl!.value.isPlaying)
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: Gradyanlar.accent,
-                      shape: BoxShape.circle,
-                      boxShadow: Golgeler.neonGlow,
-                    ),
-                    padding: const EdgeInsets.all(10),
-                    child: const Icon(
-                      Icons.play_arrow,
-                      color: Renkler.metinKoyu,
-                      size: 32,
-                    ),
-                  ),
-              ],
+              children: [VideoPlayer(c), if (!c.value.isPlaying) _oynatRozeti],
             ),
           ),
         ),
@@ -1346,6 +1600,8 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
 }
 
 /// Sesli mesaj oynatıcı: çal/duraklat + ses dalgası (seek) + konum/süre + hız.
+/// Kendi AudioPlayer'ı YOKTUR — uygulama genelindeki tek oynatıcının
+/// (SesOynaticiServisi) durumunu dinler; birini başlatmak öncekini durdurur.
 class _SesOynatici extends StatefulWidget {
   final String url;
   final bool benimMi;
@@ -1365,84 +1621,36 @@ class _SesOynatici extends StatefulWidget {
 }
 
 class _SesOynaticiState extends State<_SesOynatici> {
-  final AudioPlayer _player = AudioPlayer();
-  bool _caliyor = false;
-  Duration _konum = Duration.zero;
-  Duration _sure = Duration.zero;
-  double _hiz = 1.0;
+  final _servis = SesOynaticiServisi.instance;
   late final List<double> _dalga;
-
-  final List<StreamSubscription> _abonelikler = [];
 
   @override
   void initState() {
     super.initState();
     // Ağ dosyası için gerçek dalga çıkarmak ağırdır → URL'den sabit dekoratif dalga.
     _dalga = _dalgaUret(widget.url);
-    _abonelikler.add(
-      _player.onDurationChanged.listen((d) {
-        if (mounted) setState(() => _sure = d);
-      }),
-    );
-    _abonelikler.add(
-      _player.onPositionChanged.listen((p) {
-        if (mounted) setState(() => _konum = p);
-      }),
-    );
-    _abonelikler.add(
-      _player.onPlayerComplete.listen((_) {
-        if (mounted) {
-          setState(() {
-            _caliyor = false;
-            _konum = Duration.zero;
-          });
-        }
-      }),
-    );
   }
 
-  @override
-  void dispose() {
-    for (final a in _abonelikler) {
-      a.cancel();
-    }
-    _player.dispose();
-    super.dispose();
-  }
+  // NOT: dispose'ta oynatıcıya DOKUNULMAZ. Balon kaydırılıp listeden düşse
+  // de ses çalmaya devam eder; ekrandan çıkınca SohbetEkrani durdurur.
 
   List<double> _dalgaUret(String s) {
     final r = Random(s.hashCode);
     return List.generate(48, (_) => 0.2 + r.nextDouble() * 0.8);
   }
 
+  bool get _benim => _servis.calanId.value == widget.mesajId;
+
   Future<void> _degistir() async {
-    if (_caliyor) {
-      await _player.pause();
-      setState(() => _caliyor = false);
-    } else {
-      await _player.play(UrlSource(widget.url));
-      await _player.setPlaybackRate(_hiz);
-      setState(() => _caliyor = true);
-      // Karşı tarafın sesli mesajıysa ve henüz dinlenmediyse "dinlendi" işaretle
-      if (!widget.benimMi && !widget.dinlendi) {
-        MesajServisi.instance.sesDinlendiIsaretle(
-          widget.chatId,
-          widget.mesajId,
-        );
-      }
+    final basladi = await _servis.oynatDuraklat(
+      mesajId: widget.mesajId,
+      url: widget.url,
+      chatId: widget.chatId,
+    );
+    // Karşı tarafın sesli mesajıysa ve henüz dinlenmediyse "dinlendi" işaretle
+    if (basladi && !widget.benimMi && !widget.dinlendi) {
+      MesajServisi.instance.sesDinlendiIsaretle(widget.chatId, widget.mesajId);
     }
-  }
-
-  void _hizDegistir() {
-    setState(() => _hiz = _hiz == 1.0 ? 1.5 : (_hiz == 1.5 ? 2.0 : 1.0));
-    _player.setPlaybackRate(_hiz);
-  }
-
-  Future<void> _seek(double oran) async {
-    if (_sure.inMilliseconds == 0) return;
-    final hedef = Duration(milliseconds: (_sure.inMilliseconds * oran).round());
-    await _player.seek(hedef);
-    setState(() => _konum = hedef);
   }
 
   String _mmss(Duration d) {
@@ -1453,12 +1661,39 @@ class _SesOynaticiState extends State<_SesOynatici> {
 
   @override
   Widget build(BuildContext context) {
+    // ⚠️ Yalnız ÇALAN balon konum olaylarıyla (saniyede birkaç kez) yeniden
+    // çizilir: diğer balonlar sadece calanId/hız değişince çizilir.
+    return ValueListenableBuilder<String?>(
+      valueListenable: _servis.calanId,
+      builder: (context, calan, _) {
+        if (calan != widget.mesajId) return _cerceve(false, 0, 0);
+        return ListenableBuilder(
+          listenable: Listenable.merge([
+            _servis.caliyor,
+            _servis.konum,
+            _servis.sure,
+          ]),
+          builder: (context, _) => _cerceve(
+            _servis.caliyor.value,
+            _servis.konum.value.inMilliseconds,
+            _servis.sure.value.inMilliseconds,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _cerceve(bool caliyor, int konumMs, int sureMs) {
     // Neon balonda koyu, karşı tarafın koyu balonunda neon renk
     final renk = widget.benimMi ? Renkler.metinKoyu : Renkler.neon;
-    final oran = _sure.inMilliseconds == 0
-        ? 0.0
-        : (_konum.inMilliseconds / _sure.inMilliseconds).clamp(0.0, 1.0);
-    final hizYazi = _hiz == _hiz.roundToDouble() ? '${_hiz.toInt()}' : '$_hiz';
+    final oran = sureMs == 0 ? 0.0 : (konumMs / sureMs).clamp(0.0, 1.0);
+    final konum = Duration(milliseconds: konumMs);
+    final sure = Duration(milliseconds: sureMs);
+    void seek(double dx, double genislik) {
+      if (!_benim) return; // yüklü olmayan seste süre bilinmiyor
+      _servis.konumaGit(widget.mesajId, (dx / genislik).clamp(0.0, 1.0));
+    }
+
     return SizedBox(
       width: 218,
       child: Column(
@@ -1469,7 +1704,7 @@ class _SesOynaticiState extends State<_SesOynatici> {
               GestureDetector(
                 onTap: _degistir,
                 child: Icon(
-                  _caliyor ? Icons.pause_circle_filled : Icons.play_circle_fill,
+                  caliyor ? Icons.pause_circle_filled : Icons.play_circle_fill,
                   color: renk,
                   size: 36,
                 ),
@@ -1479,12 +1714,9 @@ class _SesOynaticiState extends State<_SesOynatici> {
                 child: LayoutBuilder(
                   builder: (context, c) => GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (d) => _seek(
-                      (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0),
-                    ),
-                    onHorizontalDragUpdate: (d) => _seek(
-                      (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0),
-                    ),
+                    onTapDown: (d) => seek(d.localPosition.dx, c.maxWidth),
+                    onHorizontalDragUpdate: (d) =>
+                        seek(d.localPosition.dx, c.maxWidth),
                     child: SizedBox(
                       height: 30,
                       child: CustomPaint(
@@ -1502,7 +1734,7 @@ class _SesOynaticiState extends State<_SesOynatici> {
             child: Row(
               children: [
                 Text(
-                  '${_mmss(_konum)} / ${_sure == Duration.zero ? "--:--" : _mmss(_sure)}',
+                  '${_mmss(konum)} / ${sureMs == 0 ? "--:--" : _mmss(sure)}',
                   style: TextStyle(
                     color: renk.withValues(alpha: 0.8),
                     fontSize: 11,
@@ -1510,7 +1742,7 @@ class _SesOynaticiState extends State<_SesOynatici> {
                 ),
                 const Spacer(),
                 GestureDetector(
-                  onTap: _hizDegistir,
+                  onTap: _servis.hizDegistir,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
@@ -1520,13 +1752,21 @@ class _SesOynaticiState extends State<_SesOynatici> {
                       color: renk.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text(
-                      '${hizYazi}x',
-                      style: TextStyle(
-                        color: renk,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: _servis.hiz,
+                      builder: (_, hiz, _) {
+                        final hizYazi = hiz == hiz.roundToDouble()
+                            ? '${hiz.toInt()}'
+                            : '$hiz';
+                        return Text(
+                          '${hizYazi}x',
+                          style: TextStyle(
+                            color: renk,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -1534,6 +1774,78 @@ class _SesOynaticiState extends State<_SesOynatici> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Yazma alanının üstündeki yanıt çubuğu: kime yanıt verildiği + alıntı
+/// önizlemesi + kapat (X). Kapatınca mesaj normal (yanıtsız) gider.
+class _YanitCubugu extends StatelessWidget {
+  final String kimden;
+  final String onizleme;
+  final VoidCallback onKapat;
+  const _YanitCubugu({
+    required this.kimden,
+    required this.onizleme,
+    required this.onKapat,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Renkler.zemin,
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+      // Tek taraflı kenar + yuvarlak köşe: bkz. _alintiKutusu notu.
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Renkler.neonSis,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 6, 0, 6),
+          decoration: BoxDecoration(
+            border: Border(left: BorderSide(color: Renkler.neon, width: 3)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.reply_rounded, size: 18, color: Renkler.neon),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      kimden,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Yazi.neonKucuk,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      onizleme,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Yazi.kucuk,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Yanıtı kapat',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.close,
+                  size: 20,
+                  color: Renkler.metinSoluk,
+                ),
+                onPressed: onKapat,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1596,7 +1908,7 @@ class _YazmaAlani extends StatelessWidget {
               tooltip: 'Ekle',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              icon: const Icon(Icons.add_circle_outline, color: Renkler.neon),
+              icon: Icon(Icons.add_circle_outline, color: Renkler.neon),
               onPressed: onEk,
             ),
             const SizedBox(width: 8),
@@ -1644,7 +1956,7 @@ class _YazmaAlani extends StatelessWidget {
                           kose: Kose.dugme,
                           padding: const EdgeInsets.all(13),
                           onTap: onGonder,
-                          cocuk: const Icon(
+                          cocuk: Icon(
                             Icons.send_rounded,
                             color: Renkler.metinKoyu,
                             size: 22,
@@ -1661,7 +1973,7 @@ class _YazmaAlani extends StatelessWidget {
                             kose: Kose.dugme,
                             padding: const EdgeInsets.all(13),
                             onTap: onMikrofonBilgi, // kısa dokunuş → ipucu
-                            cocuk: const Icon(
+                            cocuk: Icon(
                               Icons.mic,
                               color: Renkler.metinKoyu,
                               size: 22,
@@ -1759,7 +2071,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                       children: [
                         FadeTransition(
                           opacity: _yanip,
-                          child: const Icon(
+                          child: Icon(
                             Icons.fiber_manual_record,
                             color: Renkler.tehlike,
                             size: 12,
@@ -1817,7 +2129,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.keyboard_arrow_left,
                                 size: 16,
                                 color: Renkler.metinSoluk,
@@ -2328,7 +2640,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
           ),
           Container(
             height: 50,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: Renkler.zeminDerin,
               border: Border(top: BorderSide(color: Renkler.kenar)),
             ),
@@ -2371,7 +2683,7 @@ class _EmojiPaneliState extends State<_EmojiPaneli> {
                 ),
                 IconButton(
                   tooltip: 'Sil',
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.backspace_outlined,
                     color: Renkler.metinSoluk,
                   ),
@@ -2408,7 +2720,7 @@ class _EngelSeridi extends StatelessWidget {
         decoration: Kutular.duzYuzey(kenarli: true),
         child: Row(
           children: [
-            const Icon(Icons.block, size: 18, color: Renkler.tehlike),
+            Icon(Icons.block, size: 18, color: Renkler.tehlike),
             const SizedBox(width: 10),
             Expanded(
               child: Text(

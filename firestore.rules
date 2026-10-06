@@ -46,6 +46,26 @@ service cloud.firestore {
         request.auth.uid in
           get(/databases/$(database)/documents/chats/$(chatId)).data.katilimcilar;
     }
+    // YANIT (alıntı) alanları — üçü de OPSİYONEL (yanıtsız mesajda yok).
+    // ⚠️ Tip/uzunluk sunucuda denetlenir: önizleme mesaj dokümanına KOPYA
+    // olarak yazıldığı için sınır olmasa biri "önizleme" alanına çok uzun
+    // metin koyup karşı tarafın her sohbet açılışında indirmesini sağlardı.
+    // İstemci sınırı: yardimcilar/mesaj_metni.dart → yanitOnizlemeSiniri
+    // (ikisi birlikte değişmeli). yanitGonderen sohbetin katılımcılarından
+    // biri olmalı (sahte "X şunu dedi" alıntısı yazılamasın); aynı chat
+    // dokümanı chatKatilimcisi'nde zaten okunuyor (aynı istekte aynı
+    // dokümana tekrar erişim ek okuma olarak sayılmaz). `&&` kısa devre
+    // yaptığı için yanıtsız mesajda bu get() hiç çalışmaz.
+    function yanitAlanlariGecerli(chatId, d) {
+      return (!('yanitId' in d) ||
+                (d.yanitId is string && d.yanitId.size() > 0 &&
+                 d.yanitId.size() <= 128))
+        && (!('yanitOnizleme' in d) ||
+              (d.yanitOnizleme is string && d.yanitOnizleme.size() <= 120))
+        && (!('yanitGonderen' in d) ||
+              (d.yanitGonderen is string &&
+               d.yanitGonderen in get(/databases/$(database)/documents/chats/$(chatId)).data.katilimcilar));
+    }
     // İki uid'den SIRALI çift kimliği — istemcideki `ciftKimligi()` ile aynı.
     // ⚠️ friendships/chats/engellenenler/aramalar dokümanlarının kimliği
     // HER ZAMAN içindeki uid'lerden türetilmiş olmalı. Doğrulanmazsa biri
@@ -192,7 +212,8 @@ service cloud.firestore {
       // Yazma: katılımcı OLMAK + hâlâ ARKADAŞ olmak + kendi adına
       //   (arkadaşlıktan çıkınca yeni mesaj/arama gönderilemesin — chatId=friendshipId).
       // Güncelleme: sadece goruldu/tepki/sesDinlendi alanları değişebilir
-      //   (biri diğerinin mesaj metnini/göndericisini bozamasın).
+      //   (biri diğerinin mesaj metnini/göndericisini bozamasın — yanıt
+      //   alanları da bu yüzden oluşturulduktan sonra DEĞİŞMEZ).
       match /messages/{msgId} {
         allow read: if chatKatilimcisi(chatId);
         // `zaman == request.time`: istemci FieldValue.serverTimestamp() yazar,
@@ -205,7 +226,9 @@ service cloud.firestore {
           && request.resource.data.gonderen == request.auth.uid
           && request.resource.data.zaman == request.time
           && request.resource.data.keys().hasOnly([
-               'gonderen', 'metin', 'tip', 'medyaUrl', 'zaman', 'goruldu']);
+               'gonderen', 'metin', 'tip', 'medyaUrl', 'zaman', 'goruldu',
+               'yanitId', 'yanitOnizleme', 'yanitGonderen'])
+          && yanitAlanlariGecerli(chatId, request.resource.data);
         allow update: if chatKatilimcisi(chatId)
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['goruldu', 'tepki', 'sesDinlendi']);

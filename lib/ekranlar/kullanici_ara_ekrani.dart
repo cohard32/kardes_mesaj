@@ -106,7 +106,7 @@ class _KullaniciAraEkraniState extends State<KullaniciAraEkrani> {
               ),
             ),
             if (_yukleniyor)
-              const LinearProgressIndicator(
+              LinearProgressIndicator(
                 color: Renkler.neon,
                 backgroundColor: Renkler.yuzey,
               ),
@@ -255,7 +255,7 @@ class _SonucSatiriState extends State<_SonucSatiri> {
 
   Widget _buton() {
     if (_durum == null) {
-      return const SizedBox(
+      return SizedBox(
         width: 20,
         height: 20,
         child: CircularProgressIndicator(
@@ -265,7 +265,7 @@ class _SonucSatiriState extends State<_SonucSatiri> {
       );
     }
     final yukleniyor = _islemde
-        ? const SizedBox(
+        ? SizedBox(
             width: 18,
             height: 18,
             child: CircularProgressIndicator(

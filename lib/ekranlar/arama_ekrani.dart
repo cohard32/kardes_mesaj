@@ -2,11 +2,60 @@ import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../servisler/arama_servisi.dart';
 import '../servisler/hata_servisi.dart';
 import '../servisler/ringback_servisi.dart';
 import '../tema.dart';
+
+/// Karşı tarafın kanaldaki varlığına göre arama aşaması.
+enum AramaAsamasi {
+  /// Karşı taraf henüz HİÇ katılmadı (çalıyor / bağlanıyor — 45 sn kuralı).
+  bekleniyor,
+
+  /// Karşı taraf kanalda, konuşma sürüyor.
+  bagli,
+
+  /// Daha önce bağlanmıştı, düştü; geri gelmesi bekleniyor (20 sn kuralı).
+  yenidenBaglaniyor,
+}
+
+/// [BaglantiTakibi.guncelle]'nin ekrana söylediği olay.
+enum BaglantiOlayi { yok, ilkBaglanti, koptu, geriGeldi }
+
+/// Saf karar mantığı (Agora/zamanlayıcı yok → birim testlenebilir).
+///
+/// ⚠️ NEDEN: Eskiden karşı taraf düşünce (`onUserOffline`) yalnız
+/// `karsiUid = null` oluyordu; 45 sn zaman aşımı bağlantıda iptal edildiği
+/// için ekran sonsuza dek "Bağlanıyor…"da kalıyordu. "Hiç bağlanmadı" ile
+/// "bağlanmıştı, düştü" AYRI durumlardır ve ayrı süre kuralı ister.
+class BaglantiTakibi {
+  AramaAsamasi _asama = AramaAsamasi.bekleniyor;
+  AramaAsamasi get asama => _asama;
+
+  /// Karşı tarafın Agora uid'i değişince çağrılır (null = kanalda değil).
+  BaglantiOlayi guncelle(int? uid) {
+    if (uid != null) {
+      switch (_asama) {
+        case AramaAsamasi.bekleniyor:
+          _asama = AramaAsamasi.bagli;
+          return BaglantiOlayi.ilkBaglanti;
+        case AramaAsamasi.yenidenBaglaniyor:
+          _asama = AramaAsamasi.bagli;
+          return BaglantiOlayi.geriGeldi;
+        case AramaAsamasi.bagli:
+          return BaglantiOlayi.yok; // zaten bağlı (uid değişmiş olabilir)
+      }
+    }
+    if (_asama == AramaAsamasi.bagli) {
+      _asama = AramaAsamasi.yenidenBaglaniyor;
+      return BaglantiOlayi.koptu;
+    }
+    // Hiç bağlanmamışken null → 45 sn kuralı geçerli, burada iş yok.
+    return BaglantiOlayi.yok;
+  }
+}
 
 /// Aktif arama ekranı (görüntülü + sesli ortak).
 /// Bu ekrana gelindiğinde Agora kanalına ZATEN katılınmış olur
@@ -37,6 +86,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
   StreamSubscription? _sub;
   Timer? _sayac;
   Timer? _zamanAsimi;
+  Timer? _yenidenBaglanma;
+  final _takip = BaglantiTakibi();
   int _saniye = 0;
   bool _micKapali = false;
   bool _kameraKapali = false;
@@ -66,6 +117,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (widget.benArayanim && _arama.karsiUid.value == null) {
       RingbackServisi.instance.baslat();
     }
+    // ⚠️ Mevcut değeri BİR KEZ işle: arananda arayan kanalda zaten beklediği
+    // için `onUserJoined` ekran açılmadan ÖNCE gelebiliyor; dinleyici yalnız
+    // DEĞİŞİMLERİ duyar → süre sayacı başlamıyor, takip "hiç bağlanmadı"
+    // sanıp sonraki kopmayı da kaçırıyordu.
+    _baglantiKontrol();
     _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
       final durum = doc.data()?['durum'];
       if (durum == 'red') {
@@ -86,13 +142,35 @@ class _AramaEkraniState extends State<AramaEkrani> {
   }
 
   void _baglantiKontrol() {
-    if (_arama.karsiUid.value != null) {
-      // Karşı taraf kanala katıldı → konuşma başlıyor, ton DERHAL sussun.
-      RingbackServisi.instance.durdur();
-      _zamanAsimi?.cancel();
-      _sayac ??= Timer.periodic(const Duration(seconds: 1), (_) {
-        if (mounted) setState(() => _saniye++);
-      });
+    if (_kapandi) return;
+    switch (_takip.guncelle(_arama.karsiUid.value)) {
+      case BaglantiOlayi.ilkBaglanti:
+        // Karşı taraf kanala katıldı → konuşma başlıyor, ton DERHAL sussun.
+        RingbackServisi.instance.durdur();
+        _zamanAsimi?.cancel();
+        // Süre sayacı kopmada DURMAZ: gösterilen süre görüşmenin toplam
+        // süresidir (telefon uygulamalarındaki gibi). Kopukken rozet süre
+        // yerine "Yeniden bağlanıyor…" gösterdiği için akan sayaç görünmez;
+        // geri gelince doğru toplam süre görünür.
+        _sayac ??= Timer.periodic(const Duration(seconds: 1), (_) {
+          if (mounted) setState(() => _saniye++);
+        });
+      case BaglantiOlayi.koptu:
+        // Bağlıyken düştü (ağ, uygulama çökmesi). Karşı taraf bilerek kapattıysa
+        // Firestore 'bitti' zaten ekranı kapatır; bu süre çökme/ağ kaybı için.
+        HataServisi.instance.iz('ARAMA EKRANI karsi taraf dustu, 20 sn bekleniyor');
+        _yenidenBaglanma?.cancel();
+        _yenidenBaglanma = Timer(const Duration(seconds: 20), () {
+          if (!_kapandi && _takip.asama == AramaAsamasi.yenidenBaglaniyor) {
+            _kapat(mesaj: 'Bağlantı koptu');
+          }
+        });
+      case BaglantiOlayi.geriGeldi:
+        HataServisi.instance.iz('ARAMA EKRANI karsi taraf geri geldi');
+        _yenidenBaglanma?.cancel();
+        _yenidenBaglanma = null;
+      case BaglantiOlayi.yok:
+        break;
     }
   }
 
@@ -100,6 +178,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
   void dispose() {
     _sayac?.cancel();
     _zamanAsimi?.cancel();
+    _yenidenBaglanma?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     _sub?.cancel();
     RingbackServisi.instance.durdur(); // güvenlik ağı (çift çağrı güvenli)
@@ -114,6 +193,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     RingbackServisi.instance.durdur();
     _sayac?.cancel();
     _zamanAsimi?.cancel();
+    _yenidenBaglanma?.cancel();
     _arama.karsiUid.removeListener(_baglantiKontrol);
     await _sub?.cancel();
     await _arama.bitir(widget.chatId);
@@ -149,7 +229,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   /// Görüntülü arama: uzak görüntü tam ekran, üstte bilgi, altta kontroller.
   Widget _videoDuzeni() {
-    return Stack(
+    final sahne = Stack(
       children: [
         Positioned.fill(child: _uzakGorunum()),
         // Kendi görüntün — organik köşe + neon kenar
@@ -174,6 +254,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
         Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
         Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
       ],
+    );
+    // ⚠️ Açık temada sahne koyu kalır (bkz. VideoSahne) → durum çubuğu
+    // ikonları da açık olmalı; yoksa koyu ikon videonun üstünde kaybolur.
+    // Koyu paletlerde global stil zaten açık ikonlu → sarmalama yok.
+    if (!VideoSahne.koyuyaZorla) return sahne;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: VideoSahne.sistemCubuklari,
+      child: sahne,
     );
   }
 
@@ -231,6 +319,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
         // bekleme + avatar. (Boş kanal adıyla AgoraVideoView kurmak Agora'da
         // hataya/siyah ekrana yol açıyordu.)
         if (uid == null || e == null || kanal == null || kanal.isEmpty) {
+          // ⚠️ Açık temada video sahnesi koyu kalır (başlık yazısı bu
+          // zeminin ve sonra gelecek videonun üstünde açık renkte durur).
+          if (VideoSahne.koyuyaZorla) {
+            return ColoredBox(
+              color: VideoSahne.zemin,
+              child: Center(child: _avatar(cap: 132)),
+            );
+          }
           return Zemin(
             child: Center(child: _avatar(cap: 132)),
           );
@@ -262,7 +358,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
         final e = _arama.engine;
         if (e == null || !katildi) {
           // Henüz hazır değil → native yüzey OLUŞTURMA.
-          return const ColoredBox(color: Renkler.yuzey);
+          return ColoredBox(color: VideoSahne.yerTutucu);
         }
         _yerelGorunumIsaretle(); // çökerse son_adim tam burayı gösterir
         return AgoraVideoView(
@@ -285,17 +381,30 @@ class _AramaEkraniState extends State<AramaEkrani> {
     HataServisi.instance.sonAdim('EKRAN: YEREL kamera goruntusu olusturuluyor');
   }
 
-  /// İsim + durum rozeti (bağlanıyor / süre) + varsa Agora hatası.
+  /// İsim + durum rozeti (bağlanıyor / yeniden bağlanıyor / süre) + varsa
+  /// Agora hatası.
   /// Hem görüntülü hem sesli düzende kullanılır.
   Widget _ustBilgi() {
     return ValueListenableBuilder<int?>(
       valueListenable: _arama.karsiUid,
       builder: (_, uid, _) {
         final bagli = uid != null;
+        // `_takip` dinleyicide (karsiUid'e İLK eklenen) güncellenir; bu
+        // builder aynı değişimle sonra kurulduğu için aşama zaten günceldir.
+        final yenidenBaglaniyor =
+            _takip.asama == AramaAsamasi.yenidenBaglaniyor;
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(widget.baslik, style: Yazi.baslik),
+            // ⚠️ Görüntülü aramada başlık doğrudan VİDEONUN üstünde (zemini
+            // yok) → açık temada da açık renk (VideoSahne). Sesli aramada
+            // paletin zemini üstünde → normal metin rengi.
+            Text(
+              widget.baslik,
+              style: _video
+                  ? Yazi.baslik.copyWith(color: VideoSahne.metin)
+                  : Yazi.baslik,
+            ),
             const SizedBox(height: 10),
             // Durum rozeti — cam yüzey
             Container(
@@ -314,14 +423,17 @@ class _AramaEkraniState extends State<AramaEkrani> {
                     Text(_sure,
                         style: Yazi.stil(14, FontWeight.w700, Renkler.neon)),
                   ] else ...[
-                    const SizedBox(
+                    SizedBox(
                       width: 12,
                       height: 12,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Renkler.neon),
                     ),
                     const SizedBox(width: 10),
-                    Text('Bağlanıyor…', style: Yazi.kucuk),
+                    Text(
+                      yenidenBaglaniyor ? 'Yeniden bağlanıyor…' : 'Bağlanıyor…',
+                      style: Yazi.kucuk,
+                    ),
                   ],
                 ],
               ),
@@ -389,7 +501,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
             kose: Kose.dugme,
             padding: const EdgeInsets.all(19),
             onTap: _kapat,
-            cocuk: const Icon(Icons.call_end,
+            cocuk: Icon(Icons.call_end,
                 color: Renkler.metinTehlikeUstu, size: 28),
           ),
         ),

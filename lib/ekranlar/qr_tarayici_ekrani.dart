@@ -129,7 +129,7 @@ class _KameraHatasi extends StatelessWidget {
                   borderRadius: Kose.kartKose,
                   border: Border.all(color: Renkler.kenar),
                 ),
-                child: const Icon(Icons.no_photography,
+                child: Icon(Icons.no_photography,
                     size: 38, color: Renkler.neon),
               ),
               const SizedBox(height: 16),

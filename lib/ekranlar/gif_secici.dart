@@ -88,7 +88,7 @@ class _GifSeciciState extends State<GifSecici> {
                       decoration: InputDecoration(
                         hintText: _sticker ? 'Sticker ara...' : 'GIF ara...',
                         prefixIcon:
-                            const Icon(Icons.search, color: Renkler.metinSoluk),
+                            Icon(Icons.search, color: Renkler.metinSoluk),
                         contentPadding:
                             const EdgeInsets.symmetric(vertical: 0),
                       ),
@@ -143,7 +143,7 @@ class _GifSeciciState extends State<GifSecici> {
       );
     }
     if (_yukleniyor) {
-      return const Center(
+      return Center(
         child: CircularProgressIndicator(color: Renkler.neon),
       );
     }
@@ -172,7 +172,7 @@ class _GifSeciciState extends State<GifSecici> {
                 fit: BoxFit.cover,
                 loadingBuilder: (c, w, p) =>
                     p == null ? w : const SizedBox.shrink(),
-                errorBuilder: (c, e, s) => const Icon(Icons.broken_image,
+                errorBuilder: (c, e, s) => Icon(Icons.broken_image,
                     color: Renkler.metinSoluk),
               ),
             ),

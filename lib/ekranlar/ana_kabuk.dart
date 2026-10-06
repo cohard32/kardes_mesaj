@@ -38,6 +38,9 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     HataServisi.instance.iz('ANA EKRAN acildi');
     BildirimServisi.instance.tokenKaydet();
     PresenceServisi.instance.cevrimiciYap();
+    // ⚠️ Nabız: uygulama öldürülürse cevrimdisiYap hiç çalışmaz; okuyanlar
+    // sonGorulme 150 sn'yi geçince çevrimdışı sayar (Kullanici.cevrimici).
+    PresenceServisi.instance.nabziBaslat();
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi
     // varsa (navigator artık hazır) ilgili ekranı aç.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -52,6 +55,7 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    PresenceServisi.instance.nabziDurdur();
     PresenceServisi.instance.cevrimdisiYap();
     super.dispose();
   }
@@ -60,9 +64,12 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       PresenceServisi.instance.cevrimiciYap();
+      PresenceServisi.instance.nabziBaslat();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
+      // Önce nabız durur: geç bir tik cevrimdisiYap'tan sonra true yazmasın.
+      PresenceServisi.instance.nabziDurdur();
       PresenceServisi.instance.cevrimdisiYap();
     }
   }
@@ -95,7 +102,7 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     return Scaffold(
       body: IndexedStack(index: _sekme, children: ekranlar),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: Renkler.zeminDerin,
           border: Border(top: BorderSide(color: Renkler.kenar)),
         ),

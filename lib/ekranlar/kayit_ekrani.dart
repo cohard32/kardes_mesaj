@@ -239,7 +239,7 @@ class _KayitEkraniState extends State<KayitEkrani> {
                   padding: const EdgeInsets.symmetric(vertical: 17),
                   onTap: _yukleniyor ? null : _kayitOl,
                   cocuk: _yukleniyor
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 22,
                           height: 22,
                           child: CircularProgressIndicator(
@@ -258,8 +258,8 @@ class _KayitEkraniState extends State<KayitEkrani> {
   Widget? _adDurumIkonu() {
     switch (_adDurum) {
       case _AdDurum.kontrol:
-        return const Padding(
-          padding: EdgeInsets.all(14),
+        return Padding(
+          padding: const EdgeInsets.all(14),
           child: SizedBox(
             width: 16,
             height: 16,
@@ -268,10 +268,10 @@ class _KayitEkraniState extends State<KayitEkrani> {
           ),
         );
       case _AdDurum.musait:
-        return const Icon(Icons.check_circle, color: Renkler.neon);
+        return Icon(Icons.check_circle, color: Renkler.neon);
       case _AdDurum.dolu:
       case _AdDurum.hata:
-        return const Icon(Icons.cancel, color: Renkler.tehlike);
+        return Icon(Icons.cancel, color: Renkler.tehlike);
       case _AdDurum.bos:
         return null;
     }

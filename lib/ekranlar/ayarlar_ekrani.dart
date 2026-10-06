@@ -10,8 +10,9 @@ import '../servisler/hata_servisi.dart';
 import '../tema.dart';
 import '../yardimcilar/tr_metin.dart';
 
-/// Ayarlar ekranı: bildirim aç/kapa, titreşim, bildirim sesi
-/// (varsayılan / sessiz / yavru kedi / çıngırak / telefondan özel ses).
+/// Ayarlar ekranı: görünüm (tema paleti, neon parıltısı), bildirim aç/kapa,
+/// titreşim, bildirim sesi (varsayılan / sessiz / yavru kedi / çıngırak /
+/// telefondan özel ses), arama zili.
 class AyarlarEkrani extends StatefulWidget {
   const AyarlarEkrani({super.key});
 
@@ -41,6 +42,17 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
   /// uygulama kapalıyken gelen push'lar da ayara uyar.
   Future<void> _bildirimAcikDegistir(bool acik) async {
     await _ayar.bildirimAcikAyarla(acik);
+    try {
+      await BildirimServisi.instance.kanalYayinla();
+    } catch (_) {}
+  }
+
+  /// Titreşim de KANALA kilitli (Android 8+) → anahtar, yayınlanan kanalı
+  /// titreşimsiz varyanta (`_tsz`) çevirir; karşı taraf push'u ona gönderir.
+  /// ⚠️ Eskiden yalnız yerel ayar değişiyordu → uygulama kapalıyken gelen
+  /// bildirimler (sistemin çizdiği) titremeye devam ediyordu.
+  Future<void> _titresimDegistir(bool acik) async {
+    await _ayar.titresimAcikAyarla(acik);
     try {
       await BildirimServisi.instance.kanalYayinla();
     } catch (_) {}
@@ -84,6 +96,37 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
         child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
+          // GÖRÜNÜM en üstte: tema değişince ekran (bu ekran dahil) yerinde
+          // yeniden çizilir; gezinme yığını korunur (main.dart).
+          const _BolumBaslik('Görünüm'),
+
+          ValueListenableBuilder<String>(
+            valueListenable: _ayar.tema,
+            builder: (context, secili, _) => Column(
+              children: [
+                for (final p in RoyPalet.hepsi)
+                  _temaKarti(p, aktif: secili == p.ad),
+              ],
+            ),
+          ),
+
+          ValueListenableBuilder<bool>(
+            valueListenable: _ayar.parilti,
+            builder: (context, pariltiAcik, _) => _Kart(
+              child: SwitchListTile(
+                activeThumbColor: Renkler.neon,
+                title: Text('Neon parıltısını azalt', style: Yazi.isim),
+                subtitle: Text(
+                    'Düğme, balon ve noktalardaki ışımayı kapatır '
+                    '(göz yorgunluğu)',
+                    style: Yazi.kucuk),
+                // Anahtar "azalt" → ayarın (parıltı AÇIK) tersi.
+                value: !pariltiAcik,
+                onChanged: (azalt) => _ayar.pariltiAyarla(!azalt),
+              ),
+            ),
+          ),
+
           const _BolumBaslik('Bildirimler'),
 
           ValueListenableBuilder<bool>(
@@ -106,9 +149,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
               child: SwitchListTile(
                 activeThumbColor: Renkler.neon,
                 title: Text('Titreşim', style: Yazi.isim),
-                subtitle: Text('Bildirimde titreşim', style: Yazi.kucuk),
+                subtitle: Text('Mesaj bildiriminde titreşim',
+                    style: Yazi.kucuk),
                 value: acik,
-                onChanged: _ayar.titresimAcikAyarla,
+                onChanged: _titresimDegistir,
               ),
             ),
           ),
@@ -163,7 +207,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                       style: Yazi.kucuk,
                     ),
                     trailing: IconButton(
-                      icon: const Icon(Icons.folder_open, color: Renkler.neon),
+                      icon: Icon(Icons.folder_open, color: Renkler.neon),
                       tooltip: 'Ses seç',
                       onPressed: _telefondanSec,
                     ),
@@ -227,8 +271,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             child: Text(
               'Seçtiğin zil, biri seni aradığında çalar (uygulama kapalıyken '
               'bile). Telefonun sessiz/titreşim modundaysa Android zili çalmaz — '
-              'bu uygulamanın değil, telefonun ayarıdır. Arama titreşimi '
-              'Android tarafından otomatik yönetilir.',
+              'bu uygulamanın değil, telefonun ayarıdır. Yukarıdaki "Titreşim" '
+              'anahtarı yalnız mesaj bildirimlerine uygulanır. Gelen arama, '
+              'telefon sessiz modda değilse her zaman titrer — arama '
+              'titreşimi uygulamadan kapatılamıyor.',
               style: Yazi.zaman,
             ),
           ),
@@ -237,19 +283,19 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
 
           _Kart(
             child: ListTile(
-              leading: const Icon(Icons.system_update, color: Renkler.neon),
+              leading: Icon(Icons.system_update, color: Renkler.neon),
               title: Text('Güncellemeleri kontrol et', style: Yazi.isim),
               subtitle: Text('Yüklü sürüm: v${GuncellemeServisi.mevcutSurum}',
                   style: Yazi.kucuk),
               trailing:
-                  const Icon(Icons.chevron_right, color: Renkler.metinSoluk),
+                  Icon(Icons.chevron_right, color: Renkler.metinSoluk),
               onTap: () => guncellemeAkisi(context, sessiz: false),
             ),
           ),
 
           _Kart(
             child: ListTile(
-              leading: const Icon(Icons.bug_report_outlined,
+              leading: Icon(Icons.bug_report_outlined,
                   color: Renkler.neon),
               title: Text('Sorun bildir', style: Yazi.isim),
               subtitle: Text(
@@ -258,7 +304,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                 style: Yazi.kucuk,
               ),
               trailing:
-                  const Icon(Icons.chevron_right, color: Renkler.metinSoluk),
+                  Icon(Icons.chevron_right, color: Renkler.metinSoluk),
               onTap: () async {
                 final ok = await HataServisi.instance.manuelBildir(
                   'Kullanıcı sorun bildirdi',
@@ -279,6 +325,31 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
       ),
     );
   }
+
+  /// Tema kartı: seçim işareti + ad + kısa açıklama + palet renk örnekleri.
+  /// ⚠️ Örnekler ETKİN paletten değil kartın kendi paletinden çizilir
+  /// (kullanıcı seçmeden önce nasıl görüneceğini görsün).
+  Widget _temaKarti(RoyPalet p, {required bool aktif}) {
+    return _Kart(
+      secili: aktif,
+      child: ListTile(
+        leading: _SecimIsareti(aktif: aktif),
+        title: Text(p.gorunenAd, style: Yazi.isim),
+        subtitle: Text(_temaAciklamasi(p), style: Yazi.kucuk),
+        trailing: _RenkOrnekleri(palet: p),
+        onTap: aktif ? null : () => _ayar.temaAyarla(p.ad),
+      ),
+    );
+  }
+
+  static String _temaAciklamasi(RoyPalet p) => switch (p.ad) {
+        'neonLime' => 'Varsayılan neon-yeşil',
+        'amoled' => 'Saf siyah — OLED ekranda pil dostu',
+        'gunIsigi' => 'Açık tema — güneş altında okunaklı',
+        'yuksekKontrast' => 'En okunaklı — az gören gözler için',
+        'lavanta' => 'Mor tonlu gece teması',
+        _ => p.acikMi ? 'Açık tema' : 'Koyu tema',
+      };
 
   /// ARAMA ZİLİ satırı (bildirim sesinden ayrı ayar: `AyarServisi.aramaZili`).
   /// Önizleme, gerçek zilin çalacağı yoldan (CallKit/res-raw) değil assets'ten
@@ -302,7 +373,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             trailing: onizlemeAsset == null
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.play_circle_outline,
+                    icon: Icon(Icons.play_circle_outline,
                         color: Renkler.neon),
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
@@ -331,7 +402,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             trailing: onizlemeAsset == null
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.play_circle_outline,
+                    icon: Icon(Icons.play_circle_outline,
                         color: Renkler.neon),
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
@@ -364,8 +435,42 @@ class _SecimIsareti extends StatelessWidget {
         boxShadow: aktif ? Golgeler.neonGlow : null,
       ),
       child: aktif
-          ? const Icon(Icons.check, size: 14, color: Renkler.metinKoyu)
+          ? Icon(Icons.check, size: 14, color: Renkler.metinKoyu)
           : null,
+    );
+  }
+}
+
+/// Bir paletin zemin / yüzey / vurgu renk örnekleri (üç küçük daire).
+class _RenkOrnekleri extends StatelessWidget {
+  final RoyPalet palet;
+  const _RenkOrnekleri({required this.palet});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget daire(Color renk) => Container(
+          width: 18,
+          height: 18,
+          margin: const EdgeInsets.only(left: 4),
+          decoration: BoxDecoration(
+            color: renk,
+            shape: BoxShape.circle,
+            // Kenarlık etkin paletin soluk metninden: açık bir örnek açık
+            // kartta, siyah örnek siyah kartta da seçilebilsin.
+            border: Border.all(
+              color: Renkler.metinSoluk.withValues(alpha: 0.6),
+            ),
+          ),
+        );
+    return ExcludeSemantics(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          daire(palet.zemin),
+          daire(palet.yuzey),
+          daire(palet.neon),
+        ],
+      ),
     );
   }
 }
@@ -389,7 +494,11 @@ class _Kart extends StatelessWidget {
           ),
         ),
         clipBehavior: Clip.antiAlias,
-        child: child,
+        // ⚠️ Şeffaf Material: ListTile mürekkebini en yakın Material'e çizer;
+        // o da renkli Zemin'in ARKASINDA kalıyordu (dokunma dalgası
+        // görünmüyordu, debug'da "ListTile ... ink splashes may be
+        // invisible" doğrulaması atıyordu).
+        child: Material(type: MaterialType.transparency, child: child),
       ),
     );
   }

@@ -62,3 +62,9 @@ lib/gizli.dart
 # Flutter arac zinciri "pub get" sirasinda ios/Flutter/ephemeral gibi dosyalari
 # yeniden uretiyor -> depoya geri sizmasinlar diye klasorun tamami yok sayilir.
 ios/
+
+# Surum imzasi (android/.gitignore da kapsiyor; keystore android/ disina
+# konursa da sizmasin diye depo kokunde tekrar). Asla commit etme.
+key.properties
+*.jks
+*.keystore

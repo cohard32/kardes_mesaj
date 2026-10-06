@@ -30,7 +30,9 @@ void main() async {
   // Uzaktan teşhis: çökmeleri ve akış izlerini topla (Ayarlar > Sorun bildir)
   HataServisi.instance.baslat();
   HataServisi.instance.iz('uygulama açıldı');
-  // Kullanici ayarlarini yukle (bildirim/titresim/ses tercihleri)
+  // Kullanici ayarlarini yukle (bildirim/titresim/ses/TEMA tercihleri).
+  // ⚠️ runApp'ten ÖNCE beklenir: baslat() seçili paleti Renkler'e uygular;
+  // aşağıdaki SystemChrome ve ilk kare bu paletle çizilir.
   await AyarServisi.instance.baslat();
   // Uygulama kapali/arka plandayken gelen mesajlar + cagri icin handler
   FirebaseMessaging.onBackgroundMessage(arkaplanMesajHandler);
@@ -206,8 +208,49 @@ Future<void> _authHazirOlsun() async {
   } catch (_) {}
 }
 
-class KardesMesajApp extends StatelessWidget {
+class KardesMesajApp extends StatefulWidget {
   const KardesMesajApp({super.key});
+
+  @override
+  State<KardesMesajApp> createState() => _KardesMesajAppState();
+}
+
+class _KardesMesajAppState extends State<KardesMesajApp> {
+  final _ayar = AyarServisi.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _ayar.tema.addListener(_temaDegisti);
+    _ayar.parilti.addListener(_temaDegisti);
+  }
+
+  @override
+  void dispose() {
+    _ayar.tema.removeListener(_temaDegisti);
+    _ayar.parilti.removeListener(_temaDegisti);
+    super.dispose();
+  }
+
+  /// Ayarlar'dan tema/parıltı değişti.
+  /// ⚠️ Yalnız `theme`'i değiştirmek YETMEZ: ekranlar renkleri
+  /// `Renkler.x` ile STATİK okur, Theme'e bağımlı değiller → yeniden
+  /// çizilmezler. Alt ağacı yeni bir Key ile yeniden KURMAK da yanlış olur
+  /// (gezinme yığını ve tüm State'ler — açık sohbet, kaydırma, Ayarlar
+  /// ekranının kendisi — kaybolur, kullanıcı ana sayfaya atılır).
+  /// Bu yüzden ağaç KORUNUR, her eleman yalnız "kirli" işaretlenir
+  /// ([tumAgaciYenidenCiz]).
+  void _temaDegisti() {
+    // AyarServisi zaten uyguladı; dinleyici sırası/başka çağıran ihtimaline
+    // karşı değerler buradan da eşitlenir (idempotent).
+    Renkler.uygula(
+      RoyPalet.bul(_ayar.tema.value),
+      pariltiAzalt: !_ayar.parilti.value,
+    );
+    SystemChrome.setSystemUIOverlayStyle(AppTema.sistemCubuklari);
+    setState(() {}); // MaterialApp yeni ThemeData ile kurulsun
+    tumAgaciYenidenCiz();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -215,7 +258,11 @@ class KardesMesajApp extends StatelessWidget {
       title: 'ROY MESSANGER',
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
-      theme: AppTema.karanlik(), // merkezi tema (tema.dart)
+      theme: AppTema.olustur(), // merkezi tema (tema.dart, etkin palet)
+      // ⚠️ Tema geçiş animasyonu KAPALI: Theme'den okuyan parçalar 200 ms
+      // boyunca ara renkte kalırken Renkler'den okuyanlar anında yeni
+      // paleti gösterir → karışık, titrek bir ara kare oluşurdu.
+      themeAnimationDuration: Duration.zero,
       // AuthGate: oturum varsa sohbet, yoksa giriş ekranı
       home: const AuthGate(),
     );

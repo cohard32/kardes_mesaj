@@ -93,7 +93,7 @@ class _ArkadasListesi extends StatelessWidget {
       stream: ArkadasServisi.instance.arkadaslar(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(
+          return Center(
               child: CircularProgressIndicator(color: Renkler.neon));
         }
         final liste = snap.data ?? [];
@@ -130,7 +130,7 @@ class _ArkadasSatiri extends StatelessWidget {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Çıkar',
+            child: Text('Çıkar',
                 style: TextStyle(color: Renkler.tehlike)),
           ),
         ],
@@ -157,7 +157,7 @@ class _ArkadasSatiri extends StatelessWidget {
         title: Text(kullanici.ad, style: Yazi.isim),
         subtitle: Text('@${kullanici.kullaniciAdi}', style: Yazi.kucuk),
         trailing: PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert, color: Renkler.metinSoluk),
+          icon: Icon(Icons.more_vert, color: Renkler.metinSoluk),
           color: Renkler.yuzey,
           onSelected: (v) {
             if (v == 'mesaj') sohbetiAc(context, kullanici);
@@ -271,13 +271,13 @@ class _IstekSatiri extends StatelessWidget {
                 const SizedBox(width: 6),
                 IconButton(
                   tooltip: 'Reddet',
-                  icon: const Icon(Icons.close, color: Renkler.tehlike),
+                  icon: Icon(Icons.close, color: Renkler.tehlike),
                   onPressed: () => arkadas.reddet(istek),
                 ),
               ] else
                 TextButton(
                   onPressed: () => arkadas.iptalEt(istek),
-                  child: const Text('İptal',
+                  child: Text('İptal',
                       style: TextStyle(color: Renkler.metinSoluk)),
                 ),
             ],
