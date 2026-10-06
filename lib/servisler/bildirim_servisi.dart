@@ -12,6 +12,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../tema.dart';
 import 'aktarici_servisi.dart';
@@ -23,9 +24,12 @@ import 'ayar_servisi.dart';
 /// `test/bildirim_kanal_test.dart` ile birim testi yapılır).
 ///
 /// Kimlikler: `km_v3_<secim>`, titreşimsiz varyant `km_v3_<secim>_tsz`,
-/// bildirimler kapalıyken `km_v3_kapali`. Bu kimlikler ALICININ Firestore'da
-/// yayınladığı değerdir; gönderen push'u o kanala yollar → Android 8+'da ses ve
-/// titreşim KANALDAN gelir (uygulama kapalıyken bile).
+/// bildirimler kapalıyken `km_v3_kapali`, özel ses `km_v3_ozel_<8 hex>`
+/// (+ `_tsz`). Bu kimlikler ALICININ Firestore'da yayınladığı değerdir; push o
+/// kanala gider → Android 8+'da ses ve titreşim KANALDAN gelir (uygulama
+/// kapalıyken bile). ⚠️ Aktarıcı (sunucu/aktarici) yayınlanan değeri
+/// `^km_v3_[a-z0-9_]{1,40}$` desenine göre doğrular — yeni kimlikler bu
+/// desene UYMALI, yoksa alıcı varsayılan kanala düşer.
 abstract final class BildirimKanali {
   // ⚠️ Kanalın sesi/titreşimi sonradan DEĞİŞTİRİLEMEZ. Ses çalmıyorsa kilitli
   // eski kanal sebebidir → sürümü artır (yeni id'ler TAZE oluşur, ses gelir).
@@ -67,20 +71,76 @@ abstract final class BildirimKanali {
   /// YOK (bildirim yine görünür, sohbet okunmamış olarak işaretlenir).
   static const String sessizSohbet = '${onek}sessiz$tszEki';
 
+  /// Özel ses kanallarının ortak öneki (`km_v3_ozel_<8 hex>[_tsz]`).
+  /// Eski sabit kimlikler `km_v3_ozel` / `km_v3_ozel_tsz` de bu önekle
+  /// başlar → açılışta "eski özel kanal" olarak temizlenir.
+  static const String ozelOnek = '${onek}ozel';
+
+  /// Özel ses kanal kimliği — URI'ye göre SÜRÜMLÜ: `km_v3_ozel_<fnv1a32(uri)>`.
+  /// ⚠️ NEDEN (d4): eskiden kimlik sabitti (`km_v3_ozel`) ve ses değişince
+  /// kanal silinip AYNI kimlikle yeniden kuruluyordu. Android silinen kanalı
+  /// aynı kimlikle yeniden oluşturunca onu ESKİ AYARLARIYLA diriltir
+  /// (NotificationManager.deleteNotificationChannel belgesi) → yeni ses HİÇ
+  /// uygulanmıyordu; üstelik her açılıştaki silme o kanaldaki tepside duran
+  /// bildirimleri de siliyordu. Farklı URI = farklı kimlik = TAZE kanal.
+  static String ozelKanal(String uri) => '${ozelOnek}_${fnv1a32Hex(uri)}';
+
+  /// FNV-1a 32 bit özeti (UTF-8 baytları üzerinde), 8 küçük hex hane.
+  /// SAF ve KARARLI: `String.hashCode` gibi sürüm/çalıştırma başına
+  /// değişebilen bir değere dayanmaz (kanal kimliği diske/Firestore'a giriyor;
+  /// sonraki açılışta AYNI URI AYNI kimliği vermeli).
+  static String fnv1a32Hex(String metin) {
+    var h = 0x811c9dc5;
+    for (final b in utf8.encode(metin)) {
+      h ^= b;
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    return h.toRadixString(16).padLeft(8, '0');
+  }
+
   /// Ses seçiminin titreşimli kanal kimliği. Bilinmeyen seçim (eski/bozuk
-  /// kayıt) varsayılana düşer — var olmayan kanala push GİTMESİN.
-  static String sesKanali(String secim) =>
-      secimler.contains(secim) ? '$onek$secim' : varsayilan;
+  /// kayıt) varsayılana düşer — var olmayan kanala push GİTMESİN. 'ozel'
+  /// kanalı yalnız URI varken kurulur → URI yoksa varsayılan.
+  static String sesKanali(String secim, {String? ozelUri}) {
+    if (secim == 'ozel') {
+      return (ozelUri == null || ozelUri.isEmpty)
+          ? varsayilan
+          : ozelKanal(ozelUri);
+    }
+    return secimler.contains(secim) ? '$onek$secim' : varsayilan;
+  }
 
   /// Alıcının yayınlayacağı aktif kanal: kapalı > titreşimsiz varyant > normal.
   static String aktif({
     required String secim,
     required bool bildirimAcik,
     required bool titresim,
+    String? ozelUri,
   }) {
     if (!bildirimAcik) return kapali;
-    final id = sesKanali(secim);
+    final id = sesKanali(secim, ozelUri: ozelUri);
     return titresim ? id : '$id$tszEki';
+  }
+
+  /// Açılışta SİLİNECEK eski özel ses kanalları: [mevcut] kanal
+  /// kimliklerinden `km_v3_ozel*` olup şu anki URI'nin çiftine
+  /// ([ozelUri] → `km_v3_ozel_<hash>` ve `_tsz`) ait OLMAYANLAR.
+  /// URI yoksa hepsi eskidir. Doğru kimlik ASLA silinmez (d4: silinip
+  /// yeniden kurulan kanal eski ayarlarla dirilir, tepsideki bildirimler gider).
+  static List<String> eskiOzelKanallar(
+    Iterable<String> mevcut, {
+    required String? ozelUri,
+  }) {
+    final tut = <String>{
+      if (ozelUri != null && ozelUri.isNotEmpty) ...[
+        ozelKanal(ozelUri),
+        '${ozelKanal(ozelUri)}$tszEki',
+      ],
+    };
+    return [
+      for (final id in mevcut)
+        if (id.startsWith(ozelOnek) && !tut.contains(id)) id,
+    ];
   }
 
   /// Karşı tarafın Firestore'da YAYINLADIĞI kanal id'sini doğrular.
@@ -98,10 +158,17 @@ abstract final class BildirimKanali {
     return kanal.startsWith(onek) ? kanal : varsayilan;
   }
 
-  /// GÖNDERENİN push'a yazacağı kanal (alıcının `users` dokümanından).
+  /// GÖNDERENİN push'a yazacağı kanal (alıcının `users` dokümanından) —
+  /// YALNIZ AKTARICISIZ (eski) yolda kullanılır. Aktarıcı açıkken kanalı
+  /// aktarıcı seçer (sunucu/aktarici `alicininKanali`, aynı kurallar) ve
+  /// istemcinin değerini ezer.
   /// Sohbet alıcının `sessizSohbetler` listesindeyse sessiz kanala düşer;
   /// ama alıcı bildirimleri TAMAMEN kapattıysa (`kapali`) o öncelikli kalır —
   /// sessize almak bildirimi "açmamalı".
+  /// ⚠️ Liste artık alıcının GİZLİ belgesinde (users/{uid}/ozel/bildirim) →
+  /// gönderen OKUYAMAZ; aktarıcısız yolda yalnız henüz taşınmamış eski
+  /// public liste görülebilir. Yani aktarıcısız derlemede sessize alma
+  /// UYGULANAMAZ (sohbet menüsü o derlemede gizlenir).
   static String alicininKanali({
     required String? yayinlanan,
     Object? sessizSohbetler,
@@ -179,9 +246,10 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
       final gelenChat = (data['chatId'] ?? data['kanal'])?.toString();
       final aktifChat = await AktifAramaKaydi.oku();
       adimlar.add('aktifArama(disk)=$aktifChat');
-      // AYNI sohbetten tekrar arama (ör. kopan görüşmeyi yeniden arama, ya da
+      // TEK meşgul kuralı ([gelenAramaMesgulMu], ön planla AYNI): AYNI
+      // sohbetten tekrar arama (ör. kopan görüşmeyi yeniden arama, ya da
       // çökme sonrası kalmış kayıt) meşgul SAYILMAZ → gösterilir.
-      if (aktifChat != null && aktifChat != gelenChat) {
+      if (gelenAramaMesgulMu(aktifChat: aktifChat, gelenChat: gelenChat)) {
         adimlar.add('MESGUL: baska gorusme suruyor → CallKit GOSTERILMEDI');
         HataServisi.instance.iz('MESGUL (disk) aktif=$aktifChat gelen=$gelenChat');
         await _mesgulBildir(data['chatId']?.toString());
@@ -235,14 +303,19 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
       // ⚠️ YALNIZ O SOHBETİN çağrısı (CallKit id = chatId). Eskiden
       // endAllCalls() idi: A ile konuşurken C arayıp "meşgul" alınca C'nin
       // iptal push'u A ile süren görüşmenin CallKit oturumunu da bitiriyordu.
+      // ⚠️ chatId'siz iptal YOK SAYILIR (d11): eskiden endAllCalls()'a
+      // düşüyordu → herhangi bir arkadaş (engellenmiş biri bile) çıplak bir
+      // 'arama_iptal' ile alıcının BAŞKASIYLA çalan/süren aramasını
+      // kesebiliyordu. Gönderen taraf (AramaServisi.bitir) chatId'yi v1.8'den
+      // beri hep gönderiyor; aktarıcı da chatId'siz iptali 400 ile reddediyor.
       try {
         final chatId = data['chatId']?.toString();
         if (chatId != null && chatId.isNotEmpty) {
           await FlutterCallkitIncoming.endCall(chatId);
+          HataServisi.instance.iz('CALLKIT iptal: zil susturuldu');
         } else {
-          await FlutterCallkitIncoming.endAllCalls(); // eski sürüm push'u
+          HataServisi.instance.iz('CALLKIT iptal: chatId yok → yok sayildi');
         }
-        HataServisi.instance.iz('CALLKIT iptal: zil susturuldu');
       } catch (_) {}
       return true;
     default:
@@ -377,6 +450,52 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
 
+/// Aktarıcılı derlemede bu CİHAZIN FCM token'ı bir kez döndürüldü mü
+/// (SharedPreferences; cihaz başına — token da cihaz başınadır).
+@visibleForTesting
+const tokenDondurulduAnahtari = 'fcmTokenDonduruldu_v1';
+
+/// Cihazın FCM token'ını (aktarıcılı derlemede) BİR KEZ döndürür:
+/// [tokenSil] (`FirebaseMessaging.deleteToken`) çağrılır, başarılıysa işaret
+/// diske yazılır. Döndü / zaten dönmüş → true; başarısız → false (işaret
+/// yazılmaz, sonraki çağrı yeniden dener). ASLA fırlatmaz.
+///
+/// ⚠️ NEDEN (d10, ikinci tur): token'ı gizli belgeye taşımak ve public
+/// `users/{uid}.fcmToken` alanını silmek YETMEZ — o DEĞER bugüne kadar her
+/// girişli kullanıcıya okunurdu (kural testi T6) ve getToken() aynı değeri
+/// döndürmeye devam eder (FCM token'ı yalnız yeniden kurulum / veri silme /
+/// deleteToken ile değişir). Önceden toplanmış X değerini saldırgan KENDİ
+/// ikinci hesabının gizli belgesine yazıp kendi hesaplarından birine
+/// "arkadaş" bildirimi atarsa aktarıcı X'e gönderir → kurbanın telefonu
+/// "Annen arıyor" diye çalar ve kurban, hiçbir ilişkisi olmayan o hesabı
+/// engelleyemez. deleteToken X'i FCM'de UNREGISTERED yapar; gizli belgeye
+/// yalnız YENİ (hiç public olmamış) token yazılır.
+Future<bool> tokenBirKezDondur(Future<void> Function() tokenSil) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    if (p.getBool(tokenDondurulduAnahtari) ?? false) return true;
+    await tokenSil();
+    // İşaret SİLMEDEN SONRA: arada uygulama ölürse bir kez daha döner
+    // (zararsız); önce yazılsaydı dönmemiş token "dönmüş" sayılabilirdi.
+    await p.setBool(tokenDondurulduAnahtari, true);
+    return true;
+  } catch (e) {
+    HataServisi.instance.iz('TOKEN dondurulemedi: $e');
+    return false;
+  }
+}
+
+/// Token yeniden PUBLIC yazıldığında (aktarıcısız derleme) işaret düşer:
+/// o değer de toplanabilir → aynı cihaz sonra aktarıcılı derlemeye geçerse
+/// yeniden döndürülmeli. ASLA fırlatmaz.
+@visibleForTesting
+Future<void> tokenDondurmaIsaretiniSil() async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(tokenDondurulduAnahtari);
+  } catch (_) {}
+}
+
 /// Kartsız (Spark planı) bildirim servisi.
 /// Mesaj atılınca gönderen cihaz, FCM HTTP v1 API'ye doğrudan istek atıp
 /// karşı cihaza push gönderir. Cloud Functions / Blaze GEREKMEZ.
@@ -415,15 +534,14 @@ class BildirimServisi {
   /// Seçili sese, bildirim ve TİTREŞİM anahtarlarına göre aktif kanal id'si.
   String get aktifKanalId {
     final ayar = AyarServisi.instance;
-    var secim = ayar.bildirimSesi.value;
     // 'ozel' kanalı yalnız URI varken kurulur ([_ozelKanaliKur]) → URI yoksa
-    // var olmayan kanalı yayınlama, varsayılana düş.
-    final uri = ayar.ozelSesUri.value;
-    if (secim == 'ozel' && (uri == null || uri.isEmpty)) secim = 'varsayilan';
+    // BildirimKanali.sesKanali varsayılana düşer (var olmayan kanal
+    // yayınlanmaz). Özel kanal kimliği URI'ye göre sürümlü.
     return BildirimKanali.aktif(
-      secim: secim,
+      secim: ayar.bildirimSesi.value,
       bildirimAcik: ayar.bildirimAcik.value,
       titresim: ayar.titresimAcik.value,
+      ozelUri: ayar.ozelSesUri.value,
     );
   }
 
@@ -505,6 +623,8 @@ class BildirimServisi {
 
   bool _kuruldu = false;
   bool _tokenDinleyiciKuruldu = false;
+  // Aktarıcılı derlemede tek seferlik token döndürme (bkz. tokenKaydet).
+  Future<bool>? _dondurmeBekleyen;
 
   /// Uygulama açılışında bir kez çağrılır (main.dart, Firebase init sonrası).
   /// İzin ister, yerel bildirim kanalını kurar, foreground dinleyicisini açar.
@@ -536,9 +656,23 @@ class BildirimServisi {
     // ⚠️ Eskiden burada SESSİZCE `return` ediliyordu → arayan 45 sn boyunca
     // boşuna çalıyor, meşgul olduğumuzu asla öğrenmiyordu. Artık arayana
     // 'mesgul' durumu yazılıyor; onun arama ekranı "Meşgul" deyip kapanır.
-    if (message.data['tur'] == 'arama' && aktifAramaVar) {
-      await _mesgulBildir(message.data['chatId']?.toString());
-      return;
+    // ⚠️ Karar arka planla AYNI kuraldan ([gelenAramaMesgulMu], d3): eskiden
+    // ön planda `aktifAramaVar` tek başına bakılıyordu → AYNI sohbetten
+    // yeniden arama ön planda "meşgul", arka planda gösteriliyordu.
+    // aktifChat: bellekteki görüşme sohbeti; görüşme var ama sohbeti
+    // bilinmiyorsa '' (hiçbir gerçek chatId'ye eşit değil → GÜVENLİ taraf:
+    // meşgul); görüşme yoksa null (meşgul değil). Ardından aramaMesajiIsle
+    // aynı kuralı diskteki kayıtla da uygular (başka isolate'in görüşmesi).
+    if (message.data['tur'] == 'arama') {
+      final aktifChat = aktifAramaChatId ?? (aktifAramaVar ? '' : null);
+      final gelenChat =
+          (message.data['chatId'] ?? message.data['kanal'])?.toString();
+      if (gelenAramaMesgulMu(aktifChat: aktifChat, gelenChat: gelenChat)) {
+        HataServisi.instance
+            .iz('MESGUL (bellek) aktif=$aktifChat gelen=$gelenChat');
+        await _mesgulBildir(message.data['chatId']?.toString());
+        return;
+      }
     }
     if (await aramaMesajiIsle(message.data)) return; // çağrı/iptal ise bitti
     _foregroundGoster(message); // normal mesaj bildirimi
@@ -585,15 +719,17 @@ class BildirimServisi {
   /// [secim] için titreşimli (`km_v3_<secim>`) ve titreşimsiz
   /// (`km_v3_<secim>_tsz`) kanalı birlikte kurar. Zaten varsa Android
   /// ses/titreşimi DEĞİŞTİRMEZ (yalnız ad/açıklama güncellenir) → güvenli.
+  /// [id] verilirse (özel ses: URI'ye göre sürümlü kimlik) o kullanılır.
   Future<void> _ciftKanalKur(
     AndroidFlutterLocalNotificationsPlugin a,
     String secim,
     String ad, {
+    String? id,
     String? aciklama,
     bool sesCalsin = true,
     AndroidNotificationSound? ses,
   }) async {
-    final id = _kanalIdFor(secim);
+    id ??= _kanalIdFor(secim);
     for (final titresim in [true, false]) {
       await a.createNotificationChannel(AndroidNotificationChannel(
         titresim ? id : '$id${BildirimKanali.tszEki}',
@@ -607,25 +743,43 @@ class BildirimServisi {
     }
   }
 
-  /// Özel ses kanallarını (titreşimli + _tsz) kullanıcının seçtiği URI ile
-  /// (yeniden) kurar. Android kanalın sesini sonradan değiştirmez → önce sil,
-  /// sonra oluştur.
+  /// Özel ses kanallarını (titreşimli + _tsz) seçili URI'nin SÜRÜMLÜ
+  /// kimliğiyle ([BildirimKanali.ozelKanal]) kurar.
+  /// ⚠️ Aynı kimlik ASLA silinip yeniden kurulmaz (d4): Android silinen
+  /// kanalı aynı kimlikle yeniden oluşturunca ESKİ ayarlarıyla (eski ses)
+  /// diriltir ve silme o kanaldaki tepside duran bildirimleri de siler.
+  /// Yalnız URI değiştiğinde eski `km_v3_ozel*` kanalları (önceki URI'lerin
+  /// ve sürümsüz eski `km_v3_ozel`/`_tsz`) silinir; yenisi TAZE kimlikle
+  /// kurulur. Doğru kanal zaten varsa createNotificationChannel yalnız
+  /// ad/açıklamayı günceller (ses aynı URI → değişmesi gerekmez).
   Future<void> _ozelKanaliKur() async {
     final a = _android;
     if (a == null) return;
-    final id = _kanalIdFor('ozel');
-    await a.deleteNotificationChannel(channelId: id);
-    await a.deleteNotificationChannel(
-        channelId: '$id${BildirimKanali.tszEki}');
     final uri = AyarServisi.instance.ozelSesUri.value;
+    try {
+      final mevcut = await a.getNotificationChannels() ?? const [];
+      final eskiler = BildirimKanali.eskiOzelKanallar(
+        mevcut.map((k) => k.id),
+        ozelUri: uri,
+      );
+      for (final id in eskiler) {
+        await a.deleteNotificationChannel(channelId: id);
+      }
+    } catch (e) {
+      // Listeleme başarısızsa silme YAPILMAZ (yanlışlıkla doğru kanalı
+      // silmektense eski bir kanalın kalması zararsız).
+      HataServisi.instance.iz('ozel kanal listesi okunamadi: $e');
+    }
     if (uri != null && uri.isNotEmpty) {
       await _ciftKanalKur(a, 'ozel', 'Özel Ses',
+          id: BildirimKanali.ozelKanal(uri),
           ses: UriAndroidNotificationSound(uri));
     }
   }
 
-  /// Ses seçimi değişince çağrılır: özel kanalı tazeler + tercihi Firestore'a
-  /// yayınlar (karşı taraf push'u bu kanalı kullanır → kapalıyken bile doğru ses).
+  /// Ses seçimi değişince çağrılır: özel kanalı (URI değiştiyse yeni
+  /// kimlikle) kurar + tercihi Firestore'a yayınlar (push bu kanalı kullanır
+  /// → kapalıyken bile doğru ses).
   Future<void> sesGuncelle() async {
     await _ozelKanaliKur();
     await kanalYayinla();
@@ -686,28 +840,52 @@ class BildirimServisi {
     );
   }
 
-  /// Giriş yapan kullanıcının FCM token'ını Firestore'a yazar.
-  /// `kullanicilar/{uid}` dokümanına kaydeder. Token yenilenince günceller.
+  /// GİZLİ kullanıcı belgesi: `users/{uid}/ozel/bildirim`
+  /// {fcmToken, sessizSohbetler: [chatId], guncelleme}. YALNIZ sahibi
+  /// okur/yazar (firestore.rules); aktarıcı hizmet hesabıyla okur.
+  /// ⚠️ NEDEN (d10): fcmToken herkese okunur `users/{uid}` belgesindeydi ve
+  /// değeri serbestçe yazılabiliyordu → saldırgan kurbanın token'ını okuyup
+  /// KENDİ ikinci hesabının belgesine yazıyor, o hesaba "izinli" bildirim
+  /// atıp aktarıcının yetki denetimini atlatıyordu (push kurbana gidiyordu).
+  static DocumentReference<Map<String, dynamic>> ozelBelge(String uid) =>
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('ozel')
+          .doc('bildirim');
+
+  /// Giriş yapan kullanıcının FCM token'ını Firestore'a yazar
+  /// (bkz. [_tokenYaz]). Token yenilenince günceller.
   Future<void> tokenKaydet() async {
     final kullanici = FirebaseAuth.instance.currentUser;
     if (kullanici == null) return;
 
-    final token = await _mesajlasma.getToken();
-    if (token != null) {
-      final veri = {
-        'fcmToken': token,
-        'guncelleme': FieldValue.serverTimestamp(),
-      };
-      await _kullanicilar.doc(kullanici.uid)
-          // E-posta EKLENMEZ (users/{uid} herkese okunur — gizlilik).
-          .set(veri, SetOptions(merge: true));
-      // FAZ 4: hedefli bildirim token'ı users'tan okuyor → oraya da yaz.
-      try {
-        await _users.doc(kullanici.uid).set(veri, SetOptions(merge: true));
-      } catch (_) {}
+    // ⚠️ Aktarıcılı derlemede önce (bir kez) token DÖNDÜRÜLÜR (bkz.
+    // [tokenBirKezDondur]). Döndürülemezse (çevrimdışı vb.) token HİÇ
+    // yazılmaz — public alan da SİLİNMEZ: hâlâ geçerli eski değer kurbanın
+    // public belgesinde durdukça aktarıcı, aynı değeri BAŞKA bir uid'in
+    // gizli belgesinde görünce gönderimi reddedebiliyor (aktarıcı:
+    // tokenBaskasindaMi). Silseydik bu kanıt giderdi ama değer geçerli
+    // kalırdı. Sonraki tokenKaydet yeniden dener.
+    // Eşzamanlı çağrılar (sohbet ekranı her açılışta çağırıyor) TEK
+    // döndürmeyi paylaşır: iki deleteToken üst üste binerse birinin yazdığı
+    // taze token ötekince öldürülürdü.
+    var dondu = true;
+    if (AktariciServisi.etkin) {
+      final bekleyen = _dondurmeBekleyen ??= tokenBirKezDondur(
+        _mesajlasma.deleteToken,
+      );
+      dondu = await bekleyen;
+      if (!dondu && identical(_dondurmeBekleyen, bekleyen)) {
+        _dondurmeBekleyen = null;
+      }
+    }
+    if (dondu) {
+      final token = await _mesajlasma.getToken();
+      if (token != null) await _tokenYaz(kullanici.uid, token);
     }
 
-    // Seçili bildirim kanalını da yayınla (karşı taraf push'ta kullanır)
+    // Seçili bildirim kanalını da yayınla (push bu kanala gider)
     await kanalYayinla();
 
     // Token zamanla yenilenebilir — değişince güncelle.
@@ -718,16 +896,52 @@ class BildirimServisi {
       _mesajlasma.onTokenRefresh.listen((yeniToken) {
         final u = FirebaseAuth.instance.currentUser;
         if (u == null) return;
-        _kullanicilar.doc(u.uid).set(
-          {'fcmToken': yeniToken},
-          SetOptions(merge: true),
-        );
-        _users.doc(u.uid).set(
-          {'fcmToken': yeniToken},
-          SetOptions(merge: true),
-        ).catchError((_) {});
+        _tokenYaz(u.uid, yeniToken);
       });
     }
+  }
+
+  /// Token'ı yazar. ⚠️ ASLA fırlatmaz; her hedef AYRI denenir (biri
+  /// reddedilirse — ör. yeni kurallar henüz yayınlanmamışken gizli belge —
+  /// diğerleri yine yazılsın, aktarıcısız yol kırılmasın).
+  ///  1) GİZLİ belge: HER ZAMAN (aktarıcı token'ı YALNIZ buradan okur).
+  ///  2) Eski `kullanicilar/{uid}` (yalnız sahibi okur; geçiş dönemi).
+  ///  3) HERKESE OKUNUR `users/{uid}.fcmToken`: YALNIZ aktarıcısız
+  ///     derlemede yazılır — o derlemede gönderen token'ı doğrudan buradan
+  ///     okuyup FCM'e kendisi gönderiyor (eski derlemelerle uyum). Aktarıcılı
+  ///     derlemede alan SİLİNİR: public token kalmasın (herkes aktarıcılı
+  ///     derlemeye geçince kurallarda tamamen yasaklanacak, bkz.
+  ///     firestore.rules). ⚠️ Sonuç: aktarıcılı derlemedeki kullanıcıya
+  ///     aktarıcısız eski derlemeler bildirim GÖNDEREMEZ (geçiş bedeli).
+  ///     ⚠️ Alanı silmek tek başına yetmez: değer önceden toplanmış olabilir
+  ///     → aktarıcılı derlemede buraya gelen token [tokenKaydet]'te bir kez
+  ///     DÖNDÜRÜLMÜŞ (hiç public olmamış) token'dır ([tokenBirKezDondur]).
+  Future<void> _tokenYaz(String uid, String token) async {
+    final zaman = FieldValue.serverTimestamp();
+    final hedefler =
+        <(String, DocumentReference<Map<String, dynamic>>, Map<String, Object>)>[
+      ('gizli', ozelBelge(uid), {'fcmToken': token, 'guncelleme': zaman}),
+      ('kullanicilar', _kullanicilar.doc(uid),
+          {'fcmToken': token, 'guncelleme': zaman}),
+      (
+        'users',
+        _users.doc(uid),
+        // E-posta EKLENMEZ (users/{uid} herkese okunur — gizlilik).
+        AktariciServisi.etkin
+            ? {'fcmToken': FieldValue.delete()}
+            : {'fcmToken': token, 'guncelleme': zaman},
+      ),
+    ];
+    for (final (ad, ref, veri) in hedefler) {
+      try {
+        await ref.set(veri, SetOptions(merge: true));
+      } catch (e) {
+        HataServisi.instance.iz('TOKEN yazilamadi ($ad): $e');
+      }
+    }
+    // Değer public'e yazıldı → toplanabilir; aktarıcılı derlemeye geçilirse
+    // yeniden döndürülsün.
+    if (!AktariciServisi.etkin) await tokenDondurmaIsaretiniSil();
   }
 
   /// ÇIKIŞTA çağrılır: bu cihazın token'ını hesaptan SÖKER.
@@ -738,13 +952,19 @@ class BildirimServisi {
   /// bildirimleri birden geliyordu (gizlilik sorunu).
   /// Yalnızca kayıtlı token BU cihazınkiyse silinir — hesap başka bir
   /// telefonda daha sonra açıldıysa onun token'ına dokunulmaz.
+  /// Gizli belge (aktarıcının okuduğu), public profil (aktarıcısız yol) ve
+  /// eski `kullanicilar` belgesinin ÜÇÜ de denetlenir.
   Future<void> tokenSil() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     try {
       final benim = await _mesajlasma.getToken();
       final sil = {'fcmToken': FieldValue.delete()};
-      for (final ref in [_users.doc(uid), _kullanicilar.doc(uid)]) {
+      for (final ref in [
+        ozelBelge(uid),
+        _users.doc(uid),
+        _kullanicilar.doc(uid),
+      ]) {
         try {
           final kayitli = (await ref.get()).data()?['fcmToken'];
           if (benim != null && kayitli == benim) {
@@ -778,41 +998,46 @@ class BildirimServisi {
     required String govde,
     Map<String, String>? ekstraData,
   }) async {
+    // [kanal] null → channel_id yazılmaz (aktarıcı kendisi seçer).
+    Map<String, dynamic> mesaj(String? kanal) => <String, dynamic>{
+          'notification': {'title': baslik, 'body': govde},
+          'data': ?ekstraData,
+          'android': {
+            // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
+            // düşük önceliğe düşebiliyor → mesaj Doze'da gecikir/hiç gelmez.
+            // (Bu tuzak projede daha önce ÇAĞRI push'unda yaşanmıştı; mesaj
+            // push'u küçük harfte kalmış.)
+            'priority': 'HIGH',
+            'notification': {
+              'channel_id': ?kanal,
+              'visibility': 'PUBLIC',
+              'tag': 'km_$hedefUid',
+            },
+          },
+        };
     try {
-      // Alıcının dokümanı aktarıcı yolunda da okunur: kanal (ses/titreşim/
-      // kapalı tercihi) ve sessize aldığı sohbetler push'un İÇİNE yazılır.
+      if (AktariciServisi.etkin) {
+        // Token'ı (alıcının GİZLİ belgesinden) ve KANALI aktarıcı kendisi
+        // bulur: alıcının yayınladığı kanal + gizli sessiz listesi (d6/d8).
+        // Kanal kararı gönderenin sürümüne bağlı kalmasın diye istemcinin
+        // değeri zaten EZİLİR → alıcı belgesi burada hiç okunmaz.
+        await AktariciServisi.instance
+            .bildirimGonder(hedefUid: hedefUid, mesaj: mesaj(null));
+        return;
+      }
+      // AKTARICISIZ (eski) yol: gönderen alıcının public belgesinden token
+      // ve kanalı okur. Sessiz liste artık gizli belgede → okunamaz; yalnız
+      // henüz taşınmamış eski public liste görülür. Yani bu yolda sessize
+      // alma UYGULANAMAZ (bkz. [BildirimKanali.alicininKanali]).
       final d = (await _users.doc(hedefUid).get()).data();
       final kanal = BildirimKanali.alicininKanali(
         yayinlanan: d?['bildirimKanali'] as String?,
         sessizSohbetler: d?['sessizSohbetler'],
         chatId: ekstraData?['chatId'],
       );
-      final mesaj = <String, dynamic>{
-        'notification': {'title': baslik, 'body': govde},
-        'data': ?ekstraData,
-        'android': {
-          // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
-          // düşük önceliğe düşebiliyor → mesaj Doze'da gecikir/hiç gelmez.
-          // (Bu tuzak projede daha önce ÇAĞRI push'unda yaşanmıştı; mesaj
-          // push'u küçük harfte kalmış.)
-          'priority': 'HIGH',
-          'notification': {
-            'channel_id': kanal,
-            'visibility': 'PUBLIC',
-            'tag': 'km_$hedefUid',
-          },
-        },
-      };
-      if (AktariciServisi.etkin) {
-        // Token'ı aktarıcı kendisi bulur → istemcinin fcmToken okumasına
-        // gerek yok (ileride `users` kuralında istemcilere kapatılabilir).
-        await AktariciServisi.instance
-            .bildirimGonder(hedefUid: hedefUid, mesaj: mesaj);
-        return;
-      }
       final token = d?['fcmToken'] as String?;
       if (token == null) return;
-      await _gonderMesaj(token, mesaj);
+      await _gonderMesaj(token, mesaj(kanal));
     } catch (e) {
       HataServisi.instance.iz('BILDIRIM gonderilemedi hedef=$hedefUid: $e');
     }
@@ -851,10 +1076,11 @@ class BildirimServisi {
   /// JWT imzalanıyor ve Google'a ayrı bir OAuth token isteği atılıyordu →
   /// her bildirimden önce fazladan bir ağ gidiş-dönüşü (mobil veride
   /// yüzlerce ms). [AutoRefreshingAuthClient] token'ı süresi dolmadan kendisi
-  /// yeniler; hata olursa önbellek sıfırlanır ve sonraki gönderim yeniden kurar.
-  Future<({AutoRefreshingAuthClient istemci, String projectId})>? _fcmKurulum;
+  /// yeniler; kurulum hatası ya da 401/403'te önbellek sıfırlanır ve sonraki
+  /// gönderim yeniden kurar (bkz. [_fcmSifirla]).
+  Future<_FcmBaglanti>? _fcmKurulum;
 
-  Future<({AutoRefreshingAuthClient istemci, String projectId})> _fcmBaglanti() =>
+  Future<_FcmBaglanti> _fcmBaglanti() =>
       _fcmKurulum ??= () async {
         final saJson =
             await rootBundle.loadString('assets/service_account.json');
@@ -870,10 +1096,17 @@ class BildirimServisi {
         return (istemci: istemci, projectId: projectId);
       }();
 
-  void _fcmSifirla() {
-    final eski = _fcmKurulum;
-    _fcmKurulum = null;
-    eski?.then((b) => b.istemci.close(), onError: (Object _) {});
+  /// Önbelleği YALNIZ [hataVeren] kurulum hâlâ günceliyse sıfırlar.
+  /// ⚠️ NEDEN (d5): eskiden o an önbellekte ne varsa (araya kurulmuş TAZE
+  /// bir istemci bile) sıfırlanıp `close()` ediliyordu. IOClient.close()
+  /// alttaki HttpClient'ı force:true ile kapatır → AYNI istemcide uçuştaki
+  /// diğer istekler (ör. aynı anda giden ÇAĞRI push'u) "Client is already
+  /// closed" ile düşüyordu, aranan kişinin telefonu hiç çalmıyordu.
+  /// Eski istemci bu yüzden KAPATILMAZ: uçuştaki istekleri bitsin, boşta
+  /// kalan bağlantıları HttpClient'ın boşta zaman aşımıyla kendiliğinden
+  /// kapanır (yalnız seyrek sıfırlamalarda olur; sızıntı önemsiz).
+  void _fcmSifirla(Future<_FcmBaglanti> hataVeren) {
+    if (identical(_fcmKurulum, hataVeren)) _fcmKurulum = null;
   }
 
   /// DÜŞÜK SEVİYE: verilen token'a, service account OAuth2 ile FCM HTTP v1 gönderir.
@@ -881,8 +1114,18 @@ class BildirimServisi {
     String hedefToken,
     Map<String, dynamic> mesajAlanlari,
   ) async {
+    final kurulum = _fcmBaglanti();
+    final _FcmBaglanti fcm;
     try {
-      final fcm = await _fcmBaglanti();
+      fcm = await kurulum;
+    } catch (e) {
+      // KURULUM hatası (asset/JSON/OAuth): bu future kalıcı olarak başarısız
+      // → önbellekte kalırsa her gönderim aynı hatayı alır; sıfırla.
+      _fcmSifirla(kurulum);
+      debugPrint('FCM kurulamadı: $e');
+      return;
+    }
+    try {
       final yanit = await fcm.istemci.post(
         Uri.parse(
           'https://fcm.googleapis.com/v1/projects/${fcm.projectId}/messages:send',
@@ -893,14 +1136,21 @@ class BildirimServisi {
         }),
       );
       if (yanit.statusCode == 401 || yanit.statusCode == 403) {
-        _fcmSifirla(); // kimlik bozulduysa sonraki gönderim yeniden kursun
+        // Kimlik bozulduysa sonraki gönderim yeniden kursun.
+        _fcmSifirla(kurulum);
       }
       if (yanit.statusCode != 200) {
         debugPrint('FCM gönderim hatası ${yanit.statusCode}: ${yanit.body}');
       }
     } catch (e) {
-      _fcmSifirla();
+      // ⚠️ SIFIRLAMA YOK: istek sırasındaki istisnalar ağ kaynaklıdır
+      // (SocketException, TimeoutException, http.ClientException) — istemci
+      // sağlam, bir sonraki gönderim aynı istemciyle çalışır. Sıfırlamak
+      // yalnız gereksiz bir OAuth gidiş-dönüşü eklerdi.
       debugPrint('Bildirim gönderilemedi: $e');
     }
   }
 }
+
+/// FCM HTTP v1 yetkili istemcisi + proje kimliği (aktarıcısız yol).
+typedef _FcmBaglanti = ({AutoRefreshingAuthClient istemci, String projectId});

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/arkadaslik.dart';
 import '../modeller/sohbet.dart';
+import 'bildirim_servisi.dart';
 
 /// Sohbet listesi ve chat dokümanı yönetimi (FAZ 4.3).
 ///
@@ -67,30 +68,74 @@ class SohbetServisi {
   }
 
   // ---- SESSİZE ALMA ----
-  // Liste ALICININ kendi users/{uid} dokümanında tutulur: gönderen bildirim
-  // atmadan önce o dokümanı (fcmToken/kanal için) zaten okuyor → sessiz
-  // bilgisi EK OKUMA olmadan gelir, alıcının sessiz kanalına düşer
-  // (bkz. BildirimServisi). chats/{id}'ye yazılsaydı karşı taraf da görür
-  // ve kural `affectedKeys` listesini genişletmek gerekirdi.
+  // Liste ALICININ GİZLİ belgesinde tutulur: users/{uid}/ozel/bildirim
+  // .sessizSohbetler (yalnız sahibi okur/yazar; bkz. firestore.rules).
+  // ⚠️ NEDEN (d8/t1): eskiden herkese okunur users/{uid} belgesindeydi →
+  // chatId = iki uid olduğundan liste kişinin KİMLERLE sohbet ettiğini ve
+  // kimi sessize aldığını yabancılara açıyordu. Gönderen artık listeyi
+  // OKUYAMAZ; sessiz kanal kararını AKTARICI verir (hizmet hesabıyla okur,
+  // push'un channel_id'sini ezer — d6: karar gönderenin sürümüne de bağlı
+  // kalmaz). Aktarıcısız (eski) derlemede sessize alma UYGULANAMAZ.
   // ⚠️ arrayUnion/arrayRemove + merge: tüm listeyi okuyup yeniden yazmak
   // iki cihazdan aynı anda değişiklikte birinin işlemini EZERDİ.
+
+  DocumentReference<Map<String, dynamic>> _ozel(String uid) =>
+      BildirimServisi.ozelBelge(uid);
+
+  /// Eski sürümün public belgeye yazdığı listenin taşınması (uid başına,
+  /// oturumda bir kez; başarısızsa sonraki çağrıda yeniden denenir).
+  Future<void>? _tasima;
+  String? _tasimaUid;
+
+  /// GEÇİŞ: public `users/{uid}.sessizSohbetler` kaldıysa gizli belgeye
+  /// TAŞIR (arrayUnion: gizli listede olanlar korunur) ve public alanı
+  /// FieldValue.delete ile siler. Böylece eski sürümde sessize alınmış
+  /// sohbetler güncellemeden sonra sessizliğini kaybetmez.
+  Future<void> _eskiListeyiTasi(String me) {
+    if (_tasimaUid == me && _tasima != null) return _tasima!;
+    _tasimaUid = me;
+    return _tasima = () async {
+      try {
+        final ref = _db.collection('users').doc(me);
+        final d = (await ref.get()).data();
+        if (d == null || !d.containsKey('sessizSohbetler')) return;
+        final eski = d['sessizSohbetler'];
+        final liste = eski is List ? eski.whereType<String>().toList() : [];
+        if (liste.isNotEmpty) {
+          await _ozel(me).set({
+            'sessizSohbetler': FieldValue.arrayUnion(liste),
+          }, SetOptions(merge: true));
+        }
+        await ref.set({
+          'sessizSohbetler': FieldValue.delete(),
+        }, SetOptions(merge: true));
+      } catch (_) {
+        _tasima = null; // sonraki çağrıda yeniden denensin
+      }
+    }();
+  }
 
   /// Sohbeti sessize alır ([sessiz]=true) veya sessizi kapatır.
   Future<void> sessizeAl(String chatId, bool sessiz) async {
     final me = _uid;
     if (me == null) return;
-    await _db.collection('users').doc(me).set({
+    // Önce eski public liste taşınır/silinir: taşıma SONRA olsaydı burada
+    // kapatılan bir sessizi eski listeden geri getirebilirdi.
+    await _eskiListeyiTasi(me);
+    await _ozel(me).set({
       'sessizSohbetler': sessiz
           ? FieldValue.arrayUnion([chatId])
           : FieldValue.arrayRemove([chatId]),
     }, SetOptions(merge: true));
   }
 
-  /// Bu sohbet sessizde mi (canlı). Alan yoksa / bozuksa false.
+  /// Bu sohbet sessizde mi (canlı, gizli belgeden). Alan yoksa / bozuksa
+  /// false.
   Stream<bool> sessizMi(String chatId) {
     final me = _uid;
     if (me == null) return Stream.value(false);
-    return _db.collection('users').doc(me).snapshots().map((s) {
+    _eskiListeyiTasi(me); // geçiş (fire-and-forget; hata yutulur)
+    return _ozel(me).snapshots().map((s) {
       final liste = s.data()?['sessizSohbetler'];
       return liste is List && liste.contains(chatId);
     }).distinct();

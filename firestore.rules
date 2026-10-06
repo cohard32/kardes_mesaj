@@ -91,13 +91,19 @@ service cloud.firestore {
     // ---- PROFİLLER ----
     // Herkes okuyabilir (kullanıcı arama/profil görüntüleme).
     // Sadece kişi kendi kaydını oluşturur/günceller. Silme yok.
-    // ⚠️ BİLİNEN SINIR (rules testi T6): fcmToken bu dokümanda tutulduğu ve
-    //    doküman herkese okunur olduğu için giriş yapmış kullanıcılar
-    //    başkasının fcmToken'ını okuyabilir. KARTSIZ mimaride kaçınılmaz:
-    //    (a) kullanıcı arama profili public olmalı, (b) arkadaşlık-isteği
-    //    push'u henüz-arkadaş-olmayanın token'ını okumayı gerektirir,
-    //    (c) FCM gönderme yetkisi zaten APK'daki service_account.json'da.
-    //    Token'ı arkadaşa kısıtlamak isteğe-bağlı bildirimi kırar → kabul edildi.
+    // ⚠️ fcmToken ARTIK GİZLİ BELGEDE (users/{uid}/ozel/bildirim, aşağıda).
+    //    Eskiden yalnız burada, herkese okunur duruyordu (rules testi T6) ve
+    //    değeri serbestçe yazılabiliyordu → aktarıcıyla birlikte bu bir YETKİ
+    //    ATLATMASINA dönüşmüştü: saldırgan kurbanın token'ını okuyup KENDİ
+    //    ikinci hesabının belgesine yazıyor, o hesaba (bekleyen istekle)
+    //    "izinli" bildirim atıyor, push kurbanın cihazına gidiyordu.
+    //    Aktarıcı artık token'ı YALNIZ gizli belgeden okur.
+    //    GEÇİŞ: aktarıcısız (eski) derlemeler hâlâ buradaki fcmToken'ı yazar
+    //    ve okur (kendi doğrudan FCM yolları için); aktarıcılı derleme ise bu
+    //    alanı SİLER. Herkes aktarıcılı derlemeye geçince public token kalmaz;
+    //    o zaman aşağıdaki YORUMLU satırlar açılarak alan tamamen yasaklanır
+    //    (emülatörde denendi: açılınca yalnız G5b — public fcmToken yazan
+    //    pozitif test — düşer; o testten fcmToken'ı çıkarın).
     //
     // ⚠️ @kullanıcı adı SAHTECİLİĞİ: Eskiden `kullaniciAdi` serbestçe
     //    yazılabiliyordu → biri profilinde "@alice" gösterebiliyordu
@@ -109,13 +115,33 @@ service cloud.firestore {
       allow read: if girisli();
       allow create: if benim(uid) && (
         !('kullaniciAdi' in request.resource.data) ||
-        adBenim(uid, request.resource.data.kullaniciAdi));
+        adBenim(uid, request.resource.data.kullaniciAdi))
+        // GEÇİŞ SONRASI AÇ (aktarıcılı derleme tamamen yayılınca):
+        // && !('fcmToken' in request.resource.data)
+        ;
       allow update: if benim(uid) && (
         request.resource.data.get('kullaniciAdi', '') ==
           resource.data.get('kullaniciAdi', '') ||
         (resource.data.get('kullaniciAdi', '') == '' &&
-          adBenim(uid, request.resource.data.kullaniciAdi)));
+          adBenim(uid, request.resource.data.kullaniciAdi)))
+        // GEÇİŞ SONRASI AÇ: fcmToken EKLENEMEZ/DEĞİŞTİRİLEMEZ, yalnız
+        // silinebilir (kalmış eski değeri temizlemek serbest kalsın).
+        // && (!('fcmToken' in request.resource.data) ||
+        //     !request.resource.data.diff(resource.data).affectedKeys()
+        //       .hasAny(['fcmToken']))
+        ;
       allow delete: if false;
+
+      // ---- GİZLİ KULLANICI BELGELERİ ----
+      // users/{uid}/ozel/bildirim {fcmToken, sessizSohbetler: [chatId],
+      // guncelleme}: YALNIZ sahibi okur/yazar. Aktarıcı hizmet hesabıyla
+      // okur (kuralları atlar) → bildirim teslimatı ve sessiz kanal kararı
+      // (d6/d8) artık herkese okunur profile dayanmaz. sessizSohbetler de
+      // buraya taşındı: chatId = iki uid olduğundan liste kişinin KİMLERLE
+      // sohbet ettiğini (ve kimi sessize aldığını) yabancılara açıyordu.
+      match /ozel/{belge} {
+        allow read, write: if benim(uid);
+      }
     }
 
     // ---- KULLANICI ADI BENZERSİZLİĞİ ----
