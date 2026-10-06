@@ -293,6 +293,30 @@ class _IstekSatiriState extends State<_IstekSatiri> {
     }
   }
 
+  bool _islemde = false;
+
+  /// Kabul / reddet / iptal. ⚠️ Eskiden düğmeler Future'ı doğrudan
+  /// döndürüyordu: transaction hatası (ağ yok, kural reddi — ör. araya engel
+  /// girdiyse) yakalanmıyor, global işleyiciye rapor olarak düşüyor ve
+  /// kullanıcı hiçbir geri bildirim almıyordu; hızlı çift dokunuş da iki
+  /// transaction başlatabiliyordu.
+  Future<void> _islem(Future<void> Function() is_) async {
+    if (_islemde) return;
+    setState(() => _islemde = true);
+    try {
+      await is_();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('İşlem yapılamadı, tekrar dene.')),
+        );
+      }
+    } finally {
+      // Başarıda satır listeden kalkar (akış günceller); State yaşıyorsa sıfırla.
+      if (mounted) setState(() => _islemde = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final arkadas = ArkadasServisi.instance;
@@ -329,7 +353,9 @@ class _IstekSatiriState extends State<_IstekSatiri> {
                 Uc3DDugme(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  onTap: () => arkadas.kabulEt(istek),
+                  onTap: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.kabulEt(istek)),
                   cocuk: Text('Kabul',
                       style: Yazi.stil(12, FontWeight.w800, Renkler.metinKoyu)),
                 ),
@@ -337,11 +363,15 @@ class _IstekSatiriState extends State<_IstekSatiri> {
                 IconButton(
                   tooltip: 'Reddet',
                   icon: Icon(Icons.close, color: Renkler.tehlike),
-                  onPressed: () => arkadas.reddet(istek),
+                  onPressed: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.reddet(istek)),
                 ),
               ] else
                 TextButton(
-                  onPressed: () => arkadas.iptalEt(istek),
+                  onPressed: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.iptalEt(istek)),
                   child: Text('İptal',
                       style: TextStyle(color: Renkler.metinSoluk)),
                 ),

@@ -12,9 +12,12 @@ import 'package:permission_handler/permission_handler.dart';
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'aktarici_servisi.dart';
 import 'aktif_arama_kaydi.dart';
+import 'arama_durumu.dart';
 import 'bildirim_servisi.dart';
 import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
+
+export 'arama_durumu.dart';
 
 enum AramaTipi { video, ses }
 
@@ -446,23 +449,26 @@ class AramaServisi {
         'arayan': ad,
         'tip': tip.name,
         'kanal': kanal,
-        'durum': 'cagriliyor',
+        'durum': AramaDurumu.cagriliyor.name,
         'zaman': FieldValue.serverTimestamp(),
       });
 
-      BildirimServisi.instance.hedefeVeriGonder(hedefUid: alanUid, veri: {
+      // Ateşle-unut: hedefeVeriGonder asla fırlatmaz (hatayı ize yazar);
+      // arayanın ekranı push'un gidişini beklemeden açılsın.
+      unawaited(
+          BildirimServisi.instance.hedefeVeriGonder(hedefUid: alanUid, veri: {
         'tur': 'arama',
         'chatId': chatId,
         'arayan': ad,
         'arayanUid': me ?? '',
         'tip': tip.name,
         'kanal': kanal,
-      });
+      }));
       iz('ARAMA BASLAT tamam, push gonderildi');
       return kanal;
     } catch (e, st) {
       iz('ARAMA BASLAT HATA: $e');
-      HataServisi.instance.bildir(e, st, etiket: 'aramaBaslat');
+      unawaited(HataServisi.instance.bildir(e, st, etiket: 'aramaBaslat'));
       await bitir(chatId, oturum: benim);
       throw AramaHatasi('Arama başlatılamadı: $e');
     }
@@ -515,12 +521,12 @@ class AramaServisi {
       } catch (e) {
         iz('setCallConnected hata: $e');
       }
-      await _aramaDoc(chatId).set({'durum': 'kabul'}, SetOptions(merge: true));
+      await _aramaDoc(chatId).set(AramaDurumu.kabul.alan, SetOptions(merge: true));
       iz('KABUL tamam');
       return true;
     } catch (e, st) {
       iz('KABUL HATA: $e');
-      HataServisi.instance.bildir(e, st, etiket: 'kabulEt');
+      unawaited(HataServisi.instance.bildir(e, st, etiket: 'kabulEt'));
       await bitir(chatId, oturum: benim);
       throw AramaHatasi('Aramaya katılınamadı: $e');
     }
@@ -531,14 +537,14 @@ class AramaServisi {
     try {
       final d = await aktifArama(chatId);
       if (d == null) return;
-      final durum = d['durum'];
-      if (durum != 'cagriliyor' && durum != 'kabul') return;
+      if (aramaDurumuCoz(d['durum'])?.aktif != true) return;
       final benimki = d['arayanUid'] == _uid;
       final ts = d['zaman'];
       final eski = ts is! Timestamp ||
           DateTime.now().difference(ts.toDate()).inSeconds.abs() > 90;
       if (benimki || eski) {
-        await _aramaDoc(chatId).set({'durum': 'bitti'}, SetOptions(merge: true));
+        await _aramaDoc(chatId)
+            .set(AramaDurumu.bitti.alan, SetOptions(merge: true));
       }
     } catch (_) {}
   }
@@ -546,7 +552,7 @@ class AramaServisi {
   /// ARANAN reddeder.
   Future<void> reddet(String chatId) async {
     HataServisi.instance.iz('REDDET chat=$chatId');
-    await _aramaDoc(chatId).set({'durum': 'red'}, SetOptions(merge: true));
+    await _aramaDoc(chatId).set(AramaDurumu.red.alan, SetOptions(merge: true));
   }
 
   /// Aramayı bitirir: önce YEREL temizlik (motor, bayraklar, disk kaydı,
@@ -577,7 +583,7 @@ class AramaServisi {
     // çağrı sırasıyla uygular → şimdi çağırmak sırayı garanti eder.
     try {
       _aramaDoc(chatId)
-          .set({'durum': 'bitti'}, SetOptions(merge: true))
+          .set(AramaDurumu.bitti.alan, SetOptions(merge: true))
           .ignore();
     } catch (_) {}
     await _yerelTemizlik();

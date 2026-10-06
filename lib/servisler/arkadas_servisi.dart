@@ -1,10 +1,49 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/arkadaslik.dart';
 import '../modeller/kullanici.dart';
 import 'bildirim_servisi.dart';
+import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
+
+/// [liste]yi en fazla [boyut] elemanlı ardışık gruplara böler (saf → test).
+List<List<T>> gruplaraBol<T>(List<T> liste, int boyut) {
+  assert(boyut > 0);
+  return [
+    for (var i = 0; i < liste.length; i += boyut)
+      liste.sublist(i, i + boyut > liste.length ? liste.length : i + boyut),
+  ];
+}
+
+/// [anahtarlar]ı [grupBoyutu]'luk gruplar hâlinde [grupGetir] ile PARALEL
+/// okur ve sonuçları [anahtarlar] SIRASIYLA döndürür (saf → test).
+///  - Boş liste → hiç sorgu atılmaz.
+///  - Bir grup hata verirse YALNIZ o grup atlanır ([hatada] çağrılır); diğer
+///    grupların sonucu yine döner (tüm akış hataya düşmez).
+///  - Haritada karşılığı olmayan anahtar (silinmiş/okunamayan belge) atlanır.
+Future<List<V>> gruplarHalindeGetir<V>({
+  required List<String> anahtarlar,
+  required Future<Map<String, V>> Function(List<String> grup) grupGetir,
+  int grupBoyutu = KullaniciServisi.whereInSiniri,
+  void Function(Object hata, List<String> grup)? hatada,
+}) async {
+  if (anahtarlar.isEmpty) return <V>[];
+  final sonuclar = await Future.wait(
+    gruplaraBol(anahtarlar, grupBoyutu).map((grup) async {
+      try {
+        return await grupGetir(grup);
+      } catch (e) {
+        hatada?.call(e, grup);
+        return <String, V>{};
+      }
+    }),
+  );
+  final hepsi = <String, V>{for (final m in sonuclar) ...m};
+  return [for (final a in anahtarlar) ?hepsi[a]];
+}
 
 /// Arkadaşlık: istek gönder/kabul/red/iptal, arkadaş listesi, ilişki durumu.
 ///
@@ -91,13 +130,13 @@ class ArkadasServisi {
       'tarih': FieldValue.serverTimestamp(),
     });
 
-    // Bildirim (fire-and-forget)
-    final ben = await KullaniciServisi.instance.profilGetir(me);
-    BildirimServisi.instance.hedefeBildirimGonder(
+    // Bildirim (fire-and-forget) — bkz. [_bildirimGonder].
+    unawaited(_bildirimGonder(
+      me: me,
       hedefUid: alanUid,
-      baslik: ben?.ad ?? 'Yeni istek',
+      varsayilanBaslik: 'Yeni istek',
       govde: 'sana arkadaşlık isteği gönderdi',
-    );
+    ));
   }
 
   /// İsteği kabul et: arkadaşlık oluştur + isteği sil (transaction).
@@ -114,12 +153,37 @@ class ArkadasServisi {
     });
 
     // Kabul edildi bildirimi (isteği gönderen kişiye)
-    final ben = await KullaniciServisi.instance.profilGetir(me);
-    BildirimServisi.instance.hedefeBildirimGonder(
+    unawaited(_bildirimGonder(
+      me: me,
       hedefUid: istek.gonderenUid,
-      baslik: ben?.ad ?? 'Arkadaşlık',
+      varsayilanBaslik: 'Arkadaşlık',
       govde: 'arkadaşlık isteğini kabul etti 🎉',
-    );
+    ));
+  }
+
+  /// Arkadaşlık bildirimini (gönderenin adıyla) yollar. ASLA fırlatmaz.
+  ///
+  /// ⚠️ Eskiden istek YAZILDIKTAN / transaction BİTTİKTEN sonra profil
+  /// okuması `await` ediliyordu: o okuma hata verirse (çevrimdışı vb.)
+  /// [istekGonder]/[kabulEt] fırlatıyor, ekran "İşlem yapılamadı" diyordu —
+  /// oysa istek/arkadaşlık SUNUCUDA OLUŞMUŞTU (kullanıcı tekrar deneyince
+  /// kafa karıştırıcı sonuçlar). Ayrıca bildirim hazırlığı UI'ı bekletiyordu.
+  Future<void> _bildirimGonder({
+    required String me,
+    required String hedefUid,
+    required String varsayilanBaslik,
+    required String govde,
+  }) async {
+    try {
+      final ben = await KullaniciServisi.instance.profilGetir(me);
+      await BildirimServisi.instance.hedefeBildirimGonder(
+        hedefUid: hedefUid,
+        baslik: ben?.ad ?? varsayilanBaslik,
+        govde: govde,
+      );
+    } catch (e) {
+      HataServisi.instance.iz('ARKADAS bildirimi gonderilemedi: $e');
+    }
   }
 
   /// İsteği reddet: sadece sil (nazik — gönderene bildirim gitmez).
@@ -216,7 +280,13 @@ class ArkadasServisi {
         .toList());
   }
 
-  /// Arkadaşlarım (canlı) — profil listesi olarak.
+  /// Arkadaşlarım (canlı) — profil listesi olarak (friendships sırasıyla).
+  ///
+  /// ⚠️ Eskiden HER anlık görüntüde arkadaş başına ayrı `get()` atılıyordu
+  /// (N arkadaş = N okuma + N gidiş-dönüş) ve TEK bir okuma hatası tüm akışı
+  /// hataya düşürüyordu (ekranda liste yerine hata). Artık `whereIn`
+  /// (FieldPath.documentId) ile 30'arlık gruplar hâlinde okunur; hata veren
+  /// grup atlanıp ize yazılır, geri kalan arkadaşlar yine görünür.
   Stream<List<Kullanici>> arkadaslar() {
     final me = _uid;
     if (me == null) return const Stream.empty();
@@ -230,10 +300,12 @@ class ArkadasServisi {
               .firstWhere((u) => u != me, orElse: () => ''))
           .where((u) => u.isNotEmpty)
           .toList();
-      final profiller = await Future.wait(
-        digerUidler.map(KullaniciServisi.instance.profilGetir),
+      return gruplarHalindeGetir<Kullanici>(
+        anahtarlar: digerUidler,
+        grupGetir: KullaniciServisi.instance.profilGrubuGetir,
+        hatada: (e, grup) => HataServisi.instance
+            .iz('ARKADAS profilleri okunamadi (${grup.length} kisi): $e'),
       );
-      return profiller.whereType<Kullanici>().toList();
     });
   }
 }

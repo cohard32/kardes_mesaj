@@ -774,7 +774,7 @@ doğrulanmalıdır.
 | §1.4‑8 Hata raporu yağmuru | Aynı hata 10 dk'da bir | `hata_servisi.dart` |
 | §1.4‑9 Sürüm iki yerde | `test/surum_test.dart` + CI | `test/` |
 | §2.1 c/d | Video kapakla başlar, dokununca yüklenir; tek ses oynatıcı | `sohbet_ekrani.dart`, `ses_oynatici_servisi.dart` |
-| §2.2 | Arama durumu `enum`, tek kaynak ses listesi, `unawaited_futures` lint'i, arkadaş listesinde toplu okuma | ⏳ son kalite turu sürüyor |
+| §2.2 | Arama durumu `enum` (Firestore dizgileri aynı), tek kaynak ses listesi, `unawaited_futures`/`prefer_final_locals` lint'leri (12 yer tek tek incelendi; 2'si gerçek hataydı: yakalanmayan bildirim hazırlığı hatası, başarılı isteğin "gönderilemedi" görünmesi), arkadaş listesinde 30'arlık toplu okuma, arkadaşlık düğmelerinde hata geri bildirimi | `arama_durumu.dart`, `ses_secenekleri.dart`, `arkadas_servisi.dart`, `arkadaslar_ekrani.dart` |
 | §2.3‑A/B/D/E/F | Yanıtla · sessize al · aktarıcı · meşgul · onaylı güncelleme | çeşitli |
 | §3 | Çalışma anında değişen 5 tema, "neon parıltısını azalt", kontrast testleri, sabit hex'ler kaldırıldı | `tema.dart`, `ayarlar_ekrani.dart` |
 | §4.4 | GitHub Actions: analiz, test, kural testi; `FIREBASE_SERVICE_ACCOUNT` varsa `main`'de kural yayını | `.github/workflows/ci.yml` |
@@ -802,7 +802,7 @@ her düzeltme ayrıca bağımsız doğrulandı. Öne çıkanlar:
 
 ### 6.3 Doğrulama
 
-`flutter analyze` 0 sorun · `flutter test` tümü geçiyor · Firestore kural testi
+`flutter analyze` 0 sorun (sıkılaştırılmış lint'lerle) · `flutter test` 286/286 · Firestore kural testi
 97/97 · aktarıcı testi 47/47 · `wrangler deploy --dry-run` paketliyor · Gradle
 imza mantığı bağımsız Gradle projesinde 4 senaryoyla denendi · Kotlin,
 Android API taslaklarına karşı derlendi.

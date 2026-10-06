@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'hata_servisi.dart';
 
@@ -17,8 +18,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../tema.dart';
 import 'aktarici_servisi.dart';
 import 'aktif_arama_kaydi.dart';
+import 'arama_durumu.dart';
 import 'app_check_servisi.dart';
 import 'ayar_servisi.dart';
+import 'ses_secenekleri.dart';
 
 /// Bildirim KANAL KİMLİĞİ seçimi — SAF mantık (Firebase/eklenti yok →
 /// `test/bildirim_kanal_test.dart` ile birim testi yapılır).
@@ -61,11 +64,12 @@ abstract final class BildirimKanali {
   /// yayınlanacağını seçer.
   static const String tszEki = '_tsz';
 
-  /// Ayarlar'daki ses seçimleri (kanalı kurulanlar).
-  static const List<String> secimler = [
-    'varsayilan', 'sessiz', 'kedi', 'kedi2', 'kedi3', 'kedi4', 'cingirak',
-    'ozel',
-  ];
+  /// Ayarlar'daki ses seçimleri (kanalı kurulanlar): hazır sesler
+  /// ([sesSecenekleri], tek kaynak) + telefondan özel ses.
+  static final List<String> secimler = List.unmodifiable([
+    for (final s in sesSecenekleri) s.anahtar,
+    ozelSesAnahtari,
+  ]);
 
   /// SESSİZE ALINMIŞ sohbetin mesajları bu kanala düşer: ses YOK, titreşim
   /// YOK (bildirim yine görünür, sohbet okunmamış olarak işaretlenir).
@@ -102,7 +106,7 @@ abstract final class BildirimKanali {
   /// kayıt) varsayılana düşer — var olmayan kanala push GİTMESİN. 'ozel'
   /// kanalı yalnız URI varken kurulur → URI yoksa varsayılan.
   static String sesKanali(String secim, {String? ozelUri}) {
-    if (secim == 'ozel') {
+    if (secim == ozelSesAnahtari) {
       return (ozelUri == null || ozelUri.isEmpty)
           ? varsayilan
           : ozelKanal(ozelUri);
@@ -296,7 +300,7 @@ Future<bool> aramaMesajiIsle(Map<String, dynamic> data) async {
       // Firestore'a işaretle. "Kapalıyken hiç gelmiyor"un sebebi böyle ayrışır:
       //  - Bu zaman damgası güncellendiyse → FCM ULAŞTI (sorun CallKit/kod).
       //  - Güncellenmediyse → FCM cihaza HİÇ ulaşmadı (autostart/pil = cihaz ayarı).
-      _cagriPushTeshisYaz(data['kanal']?.toString());
+      unawaited(_cagriPushTeshisYaz(data['kanal']?.toString()));
       return true;
     case 'arama_iptal':
       // Arayan kapattı/vazgeçti → zil sussun, ekran kapansın.
@@ -360,7 +364,7 @@ Future<void> _mesgulBildir(String? chatId) async {
     await FirebaseFirestore.instance
         .collection('aramalar')
         .doc(chatId)
-        .set({'durum': 'mesgul'}, SetOptions(merge: true));
+        .set(AramaDurumu.mesgul.alan, SetOptions(merge: true));
     HataServisi.instance.iz('MESGUL bildirildi chat=$chatId');
   } catch (e) {
     HataServisi.instance.iz('MESGUL bildirilemedi: $e');
@@ -519,14 +523,6 @@ class BildirimServisi {
     'km_v2_kedi4', 'km_v2_cingirak', 'km_v2_ozel',
   ];
 
-  // Kedi sesleri: seçim anahtarı → gösterim adı (raw kaynak adı = anahtarın aynısı)
-  static const Map<String, String> _kediSesleri = {
-    'kedi': 'Yavru Kedi 1 🐱',
-    'kedi2': 'Yavru Kedi 2 😻',
-    'kedi3': 'Yavru Kedi 3 🐈',
-    'kedi4': 'Yavru Kedi 4 🐾',
-  };
-
   String _kanalIdFor(String secim) => BildirimKanali.sesKanali(secim);
 
   static const String _kanalKapali = BildirimKanali.kapali;
@@ -547,17 +543,18 @@ class BildirimServisi {
 
   /// Seçili sesin AndroidNotificationSound karşılığı (Android <8 + detayda).
   AndroidNotificationSound? _sesFor(String secim) {
-    if (_kediSesleri.containsKey(secim)) {
-      return RawResourceAndroidNotificationSound(secim);
-    }
-    if (secim == 'cingirak') {
-      return const RawResourceAndroidNotificationSound('cingirak');
-    }
-    if (secim == 'ozel') {
+    if (secim == ozelSesAnahtari) {
       final u = AyarServisi.instance.ozelSesUri.value;
       return (u == null || u.isEmpty) ? null : UriAndroidNotificationSound(u);
     }
-    return null; // varsayilan (sistem) / sessiz
+    return _rawSes(sesSecenegiBul(secim));
+  }
+
+  /// Hazır sesin res/raw karşılığı; raw kaynağı yoksa (varsayılan = sistem
+  /// sesi, sessiz) ya da seçenek bilinmiyorsa null.
+  static AndroidNotificationSound? _rawSes(SesSecenegi? s) {
+    final raw = s?.rawKaynak;
+    return raw == null ? null : RawResourceAndroidNotificationSound(raw);
   }
 
   // Native izin/ses kontrolleri (MainActivity.kt ile aynı kanal adı)
@@ -700,19 +697,14 @@ class BildirimServisi {
       importance: Importance.none,
     ));
     // Her ses İKİ kanalla kurulur: titreşimli + titreşimsiz (_tsz).
-    // Varsayılan (sistem sesi) — AÇIKÇA playSound: sistem varsayılan sesi çalsın
-    await _ciftKanalKur(a, 'varsayilan', 'Varsayılan',
-        aciklama: 'Yeni mesaj bildirimleri');
-    // Sessiz (sessiz_tsz aynı zamanda SESSİZE ALINMIŞ sohbetlerin kanalı)
-    await _ciftKanalKur(a, 'sessiz', 'Sessiz', sesCalsin: false);
-    // Kedi sesleri (4 adet)
-    for (final e in _kediSesleri.entries) {
-      await _ciftKanalKur(a, e.key, e.value,
-          ses: RawResourceAndroidNotificationSound(e.key));
+    // Liste TEK KAYNAKTAN ([sesSecenekleri]) — Ayarlar ekranıyla aynı.
+    //  - varsayilan: raw yok + playSound → sistem varsayılan sesi çalar
+    //  - sessiz: playSound false (sessiz_tsz aynı zamanda SESSİZE ALINMIŞ
+    //    sohbetlerin kanalı, bkz. [BildirimKanali.sessizSohbet])
+    for (final s in sesSecenekleri) {
+      await _ciftKanalKur(a, s.anahtar, s.ad,
+          aciklama: s.aciklama, sesCalsin: s.sesCalar, ses: _rawSes(s));
     }
-    // Çıngırak
-    await _ciftKanalKur(a, 'cingirak', 'Çıngırak',
-        ses: const RawResourceAndroidNotificationSound('cingirak'));
     await _ozelKanaliKur();
   }
 
@@ -771,7 +763,7 @@ class BildirimServisi {
       HataServisi.instance.iz('ozel kanal listesi okunamadi: $e');
     }
     if (uri != null && uri.isNotEmpty) {
-      await _ciftKanalKur(a, 'ozel', 'Özel Ses',
+      await _ciftKanalKur(a, ozelSesAnahtari, 'Özel Ses',
           id: BildirimKanali.ozelKanal(uri),
           ses: UriAndroidNotificationSound(uri));
     }

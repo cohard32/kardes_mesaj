@@ -1,5 +1,5 @@
 name: kardes_mesaj
-description: "A new Flutter project."
+description: "ROY MESSANGER — aile içi, reklamsız mesajlaşma ve arama uygulaması"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

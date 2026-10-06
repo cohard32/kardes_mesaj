@@ -86,16 +86,13 @@ BelgeOlayi aramaBelgesiOlayi(Map<String, dynamic>? veri, {String? benimKanal}) {
   )) {
     return BelgeOlayi.devralindi;
   }
-  switch (veri['durum']) {
-    case 'red':
-      return BelgeOlayi.reddedildi;
-    case 'mesgul':
-      return BelgeOlayi.mesgul;
-    case 'bitti':
-      return BelgeOlayi.bitti;
-    default:
-      return BelgeOlayi.yok;
-  }
+  // Bilinmeyen durum (null) → olay yok: ekran yanlışlıkla kapanmasın.
+  return switch (aramaDurumuCoz(veri['durum'])) {
+    AramaDurumu.red => BelgeOlayi.reddedildi,
+    AramaDurumu.mesgul => BelgeOlayi.mesgul,
+    AramaDurumu.bitti => BelgeOlayi.bitti,
+    AramaDurumu.cagriliyor || AramaDurumu.kabul || null => BelgeOlayi.yok,
+  };
 }
 
 /// Aktif arama ekranı (görüntülü + sesli ortak).

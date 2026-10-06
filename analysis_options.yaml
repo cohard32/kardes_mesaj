@@ -23,6 +23,15 @@ linter:
   rules:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # ⚠️ await edilmeyen Future'lar: hata sessizce kaybolur ya da
+    # global işleyiciye düşer, sıralama da garanti değildir. Bilinçli
+    # "ateşle-unut" yerler dart:async unawaited(...) ile işaretlenir.
+    - unawaited_futures
+    - prefer_final_locals
+    - always_declare_return_types
+    # ⚠️ discarded_futures BİLİNÇLİ OLARAK EKLENMEDİ: onTap/onPressed gibi
+    # senkron geri çağrılardan async işlev başlatmak (~76 yer) bu projede
+    # kasıtlı; o kural her birini gürültüye boğardı.
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

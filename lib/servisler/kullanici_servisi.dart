@@ -259,6 +259,20 @@ class KullaniciServisi {
     return doc.exists ? Kullanici.firestoreDan(doc) : null;
   }
 
+  /// Firestore `whereIn` bir sorguda en fazla bu kadar değer kabul eder.
+  static const int whereInSiniri = 30;
+
+  /// [uidler]in (en fazla [whereInSiniri]) profillerini TEK sorguyla okur:
+  /// uid → profil. Belgesi olmayan uid haritada yer almaz. Hata fırlatabilir
+  /// (çağıran grubu atlar, bkz. ArkadasServisi.arkadaslar).
+  Future<Map<String, Kullanici>> profilGrubuGetir(List<String> uidler) async {
+    assert(uidler.length <= whereInSiniri);
+    if (uidler.isEmpty) return const {};
+    final s =
+        await _users.where(FieldPath.documentId, whereIn: uidler).get();
+    return {for (final d in s.docs) d.id: Kullanici.firestoreDan(d)};
+  }
+
   /// Tam @kullanıcı adından profili bulur (QR tarama / doğrudan giriş için).
   /// usernames/{ad} → uid → users/{uid}. Bulunamazsa null.
   Future<Kullanici?> kullaniciAdindanBul(String ad) async {

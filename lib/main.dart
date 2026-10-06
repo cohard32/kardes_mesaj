@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -64,8 +66,8 @@ void main() async {
   // ⚠️ runApp'ten SONRA ve await'SİZ: eskiden runApp'ten önce await ediliyordu;
   // auth beklemesi + izin isteği + Agora bağlanması UI HİÇ AÇILMADAN yapılıyor,
   // uygulama saniyelerce donuk/kapanmış görünüyordu (izin diyaloğunun da
-  // tutunacağı bir arayüz yoktu).
-  _oldurulmuskenKabulEdileniAc();
+  // tutunacağı bir arayüz yoktu). Hata içeride yakalanır.
+  unawaited(_oldurulmuskenKabulEdileniAc());
 }
 
 // NOT: dedupe bayrağı AramaServisi.islenenChatId'de tutulur (bitir() temizler),
@@ -105,10 +107,10 @@ Future<void> _aramayiKabulEt(String chatId) async {
     await _authHazirOlsun();
     iz('auth hazir');
     final bilgi = await AramaServisi.instance.aktifArama(chatId);
-    final durum = bilgi?['durum'];
     if (bilgi == null) return;
-    if (durum != 'cagriliyor' && durum != 'kabul') {
-      iz('KABUL iptal: durum=$durum');
+    final durum = aramaDurumuCoz(bilgi['durum']);
+    if (durum?.aktif != true) {
+      iz('KABUL iptal: durum=${durum?.name ?? bilgi['durum']}');
       return;
     }
     final servis = AramaServisi.instance;
@@ -146,7 +148,9 @@ Future<void> _aramayiKabulEt(String chatId) async {
     }
   } catch (e) {
     iz('KABUL AKISI HATA: $e');
-    HataServisi.instance.bildir(e, StackTrace.current, etiket: 'kabulAkisi');
+    // bildir() asla fırlatmaz; zili susturmayı rapor yazımı bekletmesin.
+    unawaited(HataServisi.instance
+        .bildir(e, StackTrace.current, etiket: 'kabulAkisi'));
     debugPrint('CallKit kabul hatası: $e');
     AramaServisi.instance.islemeBitti();
     // Hata olduysa arayan tarafın zili sussun.

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'hata_servisi.dart';
 
@@ -85,7 +86,7 @@ class MesajServisi {
       Mesaj.yeniMesajVerisi(gonderen: uid, metin: temiz, yanit: yanit),
     );
     await _metaGuncelle(chatId, alanUid, temiz);
-    _bildir(alanUid, chatId, temiz);
+    unawaited(_bildir(alanUid, chatId, temiz));
   }
 
   /// Medya (resim/video/ses) gönderir (Cloudinary'ye yükler).
@@ -106,7 +107,7 @@ class MesajServisi {
     );
     final etiket = Mesaj.medyaEtiketi(tip);
     await _metaGuncelle(chatId, alanUid, etiket);
-    _bildir(alanUid, chatId, etiket);
+    unawaited(_bildir(alanUid, chatId, etiket));
     return true;
   }
 
@@ -119,7 +120,7 @@ class MesajServisi {
     );
     final etiket = Mesaj.medyaEtiketi(MesajTipi.gif);
     await _metaGuncelle(chatId, alanUid, etiket);
-    _bildir(alanUid, chatId, etiket);
+    unawaited(_bildir(alanUid, chatId, etiket));
   }
 
   /// Karşı taraftan gelen sesli mesajı "dinlendi" işaretler.
@@ -221,17 +222,27 @@ class MesajServisi {
 
   /// Karşı tarafa hedefli bildirim (fire-and-forget). Bildirime tıklanınca
   /// doğru sohbet açılsın diye chatId/gönderen data'da taşınır.
-  void _bildir(String alanUid, String chatId, String onizleme) async {
-    final ad = await _benimAdim();
-    BildirimServisi.instance.hedefeBildirimGonder(
-      hedefUid: alanUid,
-      baslik: ad,
-      govde: onizleme,
-      ekstraData: {
-        'tur': 'mesaj',
-        'chatId': chatId,
-        'gonderenUid': _uid ?? '',
-      },
-    );
+  ///
+  /// ⚠️ ASLA fırlatmaz. Eskiden `void ... async` idi ve [_benimAdim]'daki
+  /// profil okuması (ör. çevrimdışı + önbellek boş → `unavailable`) hata
+  /// verince bu, yakalanmamış async hata olarak global işleyiciye düşüp
+  /// HER mesajda hata raporu yazdırıyordu. Mesaj zaten gönderildi; bildirim
+  /// gitmezse yalnızca ize düşülür.
+  Future<void> _bildir(String alanUid, String chatId, String onizleme) async {
+    try {
+      final ad = await _benimAdim();
+      await BildirimServisi.instance.hedefeBildirimGonder(
+        hedefUid: alanUid,
+        baslik: ad,
+        govde: onizleme,
+        ekstraData: {
+          'tur': 'mesaj',
+          'chatId': chatId,
+          'gonderenUid': _uid ?? '',
+        },
+      );
+    } catch (e) {
+      HataServisi.instance.iz('MESAJ bildirimi hazirlanamadi: $e');
+    }
   }
 }

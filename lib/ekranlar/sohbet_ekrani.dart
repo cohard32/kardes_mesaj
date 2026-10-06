@@ -411,7 +411,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _yanitVN.value = null;
     _yaziyorTimer?.cancel();
     _yaziyorGonderildi = false;
-    _presence.yaziyorAyarla(widget.chatId, false);
+    // ⚠️ await'SİZ (bilinçli): Firestore set()'in Future'ı SUNUCU onayında
+    // biter; çevrimdışıyken beklemek mesaj gönderimini de bekletirdi. Yazma
+    // sırası istemcide korunur, hata da yaziyorAyarla içinde yutulur.
+    unawaited(_presence.yaziyorAyarla(widget.chatId, false));
     // NOT: alta inmek için bayrak YOK — MesajListesi kendi mesajım gelince
     // (yerel yazım anında akışa düşer) kendisi en alta iner.
     try {
@@ -1717,7 +1720,9 @@ class _SesOynaticiState extends State<_SesOynatici> {
     );
     // Karşı tarafın sesli mesajıysa ve henüz dinlenmediyse "dinlendi" işaretle
     if (basladi && !widget.benimMi && !widget.dinlendi) {
-      MesajServisi.instance.sesDinlendiIsaretle(widget.chatId, widget.mesajId);
+      // Ateşle-unut: oynatmayı bekletmesin; hata servis içinde yutulur.
+      unawaited(MesajServisi.instance
+          .sesDinlendiIsaretle(widget.chatId, widget.mesajId));
     }
   }
 
