@@ -11,8 +11,13 @@ class AyarServisi {
 
   // Varsayılan değerlerle başlar; baslat() ile kayıttan yüklenir.
   final ValueNotifier<bool> bildirimAcik = ValueNotifier<bool>(true);
+  /// MESAJ bildirimi titreşimi. Android 8+'da titreşim kanala kilitli
+  /// olduğu için bu değer YAYINLANAN kanalı seçer (`km_v3_<ses>_tsz`
+  /// varyantı) → değişince `BildirimServisi.kanalYayinla()` çağrılmalı.
+  /// Arama (CallKit) titreşimini ETKİLEMEZ (aşağıdaki NOT).
   final ValueNotifier<bool> titresimAcik = ValueNotifier<bool>(true);
-  // 'varsayilan' | 'sessiz' | 'kedi' | 'cingirak' | 'ozel'
+  // 'varsayilan' | 'sessiz' | 'kedi' | 'kedi2' | 'kedi3' | 'kedi4' |
+  // 'cingirak' | 'ozel'  (bkz. BildirimKanali.secimler)
   final ValueNotifier<String> bildirimSesi = ValueNotifier<String>('varsayilan');
   // 'ozel' seçiliyse: kullanıcının telefondan seçtiği sesin content:// URI'si + adı
   final ValueNotifier<String?> ozelSesUri = ValueNotifier<String?>(null);

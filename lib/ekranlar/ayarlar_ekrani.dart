@@ -46,6 +46,17 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
     } catch (_) {}
   }
 
+  /// Titreşim de KANALA kilitli (Android 8+) → anahtar, yayınlanan kanalı
+  /// titreşimsiz varyanta (`_tsz`) çevirir; karşı taraf push'u ona gönderir.
+  /// ⚠️ Eskiden yalnız yerel ayar değişiyordu → uygulama kapalıyken gelen
+  /// bildirimler (sistemin çizdiği) titremeye devam ediyordu.
+  Future<void> _titresimDegistir(bool acik) async {
+    await _ayar.titresimAcikAyarla(acik);
+    try {
+      await BildirimServisi.instance.kanalYayinla();
+    } catch (_) {}
+  }
+
   Future<void> _onizle(String asset) async {
     try {
       await _onizleyici.stop();
@@ -106,9 +117,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
               child: SwitchListTile(
                 activeThumbColor: Renkler.neon,
                 title: Text('Titreşim', style: Yazi.isim),
-                subtitle: Text('Bildirimde titreşim', style: Yazi.kucuk),
+                subtitle: Text('Mesaj bildiriminde titreşim',
+                    style: Yazi.kucuk),
                 value: acik,
-                onChanged: _ayar.titresimAcikAyarla,
+                onChanged: _titresimDegistir,
               ),
             ),
           ),
@@ -227,8 +239,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             child: Text(
               'Seçtiğin zil, biri seni aradığında çalar (uygulama kapalıyken '
               'bile). Telefonun sessiz/titreşim modundaysa Android zili çalmaz — '
-              'bu uygulamanın değil, telefonun ayarıdır. Arama titreşimi '
-              'Android tarafından otomatik yönetilir.',
+              'bu uygulamanın değil, telefonun ayarıdır. Yukarıdaki "Titreşim" '
+              'anahtarı yalnız mesaj bildirimlerine uygulanır. Gelen arama, '
+              'telefon sessiz modda değilse her zaman titrer — arama '
+              'titreşimi uygulamadan kapatılamıyor.',
               style: Yazi.zaman,
             ),
           ),
