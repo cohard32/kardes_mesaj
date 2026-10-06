@@ -5,6 +5,13 @@
 > saldırı senaryosu çalıştırılarak** doğrulandı; düzeltmeler `flutter analyze`,
 > `flutter test` ve 77 senaryoluk kural testiyle sınandı.
 
+
+> **Güncel durum:** Bu rapor ilk turda yazıldı. İkinci turda §1.4'teki
+> bilinen hataların, §2.3'teki özelliklerin, §3'teki tema sisteminin ve §4.4'teki
+> CI'ın tamamı uygulandı; ardından dalın tamamı 6 alanda bağımsız incelemeden
+> geçirildi (bkz. **§6**). Sizin yapmanız gerekenler:
+> **[YAYIN_ADIMLARI.md](YAYIN_ADIMLARI.md)**.
+
 ---
 
 ## 0. Özet
@@ -18,10 +25,10 @@
 | G5 | Profilde başkasının `@kullanıcı adı`nı gösterme (kimlik taklidi) | 🟠 Yüksek | ✅ Düzeltildi |
 | G6 | Katılımcı, karşı tarafı sohbetten atabiliyor / üçüncü kişi ekleyebiliyor | 🟠 Yüksek | ✅ Düzeltildi |
 | G7 | Engellenen kişi istek + bildirim yağdırabiliyor | 🟡 Orta | ✅ Düzeltildi |
-| A1 | `service_account.json` APK içinde (FCM/olası admin yetkisi) | 🔴 Kritik | 📋 Öneri (mimari) |
-| A2 | Agora App Certificate APK içinde + tahmin edilebilir kanal adı | 🔴 Kritik | ⚙️ Kanal adı düzeltildi, sertifika öneri |
-| A3 | Sürüm APK'sı **debug anahtarıyla** imzalanıyor | 🟠 Yüksek | 📋 Öneri |
-| A4 | App Check (Play Integrity) + GitHub'dan dağıtım uyumsuzluğu | 🟠 Yüksek | 📋 Öneri |
+| A1 | `service_account.json` APK içinde (FCM/olası admin yetkisi) | 🔴 Kritik | ⚙️ Aktarıcı hazır (`sunucu/aktarici`), yayını sizde — [YAYIN_ADIMLARI §4](YAYIN_ADIMLARI.md) |
+| A2 | Agora App Certificate APK içinde + tahmin edilebilir kanal adı | 🔴 Kritik | ✅ Kanal adı rastgele · ⚙️ token aktarıcıda, yayını sizde |
+| A3 | Sürüm APK'sı **debug anahtarıyla** imzalanıyor | 🟠 Yüksek | ✅ `key.properties` desteği + `royImzaZorunlu` · anahtar yedeği sizde |
+| A4 | App Check (Play Integrity) + GitHub'dan dağıtım uyumsuzluğu | 🟠 Yüksek | 📋 Karar sizde: zorlamayı açmayın |
 | B1 | Çıkışta FCM token silinmiyor → eski hesabın mesaj/aramaları gelmeye devam | 🟠 Yüksek | ✅ Düzeltildi |
 | B2 | Arka plandayken gelen mesajlar ✓✓ "görüldü" işaretleniyor | 🟠 Yüksek | ✅ Düzeltildi |
 | B3 | Her yeniden çizimde `chats/{id}`'ye yazma (kota israfı) | 🟡 Orta | ✅ Düzeltildi |
@@ -208,7 +215,7 @@ kalmak gerekir.
 | B11 | `ayarlar_ekrani.dart`, `kullanici.dart` | Dart `toUpperCase()` dil bağımsız: `i→I`. `ad[0]` emoji ile başlayan adda vekil çiftin yarısını veriyordu. | `trBuyuk()` yardımcısı + `runes.first`. |
 | B12 | `guncelleme_servisi.dart` | Dosya UTF‑8 → CP1252 → UTF‑8 çift kodlanmış (BOM + `Ã¼`, `âš ï¸`). | Bayt düzeyinde geri çevrildi. |
 
-### 1.4 Bilinen ama bu dalda düzeltilmeyen hatalar (cihazda test gerektirir)
+### 1.4 İlk turda düzeltilmeyen hatalar → ✅ ikinci turda hepsi düzeltildi (bkz. §6)
 
 1. **Meşgul tespiti arka plan isolate'inde çalışmıyor.** `aktifAramaVar` bir
    Dart değişkeni; FCM arka plan handler'ı **ayrı isolate**'te çalıştığı için
@@ -748,3 +755,58 @@ jobs:
 77/77 (yeni testler eski kurallarda 15 başarısızlık vererek açıkları gösteriyor).
 Arama/bildirim değişiklikleri (B6, B7, P3) cihaz gerektirir; §4.3'teki matrisle
 doğrulanmalıdır.
+
+---
+
+## 6. İkinci tur — kalan işlerin tamamlanması
+
+### 6.1 Uygulananlar
+
+| Rapor maddesi | Ne yapıldı | Nerede |
+|---|---|---|
+| §1.4‑1 Meşgul tespiti arka plan isolate'inde çalışmıyor | Diskte `AktifAramaKaydi` (3 dk tazelik + 60 sn nabız, açılışta silinir); ön/arka plan **tek** kural `gelenAramaMesgulMu` | `aktif_arama_kaydi.dart`, `bildirim_servisi.dart`, `arama_servisi.dart` |
+| §1.4‑2 Öldürülen uygulama sonsuza kadar "çevrimiçi" | 60 sn nabız + 150 sn eşik; akışlar eşik dolunca yeniden yayar | `presence_servisi.dart`, `kullanici.dart` |
+| §1.4‑3 Karşı taraf düşünce ekran kapanmıyor | 20 sn "Yeniden bağlanıyor…" → "Bağlantı koptu"; oturum korumasıyla eski ekran yeni görüşmeyi düşüremez | `arama_ekrani.dart`, `arama_servisi.dart` |
+| §1.4‑4 Titreşim anahtarı Android 8+'da etkisiz | Titreşimsiz kanal varyantları `km_v3_*_tsz` | `bildirim_servisi.dart` |
+| §1.4‑5 Sayfalamada zıplama | `CustomScrollView` + `center` ile iki sliver: ne yeni mesaj ne eski mesaj yüklemesi görünümü kaydırır (widget testleriyle kanıtlı) | `parcalar/mesaj_listesi.dart` |
+| §1.4‑6 Onaysız güncelleme | Sürüm notlarıyla onay: Sonra / Bu sürümü atla / Güncelle | `guncelleme_akisi.dart` |
+| §1.4‑7 Galeriye kaydetme ANR | Kopya arka plan iş parçacığında, `Result` ana iş parçacığında; hata yolunda `IS_PENDING` girdisi temizlenir | `MainActivity.kt` |
+| §1.4‑8 Hata raporu yağmuru | Aynı hata 10 dk'da bir | `hata_servisi.dart` |
+| §1.4‑9 Sürüm iki yerde | `test/surum_test.dart` + CI | `test/` |
+| §2.1 c/d | Video kapakla başlar, dokununca yüklenir; tek ses oynatıcı | `sohbet_ekrani.dart`, `ses_oynatici_servisi.dart` |
+| §2.2 | Arama durumu `enum`, tek kaynak ses listesi, `unawaited_futures` lint'i, arkadaş listesinde toplu okuma | ⏳ son kalite turu sürüyor |
+| §2.3‑A/B/D/E/F | Yanıtla · sessize al · aktarıcı · meşgul · onaylı güncelleme | çeşitli |
+| §3 | Çalışma anında değişen 5 tema, "neon parıltısını azalt", kontrast testleri, sabit hex'ler kaldırıldı | `tema.dart`, `ayarlar_ekrani.dart` |
+| §4.4 | GitHub Actions: analiz, test, kural testi; `FIREBASE_SERVICE_ACCOUNT` varsa `main`'de kural yayını | `.github/workflows/ci.yml` |
+| A3 | `android/key.properties` ile sürüm imzası; `royImzaZorunlu=true` iken anahtarsız sürüm derlemesi durur; uyarı `-q` modunda görünür | `build.gradle.kts` |
+
+### 6.2 Bağımsız inceleme (dalın tamamı)
+
+Dal 6 alanda (arama, bildirim, sohbet, güvenlik, tema, Android/CI) ayrı
+inceleyicilerce tarandı; her bulgu **iki bağımsız şüpheci** tarafından
+çürütülmeye çalışıldı. 22 bulgunun hiçbiri çürütülemedi; hepsi düzeltildi ve
+her düzeltme ayrıca bağımsız doğrulandı. Öne çıkanlar:
+
+| Bulgu | Ciddiyet | Çözüm |
+|---|---|---|
+| Herkese okunur `fcmToken` başka hesaba yazılıp aktarıcı üzerinden **kurbana sahte arama** gönderilebiliyordu | 🔴 Kritik | Token yalnız sahibinin okuduğu `users/{uid}/ozel/bildirim`'de; aktarıcı yalnız oradan okur; aynı token başka hesapta ise `409`; aktarıcılı derlemede token bir kez döndürülür |
+| Görüşme ortasında uygulama ölünce 3 saat boyunca herkes "meşgul" alıyordu | 🟠 Yüksek | Açılışta silme + 3 dk tazelik + nabız |
+| Ters listede anahtarsız balonlar → oynayan video başka mesaja geçiyordu | 🟠 Yüksek | `ValueKey` + `findChildIndexCallback` + `didUpdateWidget` |
+| Engellenen kişi `arama_iptal` etiketiyle görünür bildirim gönderebiliyordu | 🟡 Orta | Engelliyken yalnız tam `{tur:arama_iptal, chatId}` |
+| Bekleyen bir istekle yabancıya "Annen arıyor" sahte araması | 🟡 Orta | İstek yolunda yalnız sunucunun ürettiği sabit bildirim; ad/başlık sunucuda gerçek profilden |
+| Sessize alınan sohbet listesi herkese açık belgedeydi (kiminle konuştuğunu sızdırıyordu) | 🟡 Orta | Gizli belge; kanal kararı aktarıcıda |
+| Tema değişince ana ekran yıkılıp yeniden kuruluyordu (güncelleme penceresi yeniden çıkıyordu) | 🟡 Orta | `AuthGate` akışları `State`'te |
+| Özel bildirim sesi ikinci değişimde uygulanmıyordu (Android silinen kanalı eski sesiyle diriltir) | 🟡 Orta | URI'ye göre sürümlü kanal kimliği |
+| Önbelleklenen FCM istemcisi tek hatada kapatılıp eşzamanlı arama push'unu düşürüyordu | 🟢 Düşük | Ağ hatasında sıfırlanmaz, kapatılmaz |
+| Anahtarsız sürüm derlemesi sessizce debug'a düşüyordu (uyarı `-q`'da görünmüyordu) | 🟡 Orta | `logger.quiet` + `royImzaZorunlu` |
+
+### 6.3 Doğrulama
+
+`flutter analyze` 0 sorun · `flutter test` tümü geçiyor · Firestore kural testi
+97/97 · aktarıcı testi 47/47 · `wrangler deploy --dry-run` paketliyor · Gradle
+imza mantığı bağımsız Gradle projesinde 4 senaryoyla denendi · Kotlin,
+Android API taslaklarına karşı derlendi.
+
+**Yapılamayanlar (kimlik bilgisi / cihaz gerektirir):** kural yayını, aktarıcı
+yayını, hizmet hesabı anahtarı/Agora sertifikası yenileme, imza anahtarı
+yedeği, gerçek cihaz testi → [YAYIN_ADIMLARI.md](YAYIN_ADIMLARI.md).
