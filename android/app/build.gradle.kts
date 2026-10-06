@@ -25,14 +25,30 @@ val imza = Properties().apply {
 val imzaAnahtarlari = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
 val imzaHazir = imzaDosyasi.exists() &&
     imzaAnahtarlari.all { !imza.getProperty(it).isNullOrBlank() }
+// ⚠️ GERCEK ANAHTARA GECTIKTEN SONRA debug'a sessizce dusmek, onlemek
+// istedigimiz arizayi (guncelleme kurulamaz) AYNEN geri getirir. Bu yuzden:
+//  - android/gradle.properties'te royImzaZorunlu=true ise release derlemesi
+//    key.properties olmadan HATA verir (gecis yapildiktan sonra acin);
+//  - degilse uyari logger.quiet ile basilir: flutter araci Gradle'i '-q' ile
+//    calistirir ve WARN duzeyi orada HIC gorunmez, QUIET duzeyi gorunur.
+val imzaZorunlu = (findProperty("royImzaZorunlu") as String?)?.toBoolean() == true
+val releaseIstendi = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true)
+}
 if (!imzaHazir) {
-    logger.warn(
-        if (imzaDosyasi.exists())
-            "UYARI: android/key.properties eksik alan iceriyor " +
-                "($imzaAnahtarlari) → release DEBUG anahtariyla imzalanacak."
-        else
-            "UYARI: android/key.properties yok → release DEBUG anahtariyla " +
-                "imzalanacak (dagitim icin uygun DEGIL)."
+    val neden = if (imzaDosyasi.exists())
+        "android/key.properties eksik alan iceriyor ($imzaAnahtarlari)"
+    else
+        "android/key.properties yok"
+    if (imzaZorunlu && releaseIstendi) {
+        throw GradleException(
+            "$neden ama royImzaZorunlu=true: release DEBUG anahtariyla " +
+                "imzalanamaz (yuklu uygulamalar bu APK'yi KURAMAZ)."
+        )
+    }
+    logger.quiet(
+        "UYARI: $neden → release DEBUG anahtariyla imzalanacak " +
+            "(dagitim icin uygun DEGIL)."
     )
 }
 

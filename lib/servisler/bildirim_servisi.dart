@@ -139,6 +139,20 @@ Future<void> arkaplanMesajHandler(RemoteMessage message) async {
 /// Dairesel import olmasın diye burada top-level tutulur.
 bool aktifAramaVar = false;
 
+/// Bu isolate'teki aktif görüşmenin chatId'si (AramaServisi katılınca yazar,
+/// bitirince null yapar). Ön plan meşgul kararı [gelenAramaMesgulMu] ile
+/// arka planla AYNI kurala bağlansın diye tutulur.
+String? aktifAramaChatId;
+
+/// TEK meşgul kuralı (ön plan ve arka plan aynı): başka bir sohbetle süren
+/// görüşme varsa meşgul. AYNI sohbetten gelen arama meşgul SAYILMAZ: karşı
+/// taraf görüşmeyi yeniden kuruyordur (onun uygulaması çökmüş/kopmuş).
+bool gelenAramaMesgulMu({
+  required String? aktifChat,
+  required String? gelenChat,
+}) =>
+    aktifChat != null && aktifChat != gelenChat;
+
 /// Çağrı ile ilgili FCM verisini işler. Hem arka plan handler'ı hem de
 /// uygulama açıkken (onMessage) AYNI yolu kullanır → tek tutarlı akış.
 /// İşlendiyse true döner.
