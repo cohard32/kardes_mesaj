@@ -17,12 +17,58 @@ import 'guncelleme_servisi.dart';
 /// İZ (breadcrumb) mantığı: arama gibi akışlarda hata FIRLAMADAN "takılma"
 /// oluyor. Bu yüzden adımlar sürekli kaydedilir; kullanıcı Ayarlar'dan
 /// "Sorun bildir"e basınca son adımlar yüklenir → nerede durduğu görülür.
+/// Aynı hatanın ([hataAnahtari]) yeniden raporlanabilmesi için geçmesi
+/// gereken süre.
+const Duration hataTekrarPenceresi = Duration(minutes: 10);
+
+/// Tekrar süzgecinin anahtarı: etiket + hatanın İLK satırı.
+///
+/// ⚠️ Yalnız ilk satır: `FlutterError` metni çok satırlıdır ve alt satırlarda
+/// widget ağacı / hash kodu gibi her çizimde değişebilen ayrıntılar taşır;
+/// tüm metin anahtar olsaydı aynı hata her seferinde "yeni" sayılırdı.
+String hataAnahtari(Object hata, String etiket) =>
+    '$etiket|${hata.toString().split('\n').first}';
+
+/// SAF karar: [anahtar] [simdi] anında raporlanmalı mı?
+///
+/// Raporlanacaksa [sonRapor]'a zamanı yazar (çağıran ayrıca yazmaz). Saat ve
+/// harita dışarıdan verildiği için Firebase'siz test edilebilir.
+///
+/// ⚠️ Saat GERİ alınırsa (kullanıcı/ağ saat düzeltmesi) fark negatif çıkar;
+/// "pencere içinde" saymak hatayı saat yetişene kadar susturur → negatif fark
+/// süresi dolmuş sayılır. Harita [enFazlaAnahtar]'ı aşınca süresi dolanlar
+/// atılır (uzun oturumda bellek sızmasın).
+bool hataRaporlanmali(
+  Map<String, DateTime> sonRapor,
+  String anahtar,
+  DateTime simdi, {
+  Duration pencere = hataTekrarPenceresi,
+  int enFazlaAnahtar = 100,
+}) {
+  final once = sonRapor[anahtar];
+  if (once != null) {
+    final fark = simdi.difference(once);
+    if (!fark.isNegative && fark < pencere) return false;
+  }
+  if (sonRapor.length >= enFazlaAnahtar) {
+    sonRapor.removeWhere((_, z) {
+      final f = simdi.difference(z);
+      return f.isNegative || f >= pencere;
+    });
+  }
+  sonRapor[anahtar] = simdi;
+  return true;
+}
+
 class HataServisi {
   HataServisi._();
   static final HataServisi instance = HataServisi._();
 
   static const int _enFazlaIz = 150;
   final List<String> _izler = <String>[];
+
+  /// [bildir] tekrar süzgeci: anahtar → son rapor zamanı (yalnız bellek).
+  final Map<String, DateTime> _sonRapor = <String, DateTime>{};
 
   /// Bir adımı kaydet (hafızada halka tampon; ağ trafiği yok).
   void iz(String mesaj) {
@@ -51,12 +97,25 @@ class HataServisi {
   }
 
   /// Hatayı/izleri Firestore'a yolla. Asla exception fırlatmaz.
+  ///
+  /// ⚠️ TEKRAR SÜZGECİ: eskiden her çağrı bir Firestore yazmasıydı. Bozuk bir
+  /// görsel/taşan bir satır HER ÇİZİMDE `FlutterError` üretir → saniyede
+  /// onlarca yazma; Spark planının günlük 20 bin yazma kotası dakikalar içinde
+  /// biter ve mesajlaşma da dahil TÜM yazmalar o gün durur. Artık aynı hata
+  /// (etiket + ilk satır) [hataTekrarPenceresi] içinde bir kez raporlanır.
+  /// [manuelBildir] ve [arkaplanRapor] bu süzgeçten GEÇMEZ (kullanıcı isteği /
+  /// arka plan teşhisi her zaman gitmeli).
   Future<void> bildir(
     Object hata,
     StackTrace? stack, {
     String etiket = 'genel',
   }) async {
     try {
+      final anahtar = hataAnahtari(hata, etiket);
+      if (!hataRaporlanmali(_sonRapor, anahtar, DateTime.now())) {
+        debugPrint('HATA (tekrar, raporlanmadı) $anahtar');
+        return;
+      }
       await FirebaseFirestore.instance.collection('hatalar').add({
         'zaman': FieldValue.serverTimestamp(),
         'uid': FirebaseAuth.instance.currentUser?.uid,
