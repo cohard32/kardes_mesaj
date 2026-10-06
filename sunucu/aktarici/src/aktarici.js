@@ -11,10 +11,12 @@
 //  ⚠️ YETKİ KARARI BURADA VERİLMEZ, FIRESTORE KURALLARINA SORULUR:
 //  arkadaşlık / istek / engel dokümanları KULLANICININ KENDİ ID token'ıyla
 //  Firestore REST'ten okunur → firestore.rules aynen uygulanır (üye olmayan
-//  403, var olmayan doküman 404). Hizmet hesabı yalnız iki iş için
-//  kullanılır: alıcının fcmToken'ını okumak ve FCM'e göndermek. Böylece
-//  kurallarda bir şey değişirse aktarıcıda ayrı bir kopya güncellemek
-//  gerekmez (iki ayrı yetki mantığı zamanla ayrışırdı).
+//  403, var olmayan doküman 404). Hizmet hesabı yalnız OKUMA ve FCM'e
+//  gönderme için kullanılır: alıcının GİZLİ belgesi (users/{uid}/ozel/
+//  bildirim: fcmToken + sessizSohbetler), alıcının yayınladığı kanal ve
+//  gönderenin görünen adı. Böylece kurallarda bir şey değişirse aktarıcıda
+//  ayrı bir kopya güncellemek gerekmez (iki ayrı yetki mantığı zamanla
+//  ayrışırdı).
 //
 //  İstemci sözleşmesi: lib/servisler/aktarici_servisi.dart (birlikte değişmeli).
 // ═══════════════════════════════════════════════════════════════════
@@ -178,12 +180,132 @@ function dokumanUrl(env, ...parcalar) {
 /// App Check zorlaması açılırsa belirteçsiz REST okumaları reddedilir ve
 /// HER bildirim "izin yok" diye düşerdi.
 async function kullaniciAdinaDurum(env, kimlik, appCheck, ...parcalar) {
+  return (await kullaniciAdinaOku(env, kimlik, appCheck, false, ...parcalar)).durum;
+}
+
+/// [kullaniciAdinaDurum] gibi; [govdeIste] true ise 200 yanıtının belge
+/// alanlarını (`fields`) da döner → { durum, alanlar }.
+async function kullaniciAdinaOku(env, kimlik, appCheck, govdeIste, ...parcalar) {
   const basliklar = { Authorization: `Bearer ${kimlik.idToken}` };
   if (appCheck) basliklar['X-Firebase-AppCheck'] = appCheck;
   const r = await fetch(dokumanUrl(env, ...parcalar), { headers: basliklar });
+  if (govdeIste && r.status === 200) {
+    let alanlar = null;
+    try {
+      alanlar = (await r.json())?.fields ?? null;
+    } catch {
+      // Bozuk gövde = içerik doğrulanamadı → çağıran "izin yok" sayar.
+    }
+    return { durum: r.status, alanlar };
+  }
   // Gövde kullanılmıyor ama okunmazsa bağlantı serbest kalmayabilir.
   await r.body?.cancel().catch(() => {});
-  return r.status;
+  return { durum: r.status, alanlar: null };
+}
+
+/// HİZMET HESABIYLA okuma (kurallar uygulanmaz) — YALNIZ [alanlar] maskesiyle
+/// (gereksiz alan Worker'a hiç gelmesin). Belge yoksa null, varsa `fields`
+/// nesnesi ({} olabilir). Başka her hata 502.
+async function hizmetHesabiylaOku(env, erisim, alanlar, ...parcalar) {
+  const maske = alanlar
+    .map((a) => `mask.fieldPaths=${encodeURIComponent(a)}`)
+    .join('&');
+  const r = await fetch(`${dokumanUrl(env, ...parcalar)}?${maske}`, {
+    headers: { Authorization: `Bearer ${erisim}` },
+  });
+  if (r.status === 404) {
+    await r.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!r.ok) {
+    if (r.status === 401 || r.status === 403) onbellegiSifirla();
+    console.error(`${parcalar[0]} okuma HTTP ${r.status}`);
+    await r.body?.cancel().catch(() => {});
+    throw new IstekHatasi(502, 'firestore');
+  }
+  return (await r.json())?.fields ?? {};
+}
+
+/// [fcmToken] herkese okunur `users` koleksiyonunda [hedefUid] DIŞINDA bir
+/// belgenin `fcmToken` alanında kayıtlı mı? (Hizmet hesabıyla sorgu.)
+///
+/// ⚠️ NEDEN (d10, ikinci tur): gizli belgeyi YALNIZ sahibi yazar ama DEĞERİ
+/// serbesttir → saldırgan, kurbanın bugüne kadar herkese okunur olan (ya da
+/// kurban aktarıcısız/eski derlemedeyse HÂLÂ okunur olan) token'ını kendi
+/// ikinci hesabının gizli belgesine yazıp kendi hesapları arasında
+/// "arkadaş" bildirimi atarak kurbanın telefonunu çaldırabilir. Aktarıcılı
+/// derleme token'ı bir kez döndürür (istemci: tokenBirKezDondur) → eski
+/// değer FCM'de ölür. Ama döndüremeyen (eski derleme, döndürmesi henüz
+/// başarısız) kurbanın değeri public belgesinde DURUYOR: aynı değer hedeften
+/// başka bir uid'in public belgesindeyse gönderilmez.
+/// Neden `ozel` koleksiyon GRUBU değil de `users`: eski derlemedeki kurban
+/// gizli belge HİÇ yazmaz (yalnız public) → grup sorgusu onu göremezdi; ayrıca
+/// grup sorgusu ayrı bir dizin muafiyeti ister, `users.fcmToken` tek alan
+/// dizini ise Firestore'da kendiliğinden vardır.
+/// Hedefin KENDİ public alanı (aktarıcısız yeni derleme ikisine de yazar)
+/// çakışma sayılmaz. limit 2: hedef + bir başkası da yakalanır.
+async function tokenBaskasindaMi(env, erisim, fcmToken, hedefUid) {
+  const r = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${env.PROJE}` +
+      '/databases/(default)/documents:runQuery',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${erisim}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        structuredQuery: {
+          // allDescendants YOK → yalnız kökteki `users` koleksiyonu.
+          from: [{ collectionId: 'users' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'fcmToken' },
+              op: 'EQUAL',
+              value: { stringValue: fcmToken },
+            },
+          },
+          // Yalnız belge adı gelsin (profil alanları Worker'a gelmesin).
+          select: { fields: [{ fieldPath: '__name__' }] },
+          limit: 2,
+        },
+      }),
+    },
+  );
+  if (!r.ok) {
+    if (r.status === 401 || r.status === 403) onbellegiSifirla();
+    console.error(`users token sorgusu HTTP ${r.status}`);
+    await r.body?.cancel().catch(() => {});
+    // ⚠️ Kapalı başarısız: denetim yapılamadıysa GÖNDERİLMEZ.
+    throw new IstekHatasi(502, 'firestore');
+  }
+  let satirlar;
+  try {
+    satirlar = await r.json();
+  } catch {
+    satirlar = null;
+  }
+  if (!Array.isArray(satirlar)) throw new IstekHatasi(502, 'firestore');
+  return satirlar.some((s) => {
+    const ad = s?.document?.name;
+    // Boş sonuç [{readTime}] biçimindedir (document yok).
+    return typeof ad === 'string' && ad.split('/').pop() !== hedefUid;
+  });
+}
+
+/// Firestore REST değer biçiminden düz string (yoksa/başka tipse undefined).
+function metin(alanlar, ad) {
+  const v = alanlar?.[ad]?.stringValue;
+  return typeof v === 'string' ? v : undefined;
+}
+
+/// Firestore REST dizi alanındaki string'ler (yoksa/bozuksa []).
+function metinDizisi(alanlar, ad) {
+  const degerler = alanlar?.[ad]?.arrayValue?.values;
+  if (!Array.isArray(degerler)) return [];
+  return degerler
+    .map((d) => d?.stringValue)
+    .filter((v) => typeof v === 'string');
 }
 
 /// 200 → true, 403/404 → false; başka her şey (429/5xx) GEÇİCİ altyapı
@@ -280,9 +402,8 @@ async function erisimTokeni(env) {
 const ANDROID_ONCELIK = new Set(['HIGH', 'NORMAL']);
 const GORUNURLUK = new Set(['PUBLIC', 'PRIVATE', 'SECRET']);
 const ANDROID_BILDIRIM_ALANLARI = {
-  // Sözleşme 5: km_v3_<secim>, km_v3_<secim>_tsz, km_v3_kapali (+ sessiz
-  // sohbet kanalı). Kimlik listesi istemcide değişebildiği için burada
-  // yalnız BİÇİM denetlenir; bilinmeyen kanal Android'de varsayılana düşer.
+  // Biçim denetimi; DEĞER her zaman aşağıda sunucuda EZİLİR
+  // ([alicininKanali]) — istemcinin seçtiği kanal kullanılmaz.
   channel_id: (v) => typeof v === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(v),
   tag: (v) => typeof v === 'string' && v.length <= 128,
   visibility: (v) => GORUNURLUK.has(v),
@@ -291,9 +412,69 @@ const ANDROID_BILDIRIM_ALANLARI = {
   click_action: (v) => typeof v === 'string' && v.length <= 128,
 };
 
+// ─── Bildirim kanalı (Sözleşme: lib/servisler/bildirim_servisi.dart
+// BildirimKanali — kimlikler ikisinde AYNI olmalı) ───
+const VARSAYILAN_KANAL = 'km_v3_varsayilan';
+const KAPALI_KANAL = 'km_v3_kapali';
+const SESSIZ_SOHBET_KANALI = 'km_v3_sessiz_tsz';
+// Alıcının YAYINLADIĞI kanal bu desene uymalı: km_v3_<secim>[_tsz],
+// km_v3_kapali, özel ses km_v3_ozel_<8 hex>[_tsz]. Uymayan (eski sürüm
+// km_v2_*, bozuk/kötü niyetli değer) güvenli varsayılana düşer — o kanal
+// her istemcide her zaman kurulu.
+const YAYIN_KANAL_DESENI = /^km_v3_[a-z0-9_]{1,40}$/;
+
+// Gizli kullanıcı belgesi (yalnız sahibi okur/yazar; aktarıcı hizmet
+// hesabıyla okur). ⚠️ fcmToken YALNIZ buradan okunur — bkz. bildirim().
+const OZEL_KOLEKSIYON = 'ozel';
+const OZEL_BELGE = 'bildirim';
+
+/// Arkadaşlık isteği bildiriminin SABİT gövdesi (istemci gövdesi yok sayılır).
+const ISTEK_GOVDESI = 'sana arkadaşlık isteği gönderdi';
+const AD_SINIRI = 80;
+
+/// Alıcının push'ta kullanılacak kanalı — KARAR SUNUCUDA.
+/// ⚠️ NEDEN (d6): eskiden gönderen istemci alıcının sessiz listesine bakıp
+/// channel_id'yi kendisi seçiyordu → sessize alma GÖNDERENİN sürümüne
+/// bağlıydı (eski sürüm gönderen sessize alınmış sohbette yine çaldırıyordu)
+/// ve liste herkese okunur belgede duruyordu (d8). Artık liste alıcının GİZLİ
+/// belgesinde, kararı aktarıcı verir; istemcinin channel_id'si EZİLİR.
+/// Bildirimler tamamen KAPALIYSA sessize alma onu "açmaz" (kapali kalır).
+/// Sessiz denetimi data.chatId'ye değil ÇİFTE bakar: bu çift arasındaki her
+/// bildirim zaten o sohbete aittir (chatId yalnız çift olabilir) → gönderen
+/// chatId'yi atlayarak sessize almayı delemez.
+/// [profil].sessizSohbetler: geçiş — eski sürüm listeyi herkese okunur
+/// users belgesine yazıyordu; istemci onu ilk fırsatta gizli belgeye taşıyıp
+/// siler. O ana kadar da sessiz sayılsın diye ikisi birleştirilir.
+function alicininKanali(profil, ozel, cift) {
+  const yayin = metin(profil, 'bildirimKanali');
+  const kanal = yayin && YAYIN_KANAL_DESENI.test(yayin) ? yayin : VARSAYILAN_KANAL;
+  if (kanal === KAPALI_KANAL) return kanal;
+  const sessiz = [
+    ...metinDizisi(ozel, 'sessizSohbetler'),
+    ...metinDizisi(profil, 'sessizSohbetler'),
+  ];
+  return sessiz.includes(cift) ? SESSIZ_SOHBET_KANALI : kanal;
+}
+
+/// Gönderenin GERÇEK görünen adı (profilinden). Bildirim başlığı ve gelen
+/// arama ekranındaki ad bundan üretilir → istemci "Annen" yazıp isim
+/// sahteciliği yapamaz (d12).
+function gorunenAd(profil) {
+  const ad = metin(profil, 'ad')?.trim();
+  if (ad) return ad.slice(0, AD_SINIRI);
+  const kAdi = metin(profil, 'kullaniciAdi');
+  return kAdi ? `@${kAdi}`.slice(0, AD_SINIRI) : 'ROY MESSANGER';
+}
+
 function duzNesneMi(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
+
+/// chatId'si ZORUNLU olan veri push türleri (CallKit kimliği = chatId).
+/// ⚠️ chatId'siz 'arama'da istemci kanal adını CallKit kimliği yapıyordu;
+/// chatId'siz 'arama_iptal' ise eskiden endAllCalls() ile alıcının BAŞKA
+/// biriyle süren/çalan aramasını da kesiyordu (d11).
+const CHATID_ZORUNLU_TURLER = new Set(['arama', 'arama_iptal']);
 
 /// İstemcinin gönderdiği FCM `message` parçalarını SÜZER. Yalnız
 /// notification{title,body}, data (tüm değerler string) ve bilinen android
@@ -302,7 +483,7 @@ function duzNesneMi(v) {
 /// ⚠️ NEDEN: süzülmeseydi bir kullanıcı `token`/`topic`/`condition` alanı
 /// koyup mesajı arkadaşı OLMAYAN birine ya da TÜM bir konuya (topic)
 /// yönlendirebilir, `apns`/`webpush` ile beklenmedik yollar açabilirdi.
-/// Hedef YALNIZ aktarıcının bulduğu fcmToken'dır.
+/// Hedef YALNIZ aktarıcının alıcının GİZLİ belgesinde bulduğu fcmToken'dır.
 function mesajiSuz(mesaj, uid, cift) {
   if (!duzNesneMi(mesaj)) throw new IstekHatasi(400, 'mesaj');
   const cikti = {};
@@ -336,6 +517,9 @@ function mesajiSuz(mesaj, uid, cift) {
     // chatId (bildirime dokununca açılacak sohbet) yalnız bu ÇİFTİN sohbeti
     // olabilir (FAZ 4: chatId = friendshipId = ciftKimligi).
     if ('chatId' in t && t.chatId !== cift) throw new IstekHatasi(400, 'mesaj');
+    if (CHATID_ZORUNLU_TURLER.has(t.tur) && !('chatId' in t)) {
+      throw new IstekHatasi(400, 'mesaj');
+    }
     if (Object.keys(t).length) cikti.data = t;
   }
 
@@ -379,6 +563,22 @@ function mesajiSuz(mesaj, uid, cift) {
   return cikti;
 }
 
+/// ENGEL varken geçebilecek TEK biçim: tam olarak
+/// {data: {tur: 'arama_iptal', chatId: çift}} (+ android priority/ttl/
+/// collapse_key). ⚠️ NEDEN (d11): eskiden yalnız data.tur'a bakılıyordu →
+/// engellenen kişi 'arama_iptal' etiketiyle notification{title,body} ya da
+/// ek data taşıyıp görünür taciz bildirimi gönderebiliyordu (arka planda
+/// notification yükünü SİSTEM çizer). Görünür bir şey taşıyan her biçim 403.
+function yalnizAramaIptalMi(mesaj, cift) {
+  if (mesaj.notification || mesaj.android?.notification) return false;
+  const d = mesaj.data;
+  if (!d) return false;
+  const anahtarlar = Object.keys(d).sort();
+  return anahtarlar.length === 2 &&
+    anahtarlar[0] === 'chatId' && anahtarlar[1] === 'tur' &&
+    d.tur === 'arama_iptal' && d.chatId === cift;
+}
+
 async function bildirim(istek, env, kimlik) {
   const govde = await govdeOku(istek);
   const { hedefUid } = govde;
@@ -388,7 +588,7 @@ async function bildirim(istek, env, kimlik) {
   if (hedefUid === kimlik.uid) throw new IstekHatasi(400, 'hedef');
   const cift = ciftKimligi(kimlik.uid, hedefUid);
   // Süzme yetki sorgularından ÖNCE: bozuk istek Firestore okuması harcamasın.
-  const mesaj = mesajiSuz(govde.mesaj, kimlik.uid, cift);
+  const suzulmus = mesajiSuz(govde.mesaj, kimlik.uid, cift);
   const appCheck = istek.headers.get('X-Firebase-AppCheck');
 
   // Üç bağımsız iş PARALEL: ÇAĞRI push'unda her gidiş-dönüş zili geciktirir.
@@ -401,35 +601,106 @@ async function bildirim(istek, env, kimlik) {
   // İzin: arkadaşız VEYA benden ona bekleyen bir istek var (istek bildirimi).
   // ⚠️ İstek yönü {ben}_{hedef}: kurallar kimliği {gonderen}_{alan} diye
   // zorluyor → başkası adına açılmış bir "istek" ile bildirim atılamaz.
-  let izinli = varMi(arkadaslik, 'friendships');
-  if (!izinli) {
-    const istekDurum = await kullaniciAdinaDurum(
-      env, kimlik, appCheck, 'friend_requests', `${kimlik.uid}_${hedefUid}`);
-    izinli = varMi(istekDurum, 'friend_requests');
+  const arkadas = varMi(arkadaslik, 'friendships');
+  if (!arkadas) {
+    const { durum, alanlar } = await kullaniciAdinaOku(
+      env, kimlik, appCheck, true, 'friend_requests', `${kimlik.uid}_${hedefUid}`);
+    if (!varMi(durum, 'friend_requests')) throw new IstekHatasi(403, 'izin');
+    // ⚠️ İÇERİK de doğrulanır (t3): kimlik kuralı sonradan geldi; eski
+    // kurallarla açılmış friend_requests/{ben}_{kurban} belgesinin içinde
+    // alanUid başka biri olabilir → kurban o isteği listesinde GÖRMEZ,
+    // reddedip silemez; yalnız kimliğe bakılsaydı kalıcı bildirim izni olurdu.
+    if (metin(alanlar, 'gonderenUid') !== kimlik.uid ||
+        metin(alanlar, 'alanUid') !== hedefUid) {
+      throw new IstekHatasi(403, 'izin');
+    }
   }
-  if (!izinli) throw new IstekHatasi(403, 'izin');
 
   // ENGEL: tek doküman iki yönü de kapatır (kurallardaki engelli() ile aynı).
-  // Yalnız 'arama_iptal' geçer: engel tam arama çalarken konursa karşı
-  // tarafın zili SUSTURULABİLMELİ (aksi halde CallKit 45 sn boşa çalar).
-  if (varMi(engel, 'engellenenler') && mesaj.data?.tur !== 'arama_iptal') {
+  // Yalnız ARKADAŞIN çıplak 'arama_iptal'i geçer: engel tam arama çalarken
+  // konursa karşı tarafın zili SUSTURULABİLMELİ (aksi halde CallKit 45 sn
+  // boşa çalar). İstek yolunda arama olmadığı için iptal de yok.
+  const engelli = varMi(engel, 'engellenenler');
+  if (engelli && !(arkadas && yalnizAramaIptalMi(suzulmus, cift))) {
     throw new IstekHatasi(403, 'engel');
   }
 
-  // Alıcının fcmToken'ı HİZMET HESABIYLA okunur (istemcinin okuması
-  // gerekmesin → ileride users kuralında fcmToken istemcilere kapatılabilir).
-  const r = await fetch(
-    dokumanUrl(env, 'users', hedefUid) + '?mask.fieldPaths=fcmToken',
-    { headers: { Authorization: `Bearer ${erisim}` } },
-  );
-  if (r.status === 404) throw new IstekHatasi(404, 'hedef_yok');
-  if (!r.ok) {
-    if (r.status === 401 || r.status === 403) onbellegiSifirla();
-    console.error(`users okuma HTTP ${r.status}`);
-    throw new IstekHatasi(502, 'firestore');
-  }
-  const fcmToken = (await r.json())?.fields?.fcmToken?.stringValue;
+  // Gönderilecek mesajın görünür bir bildirimi olacak mı / gelen arama mı?
+  // (Gereksiz Firestore okuması yapılmasın: ÇAĞRI iptalinde ad/kanal yok.)
+  const bildirimli = !arkadas || !!suzulmus.notification ||
+    !!suzulmus.android?.notification;
+  const adGerekli = bildirimli || suzulmus.data?.tur === 'arama';
+
+  // HİZMET HESABIYLA, paralel: alıcının gizli belgesi (token + sessiz
+  // listesi), alıcının yayınladığı kanal, gönderenin gerçek adı.
+  // ⚠️ fcmToken YALNIZ gizli belgeden (d10): herkese okunur users/{uid}
+  // belgesindeki fcmToken'ı herkes OKUYUP KENDİ belgesine yazabiliyordu →
+  // saldırgan kendi ikinci hesabına istek atıp kurbanın cihazına sahte arama
+  // çaldırabiliyordu (yetki denetimi hedefUid'e, teslimat ise o belgedeki
+  // token'a bakıyordu). Public alan token KAYNAĞI olarak ASLA kullanılmaz;
+  // yalnız çakışma denetiminde (başkasının token'ı mı?) sorgulanır.
+  // Token çakışma denetimi ([tokenBaskasindaMi]) gizli belge gelir gelmez
+  // başlar; profil okumalarıyla PARALEL yürür (zil gecikmesin).
+  const ozelSozu = hizmetHesabiylaOku(env, erisim, ['fcmToken', 'sessizSohbetler'],
+    'users', hedefUid, OZEL_KOLEKSIYON, OZEL_BELGE);
+  const cakismaSozu = ozelSozu.then((o) => {
+    const t = metin(o, 'fcmToken');
+    return t ? tokenBaskasindaMi(env, erisim, t, hedefUid) : false;
+  });
+  const [ozel, cakisma, hedefProfil, gonderenProfil] = await Promise.all([
+    ozelSozu,
+    cakismaSozu,
+    bildirimli
+      ? hizmetHesabiylaOku(env, erisim, ['bildirimKanali', 'sessizSohbetler'],
+        'users', hedefUid)
+      : null,
+    adGerekli
+      ? hizmetHesabiylaOku(env, erisim, ['ad', 'kullaniciAdi'], 'users', kimlik.uid)
+      : null,
+  ]);
+  const fcmToken = metin(ozel, 'fcmToken');
   if (!fcmToken) throw new IstekHatasi(404, 'token_yok');
+  // Hedefin gizli belgesindeki token BAŞKA birinin (public) token'ı → bu
+  // push o kişinin cihazına giderdi (d10 sahteciliği). Gönderilmez.
+  if (cakisma) {
+    console.error(`token cakismasi: hedef ${hedefUid}`);
+    throw new IstekHatasi(409, 'token_cakismasi');
+  }
+
+  let mesaj;
+  if (!arkadas) {
+    // İSTEK YOLU (d12): arkadaş olmayan YALNIZ tek, sabit biçimli "istek"
+    // bildirimi gönderebilir. İstemcinin gövdesi (data, tur='arama', serbest
+    // başlık/metin, ttl…) TAMAMEN yok sayılır → yabancı biri bekleyen bir
+    // istekle sahte gelen arama çaldıramaz, "Annen" diye bildirim atamaz.
+    mesaj = {
+      notification: { title: gorunenAd(gonderenProfil), body: ISTEK_GOVDESI },
+      android: {
+        priority: 'HIGH',
+        notification: {
+          channel_id: alicininKanali(hedefProfil, ozel, cift),
+          visibility: 'PUBLIC',
+          tag: `km_${hedefUid}`,
+        },
+      },
+    };
+  } else {
+    mesaj = suzulmus;
+    const ad = adGerekli ? gorunenAd(gonderenProfil) : undefined;
+    // Başlık HER ZAMAN gerçek ad (isim sahteciliği biter).
+    if (mesaj.notification) mesaj.notification.title = ad;
+    if (bildirimli) {
+      mesaj.android ??= {};
+      mesaj.android.notification ??= {};
+      mesaj.android.notification.channel_id =
+        alicininKanali(hedefProfil, ozel, cift);
+    }
+    if (mesaj.data?.tur === 'arama') {
+      // Gelen arama ekranındaki ad (CallKit nameCaller) ve arayanUid sunucudan.
+      mesaj.data.arayan = ad;
+      mesaj.data.arayanUid = kimlik.uid;
+    }
+  }
 
   const fcm = await fetch(
     `https://fcm.googleapis.com/v1/projects/${env.PROJE}/messages:send`,

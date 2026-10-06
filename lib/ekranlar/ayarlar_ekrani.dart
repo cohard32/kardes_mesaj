@@ -7,6 +7,7 @@ import '../servisler/ayar_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/guncelleme_servisi.dart';
 import '../servisler/hata_servisi.dart';
+import '../servisler/ses_secenekleri.dart';
 import '../tema.dart';
 import '../yardimcilar/tr_metin.dart';
 
@@ -76,7 +77,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
         final ad = (r['ad'] as String?) ?? 'Özel ses';
         if (uri != null) {
           await _ayar.ozelSesAyarla(uri, ad);
-          await _sesSec('ozel');
+          await _sesSec(ozelSesAnahtari);
         }
       }
     } catch (e) {
@@ -159,33 +160,13 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
 
           const _BolumBaslik('Bildirim Sesi'),
 
-          _sesTile(deger: 'varsayilan', baslik: 'Varsayılan'),
-          _sesTile(deger: 'sessiz', baslik: 'Sessiz'),
-          _sesTile(
-            deger: 'kedi',
-            baslik: 'Yavru Kedi 1 🐱',
-            onizlemeAsset: 'sesler/kedi.mp3',
-          ),
-          _sesTile(
-            deger: 'kedi2',
-            baslik: 'Yavru Kedi 2 😻',
-            onizlemeAsset: 'sesler/kedi2.mp3',
-          ),
-          _sesTile(
-            deger: 'kedi3',
-            baslik: 'Yavru Kedi 3 🐈',
-            onizlemeAsset: 'sesler/kedi3.mp3',
-          ),
-          _sesTile(
-            deger: 'kedi4',
-            baslik: 'Yavru Kedi 4 🐾',
-            onizlemeAsset: 'sesler/kedi4.mp3',
-          ),
-          _sesTile(
-            deger: 'cingirak',
-            baslik: 'Çıngırak 🔔',
-            onizlemeAsset: 'sesler/cingirak.wav',
-          ),
+          // Hazır sesler TEK KAYNAKTAN (kanalları da buradan kurulur).
+          for (final s in sesSecenekleri)
+            _sesTile(
+              deger: s.anahtar,
+              baslik: s.ad,
+              onizlemeAsset: s.onizlemeAsset,
+            ),
 
           // Telefondan özel ses
           ValueListenableBuilder<String?>(
@@ -193,7 +174,7 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             builder: (context, ad, _) => ValueListenableBuilder<String>(
               valueListenable: _ayar.bildirimSesi,
               builder: (context, secili, _) {
-                final aktif = secili == 'ozel';
+                final aktif = secili == ozelSesAnahtari;
                 final var_ = _ayar.ozelSesUri.value != null;
                 return _Kart(
                   secili: aktif,
@@ -211,7 +192,9 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                       tooltip: 'Ses seç',
                       onPressed: _telefondanSec,
                     ),
-                    onTap: var_ ? () => _sesSec('ozel') : _telefondanSec,
+                    onTap: var_
+                        ? () => _sesSec(ozelSesAnahtari)
+                        : _telefondanSec,
                   ),
                 );
               },
@@ -240,31 +223,13 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             baslik: 'Uygulama zili 🔔',
             altYazi: 'ROY MESSANGER varsayılan zili',
           ),
-          _zilTile(
-            deger: 'kedi',
-            baslik: 'Yavru Kedi 1 🐱',
-            onizlemeAsset: 'sesler/kedi.mp3',
-          ),
-          _zilTile(
-            deger: 'kedi2',
-            baslik: 'Yavru Kedi 2 😻',
-            onizlemeAsset: 'sesler/kedi2.mp3',
-          ),
-          _zilTile(
-            deger: 'kedi3',
-            baslik: 'Yavru Kedi 3 🐈',
-            onizlemeAsset: 'sesler/kedi3.mp3',
-          ),
-          _zilTile(
-            deger: 'kedi4',
-            baslik: 'Yavru Kedi 4 🐾',
-            onizlemeAsset: 'sesler/kedi4.mp3',
-          ),
-          _zilTile(
-            deger: 'cingirak',
-            baslik: 'Çıngırak 🔔',
-            onizlemeAsset: 'sesler/cingirak.wav',
-          ),
+          // Zil değeri = res/raw kaynak adı (CallKit ringtonePath).
+          for (final s in zilSecenekleri)
+            _zilTile(
+              deger: s.rawKaynak!,
+              baslik: s.ad,
+              onizlemeAsset: s.onizlemeAsset,
+            ),
 
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),

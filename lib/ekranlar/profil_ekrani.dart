@@ -20,12 +20,23 @@ import 'ayarlar_ekrani.dart';
 /// Kendi profilim (FAZ 4.3): avatar (foto yükle), ad + bio düzenle,
 /// @kullanıcı adı (kopyalanır) + QR kod (başkaları eklesin diye).
 /// Ayarlar ve çıkış da buradadır.
-class ProfilEkrani extends StatelessWidget {
+class ProfilEkrani extends StatefulWidget {
   const ProfilEkrani({super.key});
 
   @override
+  State<ProfilEkrani> createState() => _ProfilEkraniState();
+}
+
+class _ProfilEkraniState extends State<ProfilEkrani> {
+  /// ⚠️ Akış State'te BİR KEZ: build içinde kurulunca tema değişimi
+  /// (`tumAgaciYenidenCiz`) her seferinde yeni bir Firestore aboneliği
+  /// açıyordu. (Oturum değişirse AuthGate bu ekranı zaten söküp yeniden kurar.)
+  late final Stream<Kullanici>? _akis =
+      KullaniciServisi.instance.benimProfilim();
+
+  @override
   Widget build(BuildContext context) {
-    final akis = KullaniciServisi.instance.benimProfilim();
+    final akis = _akis;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profil'),

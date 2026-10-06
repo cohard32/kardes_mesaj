@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
@@ -11,14 +12,43 @@ import 'package:permission_handler/permission_handler.dart';
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'aktarici_servisi.dart';
 import 'aktif_arama_kaydi.dart';
+import 'arama_durumu.dart';
 import 'bildirim_servisi.dart';
 import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
+
+export 'arama_durumu.dart';
 
 enum AramaTipi { video, ses }
 
 AramaTipi aramaTipiCoz(String? s) =>
     s == 'video' ? AramaTipi.video : AramaTipi.ses;
+
+/// [AramaServisi.bitir] ve arama ekranı için TEK oturum kuralı (saf → test).
+/// [istenen] null ise (oturumu bilmeyen eski çağıranlar) her zaman geçerli.
+/// Aksi hâlde yalnız ŞİMDİKİ oturumla eşleşen istek görüşmeye dokunabilir.
+bool oturumGuncelMi({required int? istenen, required int guncel}) =>
+    istenen == null || istenen == guncel;
+
+/// Aynı sohbetin arama belgesinde BAŞKA bir kanal mı var? (saf → test)
+/// [benimKanal]: açık arama ekranının katıldığı kanal; [belgeKanali]:
+/// `aramalar/{chatId}.kanal`'ın son hâli.
+///
+/// ⚠️ NEDEN: Oturum yalnız kabulEt BAŞINDA artar. Karşı taraf çöküp aynı
+/// sohbetten yeniden aradığında yeni arama CallKit'te ÇALARKEN (ve kabule
+/// basıldıktan sonra kabul akışı auth/Firestore beklerken) eski ekranın
+/// oturumu hâlâ "güncel"di; 20 sn sayacı dolunca bitir() 'bitti' yazıp yeni
+/// aramayı düşürüyor, çalan zili endAllCalls ile kapatıyordu. Yeni arama her
+/// zaman yeni rastgele kanal (`_kanalUret`) yazar ve bu yazma
+/// karşı tarafa push'tan ÖNCE yapılır → eski ekran devralmayı zil çalmadan
+/// görür. Kanalı bilinmeyen taraf (null/boş) devralma SAYILMAZ (emin değilsek
+/// eski davranış).
+bool aramaDevralindiMi({String? benimKanal, String? belgeKanali}) =>
+    benimKanal != null &&
+    benimKanal.isNotEmpty &&
+    belgeKanali != null &&
+    belgeKanali.isNotEmpty &&
+    belgeKanali != benimKanal;
 
 /// Arama başlatma/katılma hatası (kullanıcıya gösterilir).
 class AramaHatasi implements Exception {
@@ -53,6 +83,45 @@ class AramaServisi {
   // Aktif arama bağlamı (bitirince iptal push'u + temizlik için)
   String? _aktifKarsiUid;
   String? _aktifKanal;
+
+  // ---- GÖRÜŞME OTURUMU ----
+  // ⚠️ NEDEN: AramaServisi TEKİL; ekranlar ise görüşme başına. Aynı sohbetten
+  // yeni arama kabul edilince (karşı tarafın uygulaması çökmüş, yeniden
+  // arıyor) ESKİ AramaEkrani yığında açık kalıyor, aynı chatId'yi dinliyordu;
+  // 20 sn'lik yeniden bağlanma sayacı dolunca bitir(chatId) çağırıp YENİ
+  // görüşmenin motorunu serbest bırakıyor, 'bitti' yazıp onu da düşürüyordu.
+  // chatId bu ikisini ayırt edemez → her aramaBaslat/kabulEt başında artan
+  // bir sayaç: ekran açıldığı oturumu saklar, bitir() eski oturuma dokunmaz.
+  int _oturum = 0;
+  final ValueNotifier<int> _oturumVN = ValueNotifier<int>(0);
+
+  /// Şimdiki görüşme oturumu (her aramaBaslat/kabulEt başında artar).
+  int get oturum => _oturum;
+
+  /// Oturum değişimi: açık arama ekranı yeni görüşmenin onu devraldığını
+  /// buradan öğrenir ve bitir() ÇAĞIRMADAN kapanır.
+  ValueListenable<int> get oturumVN => _oturumVN;
+
+  int _yeniOturum() {
+    _oturum++;
+    _oturumVN.value = _oturum;
+    return _oturum;
+  }
+
+  /// "Görüşmedeyim" disk kaydının nabzı (bkz. AktifAramaKaydi.tazelik).
+  Timer? _nabiz;
+
+  void _nabziBaslat(String chatId) {
+    _nabiz?.cancel();
+    _nabiz = Timer.periodic(AktifAramaKaydi.nabizAraligi, (_) {
+      AktifAramaKaydi.yaz(chatId);
+    });
+  }
+
+  void _nabziDurdur() {
+    _nabiz?.cancel();
+    _nabiz = null;
+  }
 
   // ---- OTOMATİK ARAMA TEŞHİSİ ----
   // Her arama bitişinde özet rapor gönderilir; kullanıcının "Sorun bildir"e
@@ -317,13 +386,18 @@ class AramaServisi {
     _aktifKarsiUid = karsiUid_;
     _aktifKanal = kanal;
     aktifAramaVar = true;
+    // Ön plan meşgul kararı (gelenAramaMesgulMu) aynı sohbeti ayırt edebilsin.
+    aktifAramaChatId = chatId;
     // ⚠️ `aktifAramaVar` yalnız BU isolate'te görünür; FCM arka plan
     // handler'ı ayrı isolate'te çalıştığı için orada hep false'tu → kilit
     // ekranındaki görüşmenin üstüne ikinci CallKit açılıyordu. Disk kaydı iki
     // isolate'ten de okunur. `await` KASITLI: beklemeden bırakılırsa hızlı bir
     // bitir() → sil() bu yazmadan ÖNCE bitip kaydı geride bırakabilir ve sonraki
-    // aramalar saatlerce "meşgul" görünürdü. (Hata yutulur, akışı durdurmaz.)
+    // aramalar tazelik süresince "meşgul" görünürdü. (Hata yutulur, akışı
+    // durdurmaz.) yaz/sil ayrıca AktifAramaKaydi içinde sıralıdır.
     await AktifAramaKaydi.yaz(chatId);
+    // Süreç ölürse nabız da durur → kayıt en geç `tazelik` içinde bayatlar.
+    _nabziBaslat(chatId);
   }
 
   /// Agora kanal adı. ⚠️ Eskiden `k_<milisaniye>` idi → TAHMİN EDİLEBİLİR:
@@ -344,9 +418,11 @@ class AramaServisi {
   Future<String?> aramaBaslat(
       String chatId, String alanUid, AramaTipi tip) async {
     final iz = HataServisi.instance.iz;
-    iz('ARAMA BASLAT istendi tip=${tip.name} chat=$chatId');
+    final benim = _yeniOturum();
+    iz('ARAMA BASLAT istendi tip=${tip.name} chat=$chatId oturum=$benim');
     if (!await izinleriHazirla(tip)) {
       iz('ARAMA BASLAT iptal: izin YOK');
+      await _devralinaniBirak();
       return null;
     }
     iz('izinler tamam');
@@ -373,24 +449,27 @@ class AramaServisi {
         'arayan': ad,
         'tip': tip.name,
         'kanal': kanal,
-        'durum': 'cagriliyor',
+        'durum': AramaDurumu.cagriliyor.name,
         'zaman': FieldValue.serverTimestamp(),
       });
 
-      BildirimServisi.instance.hedefeVeriGonder(hedefUid: alanUid, veri: {
+      // Ateşle-unut: hedefeVeriGonder asla fırlatmaz (hatayı ize yazar);
+      // arayanın ekranı push'un gidişini beklemeden açılsın.
+      unawaited(
+          BildirimServisi.instance.hedefeVeriGonder(hedefUid: alanUid, veri: {
         'tur': 'arama',
         'chatId': chatId,
         'arayan': ad,
         'arayanUid': me ?? '',
         'tip': tip.name,
         'kanal': kanal,
-      });
+      }));
       iz('ARAMA BASLAT tamam, push gonderildi');
       return kanal;
     } catch (e, st) {
       iz('ARAMA BASLAT HATA: $e');
-      HataServisi.instance.bildir(e, st, etiket: 'aramaBaslat');
-      await bitir(chatId);
+      unawaited(HataServisi.instance.bildir(e, st, etiket: 'aramaBaslat'));
+      await bitir(chatId, oturum: benim);
       throw AramaHatasi('Arama başlatılamadı: $e');
     }
   }
@@ -398,9 +477,13 @@ class AramaServisi {
   /// ARANAN: [chatId]'deki aramayı kabul eder (kanalı Firestore'dan okur).
   Future<bool> kabulEt(String chatId, AramaTipi tip) async {
     final iz = HataServisi.instance.iz;
-    iz('KABUL istendi tip=${tip.name} chat=$chatId');
+    // ⚠️ Oturum EN BAŞTA artar: aynı sohbetteki eski ekran (varsa) kabul
+    // sürerken sayacı dolup yeni görüşmeyi düşürmeden ÖNCE kapanmalı.
+    final benim = _yeniOturum();
+    iz('KABUL istendi tip=${tip.name} chat=$chatId oturum=$benim');
     if (!await izinleriHazirla(tip)) {
       iz('KABUL iptal: izin YOK');
+      await _devralinaniBirak();
       return false;
     }
     iz('izinler tamam');
@@ -415,6 +498,7 @@ class AramaServisi {
       final karsi = bilgi?['arayanUid'] as String?;
       if (kanal == null) {
         iz('KABUL iptal: firestore kanal YOK');
+        await _devralinaniBirak();
         return false;
       }
       iz('arama dokumani okundu kanal=$kanal');
@@ -437,13 +521,13 @@ class AramaServisi {
       } catch (e) {
         iz('setCallConnected hata: $e');
       }
-      await _aramaDoc(chatId).set({'durum': 'kabul'}, SetOptions(merge: true));
+      await _aramaDoc(chatId).set(AramaDurumu.kabul.alan, SetOptions(merge: true));
       iz('KABUL tamam');
       return true;
     } catch (e, st) {
       iz('KABUL HATA: $e');
-      HataServisi.instance.bildir(e, st, etiket: 'kabulEt');
-      await bitir(chatId);
+      unawaited(HataServisi.instance.bildir(e, st, etiket: 'kabulEt'));
+      await bitir(chatId, oturum: benim);
       throw AramaHatasi('Aramaya katılınamadı: $e');
     }
   }
@@ -453,14 +537,14 @@ class AramaServisi {
     try {
       final d = await aktifArama(chatId);
       if (d == null) return;
-      final durum = d['durum'];
-      if (durum != 'cagriliyor' && durum != 'kabul') return;
+      if (aramaDurumuCoz(d['durum'])?.aktif != true) return;
       final benimki = d['arayanUid'] == _uid;
       final ts = d['zaman'];
       final eski = ts is! Timestamp ||
           DateTime.now().difference(ts.toDate()).inSeconds.abs() > 90;
       if (benimki || eski) {
-        await _aramaDoc(chatId).set({'durum': 'bitti'}, SetOptions(merge: true));
+        await _aramaDoc(chatId)
+            .set(AramaDurumu.bitti.alan, SetOptions(merge: true));
       }
     } catch (_) {}
   }
@@ -468,48 +552,97 @@ class AramaServisi {
   /// ARANAN reddeder.
   Future<void> reddet(String chatId) async {
     HataServisi.instance.iz('REDDET chat=$chatId');
-    await _aramaDoc(chatId).set({'durum': 'red'}, SetOptions(merge: true));
+    await _aramaDoc(chatId).set(AramaDurumu.red.alan, SetOptions(merge: true));
   }
 
-  /// Aramayı bitirir: karşı tarafın zilini sustur + Firestore + Agora temizle.
-  Future<void> bitir(String chatId) async {
-    HataServisi.instance.iz('BITIR chat=$chatId');
-    await _aramaOzetiBildir(chatId); // alanlar sıfırlanmadan ÖNCE
-    // 1) Karşı tarafın zilini sustur (iptal push).
-    try {
-      final karsi = _aktifKarsiUid;
-      if (karsi != null && karsi.isNotEmpty) {
-        await BildirimServisi.instance
-            .hedefeVeriGonder(hedefUid: karsi, veri: {
-          'tur': 'arama_iptal',
-          'chatId': chatId,
-        });
-      }
-    } catch (_) {}
-    try {
-      await _aramaDoc(chatId).set({'durum': 'bitti'}, SetOptions(merge: true));
-    } catch (_) {}
-    try {
-      await FlutterCallkitIncoming.endAllCalls();
-    } catch (_) {}
-    // ⚠️ AYRI try blokları: eskiden ikisi AYNI try'daydı; `leaveChannel` hata
-    // verirse `release()` HİÇ çağrılmıyordu → motor sızıyor, KAMERA ve
-    // MİKROFON açık kalabiliyordu (pil + gizlilik sorunu).
-    // `release()` her hâlükârda çalışmalı.
-    try {
-      await _engine?.leaveChannel();
-    } catch (e) {
-      HataServisi.instance.iz('leaveChannel hata: $e');
+  /// Aramayı bitirir: önce YEREL temizlik (motor, bayraklar, disk kaydı,
+  /// CallKit), sonra uzak işler (iptal push'u, özet rapor) BEKLENMEDEN.
+  ///
+  /// [oturum] verilmiş ve şimdiki oturum değilse HİÇBİR ŞEYE DOKUNMAZ: o
+  /// görüşmeyi yeni bir aramaBaslat/kabulEt devralmıştır (bkz. [oturumVN]).
+  ///
+  /// ⚠️ NEDEN BU SIRA: Eskiden önce `await` ile özet rapor (hatalar.add) ve
+  /// 'bitti' yazması bekleniyordu. Firestore yazma Future'ı SUNUCU ONAYINA
+  /// kadar tamamlanmaz → çevrimdışıyken bitir() asılı kalıyordu: ekran donuk
+  /// (kapat tuşu işlevsiz), motor serbest bırakılmamış (kamera/mikrofon açık),
+  /// meşgul kaydı silinmemiş. Yerel işler ağ beklememeli.
+  Future<void> bitir(String chatId, {int? oturum}) async {
+    final iz = HataServisi.instance.iz;
+    if (!oturumGuncelMi(istenen: oturum, guncel: _oturum)) {
+      iz('BITIR atlandi: eski oturum ($oturum, simdiki $_oturum) chat=$chatId');
+      return;
     }
+    iz('BITIR chat=$chatId oturum=$_oturum');
+    // Uzak işlerin verisi alanlar sıfırlanmadan ÖNCE yakalanır.
+    final karsi = _aktifKarsiUid;
+    final ozet = _aramaOzeti(chatId);
+    // 'bitti' yazması HEMEN (eşzamanlı) kuyruğa girer ama BEKLENMEZ.
+    // ⚠️ Push'tan sonraya bırakılmaz: push asılı kalırken kullanıcı aynı
+    // sohbette yeni arama başlatırsa geç gelen 'bitti' YENİ aramanın
+    // 'cagriliyor' yazmasının ÜSTÜNE binerdi. Firestore yerel yazmaları
+    // çağrı sırasıyla uygular → şimdi çağırmak sırayı garanti eder.
     try {
-      await _engine?.release();
-    } catch (e) {
-      HataServisi.instance.iz('release hata: $e');
+      _aramaDoc(chatId)
+          .set(AramaDurumu.bitti.alan, SetOptions(merge: true))
+          .ignore();
+    } catch (_) {}
+    await _yerelTemizlik();
+    // Uzak işler arka planda; bitir() onları BEKLEMEZ.
+    unawaited(_uzakBitir(chatId, karsi, ozet));
+  }
+
+  /// Aynı sohbette YENİ bir arama (belgede farklı kanal, bkz.
+  /// [aramaDevralindiMi]) [oturum]'un görüşmesini devraldı ama henüz
+  /// kabulEt başlamadı: yeni arama bu cihazda ÇALIYOR olabilir.
+  ///
+  /// Yalnız YEREL temizlik: eski motor bırakılır (mikrofon/kamera açık
+  /// kalmasın; yeni arama reddedilirse kimse kapatmazdı), "görüşmedeyim"
+  /// bayrakları/kaydı kalkar (yoksa sonraki aramalar "meşgul" alırdı).
+  /// ⚠️ YAPILMAYANLAR (hepsi YENİ aramayı düşürürdü): 'bitti' yazmak (belge
+  /// sohbetin ORTAK belgesi, yeni 'cagriliyor'un üstüne biner), karşı tarafa
+  /// arama_iptal push'u, endAllCalls (CallKit id = chatId: eski görüşmenin
+  /// kaydı ile çalan yeni arama AYNI id → yalnız eskisini kapatmak mümkün
+  /// değil; o kaydı yeni aramanın kabul/red/zaman aşımı zaten sonlandırır).
+  ///
+  /// Oturum artık güncel değilse (kabulEt/aramaBaslat başladı) hiçbir şeye
+  /// dokunmaz: eski motoru onların `_engineHazirla`'sı kapatır.
+  Future<void> devredildi(String chatId, {required int oturum}) async {
+    final iz = HataServisi.instance.iz;
+    if (!oturumGuncelMi(istenen: oturum, guncel: _oturum)) {
+      iz('DEVREDILDI atlandi: oturum zaten yeni ($oturum → $_oturum)');
+      return;
     }
+    iz('DEVREDILDI chat=$chatId oturum=$_oturum: yalniz yerel temizlik');
+    // Özet rapor yine gider (teşhis değerli); iptal push'u YOK (karsi: null).
+    final ozet = _aramaOzeti(chatId);
+    await _yerelTemizlik(callkitKapat: false);
+    unawaited(_uzakBitir(chatId, null, ozet));
+  }
+
+  /// Yeni oturum ESKİ bir görüşmeyi devraldı ama motor kurulmadan vazgeçti
+  /// (izin yok / kanal yok). Eski ekran oturum değişince bitir() çağırmadan
+  /// kapandığı için eski motor sahipsiz kalırdı → yalnız yerel temizlik.
+  /// ('bitti'/iptal push'u YOK: aynı sohbetin yeni aramasını düşürürdü.)
+  Future<void> _devralinaniBirak() async {
+    if (_engine == null && !aktifAramaVar) return;
+    HataServisi.instance.iz('devralinan eski gorusme birakiliyor');
+    _aramaBaslangic = null;
+    await _yerelTemizlik();
+  }
+
+  /// Ağ beklemeyen temizlik. ⚠️ İlk `await`'e kadar olan kısım EŞZAMANLI:
+  /// bayraklar sıfırlanır ve disk silmesi kuyruğa alınır; araya yeni bir
+  /// kabulEt girse bile onun motorunu/kaydını EZMEZ (motor yerelde tutulur,
+  /// yaz/sil AktifAramaKaydi'nda sıralı).
+  /// [callkitKapat] false: aynı chatId'li yeni arama çalıyor (bkz. [devredildi]).
+  Future<void> _yerelTemizlik({bool callkitKapat = true}) async {
+    _nabziDurdur();
+    final motor = _engine;
     _engine = null;
     _aktifKarsiUid = null;
     _aktifKanal = null;
     aktifAramaVar = false;
+    aktifAramaChatId = null;
     karsiUid.value = null;
     katildi.value = false;
     bekleyenChatId = null;
@@ -519,32 +652,70 @@ class AramaServisi {
     islemeBitti();
     // İsolate'ler arası "görüşmedeyim" kaydı da kalkmalı; kalırsa arka plan
     // handler'ı yeni aramaları (tazelik süresi dolana dek) "meşgul" sayar.
-    // (Sonda: yukarıdaki eşzamanlı sıfırlamaların arasına await girmesin.)
-    await AktifAramaKaydi.sil();
+    final silme = AktifAramaKaydi.sil();
+    if (callkitKapat) {
+      try {
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (_) {}
+    }
+    // ⚠️ AYRI try blokları: eskiden ikisi AYNI try'daydı; `leaveChannel` hata
+    // verirse `release()` HİÇ çağrılmıyordu → motor sızıyor, KAMERA ve
+    // MİKROFON açık kalabiliyordu (pil + gizlilik sorunu).
+    // `release()` her hâlükârda çalışmalı.
+    try {
+      await motor?.leaveChannel();
+    } catch (e) {
+      HataServisi.instance.iz('leaveChannel hata: $e');
+    }
+    try {
+      await motor?.release();
+    } catch (e) {
+      HataServisi.instance.iz('release hata: $e');
+    }
+    await silme;
+  }
+
+  /// Karşı tarafın zilini sustur (iptal push'u) + özet rapor. Beklenmez;
+  /// her biri zaman aşımlı ki çevrimdışıyken askıda Future birikmesin.
+  Future<void> _uzakBitir(
+      String chatId, String? karsi, List<String>? ozet) async {
+    const sinir = Duration(seconds: 20);
+    try {
+      if (karsi != null && karsi.isNotEmpty) {
+        await BildirimServisi.instance.hedefeVeriGonder(hedefUid: karsi, veri: {
+          'tur': 'arama_iptal',
+          'chatId': chatId,
+        }).timeout(sinir);
+      }
+    } catch (_) {}
+    if (ozet == null) return;
+    try {
+      await HataServisi.instance
+          .arkaplanRapor('ARAMA OZETI (otomatik)', ozet)
+          .timeout(sinir);
+    } catch (_) {}
   }
 
   /// Arama bitince OTOMATİK özet raporu (kullanıcı bir şeye basmak zorunda
   /// kalmasın). En kritik bilgi: karşı taraf Agora kanalına KATILDI MI?
   /// Katılmadıysa medya hiç kurulmamıştır → "ses yok / bağlanmıyor" budur.
-  Future<void> _aramaOzetiBildir(String chatId) async {
-    if (_aramaBaslangic == null) return; // bu turda arama olmadı
-    final sn = DateTime.now().difference(_aramaBaslangic!).inSeconds;
+  /// ⚠️ EŞZAMANLI: satırlar alanlar sıfırlanmadan ÖNCE yakalanır; gönderim
+  /// ([_uzakBitir]) sonra ve beklenmeden yapılır. Bu turda arama yoksa null.
+  List<String>? _aramaOzeti(String chatId) {
+    final baslangic = _aramaBaslangic;
+    if (baslangic == null) return null; // bu turda arama olmadı
+    final sn = DateTime.now().difference(baslangic).inSeconds;
     _aramaBaslangic = null;
-    try {
-      await HataServisi.instance.arkaplanRapor(
-        'ARAMA OZETI (otomatik)',
-        <String>[
-          'rol=${_benArayan ? "ARAYAN" : "ARANAN"} tip=$_aramaTipi',
-          'chatId=$chatId kanal=$_aktifKanal',
-          'YEREL kanala katildi = $_yerelKatildi',
-          'KARSI TARAF katildi   = $_karsiKatildi'
-              '${_karsiKatildi ? "" : "  <-- MEDYA KURULMADI"}',
-          'sure=${sn}sn',
-          'agoraSonHata=${sonHata.value ?? "-"}',
-          ...HataServisi.instance.sonIzler(25),
-        ],
-      );
-    } catch (_) {}
+    return <String>[
+      'rol=${_benArayan ? "ARAYAN" : "ARANAN"} tip=$_aramaTipi',
+      'chatId=$chatId kanal=$_aktifKanal oturum=$_oturum',
+      'YEREL kanala katildi = $_yerelKatildi',
+      'KARSI TARAF katildi   = $_karsiKatildi'
+          '${_karsiKatildi ? "" : "  <-- MEDYA KURULMADI"}',
+      'sure=${sn}sn',
+      'agoraSonHata=${sonHata.value ?? "-"}',
+      ...HataServisi.instance.sonIzler(25),
+    ];
   }
 
   // ---- Arama içi kontroller ----

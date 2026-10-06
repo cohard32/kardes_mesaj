@@ -14,6 +14,8 @@ import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
+import '../parcalar/mesaj_listesi.dart';
+import '../servisler/aktarici_servisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/arkadas_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
@@ -65,7 +67,6 @@ class SohbetEkrani extends StatefulWidget {
 class _SohbetEkraniState extends State<SohbetEkrani>
     with WidgetsBindingObserver {
   final _mesajCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
   final _servis = MesajServisi.instance;
   final _presence = PresenceServisi.instance;
   final _sohbetServis = SohbetServisi.instance;
@@ -77,6 +78,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Timer? _yaziyorTimer;
   bool _yaziyorGonderildi = false;
   bool _yukleniyor = false;
+
+  // Arama kurulurken (izin + token + kanala katılma birkaç saniye sürebilir)
+  // ara düğmeleri pasif ve AppBar'da ilerleme göstergesi var.
+  // ⚠️ Eskiden gösterge yoktu: "bir şey olmuyor" sanılıp ikinci kez
+  // dokunuluyor (çift arama) ya da geri çıkılıyordu (bkz. _aramaBaslat).
+  bool _aramaBasliyor = false;
 
   // ⚠️ Mesaj akışı ÖNBELLEKTE tutulur. Eskiden `stream:` doğrudan
   // mesajlariDinle(...) çağırıyordu → HER build'de YENİ Stream nesnesi →
@@ -94,14 +101,9 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     return _mesajAkisi!;
   }
 
-  // Otomatik kaydırma kontrolü (klavye/scroll zıplamasını önler).
-  // Liste TERS (reverse: true): en yeni mesaj offset 0'da. "Yeni mesaj geldi"
-  // = en yeni mesajın kimliği değişti. ⚠️ Eskiden mesaj SAYISINA bakılıyordu;
-  // sayfalamada eski sayfa gelince sayı da arttığı için "yeni mesaj" sanılıp
-  // kaydırma tetiklenebiliyordu.
-  String? _enYeniId;
-  bool _ilkKaydirma = true;
-  bool _zorlaKaydir = false;
+  // NOT: kaydırma (alta takip, kendi mesajında alta inme, geçmişi okurken
+  // kaymama, sayfalama tetiği) artık MesajListesi'nde (lib/parcalar/
+  // mesaj_listesi.dart) — Firebase'siz test edilebilsin diye.
 
   // Sayfalama: başta son 50 mesaj; yukarı kaydırınca 50'şer artar.
   static const int _sayfaBoyu = 50;
@@ -151,7 +153,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
     HataServisi.instance.iz('SOHBET acildi chat=${widget.chatId}');
     _mesajCtrl.addListener(_yaziyorDinle);
-    _scrollCtrl.addListener(_eskiMesajKontrol);
     _odak.addListener(() {
       if (_odak.hasFocus && _emojiAcik) {
         setState(() => _emojiAcik = false);
@@ -170,9 +171,13 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       _benimOkunmamis = s.benimOkunmamis(_uid);
       _gorulduGuncelle();
     }, onError: (Object _) {});
-    _sessizAbone = _sohbetServis.sessizMi(widget.chatId).listen((v) {
-      if (mounted && v != _sessiz) setState(() => _sessiz = v);
-    }, onError: (Object _) {});
+    // Aktarıcısız derlemede sessize alma uygulanamıyor (bkz. build'deki
+    // menü notu) → kayıtlı eski bir "sessiz" durumu da gösterilmez.
+    if (AktariciServisi.etkin) {
+      _sessizAbone = _sohbetServis.sessizMi(widget.chatId).listen((v) {
+        if (mounted && v != _sessiz) setState(() => _sessiz = v);
+      }, onError: (Object _) {});
+    }
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
   }
@@ -258,13 +263,28 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       );
       return;
     }
+    if (_aramaBasliyor) return; // çift dokunma: ikinci arama başlatılmaz
+    setState(() => _aramaBasliyor = true);
+    final servis = AramaServisi.instance;
     try {
-      final kanal = await AramaServisi.instance.aramaBaslat(
-        widget.chatId,
-        widget.karsi.uid,
-        tip,
-      );
-      if (!mounted) return;
+      final istek = servis.aramaBaslat(widget.chatId, widget.karsi.uid, tip);
+      // aramaBaslat oturumu İLK await'ten önce (eşzamanlı) artırır → bu
+      // değer BU aramanın oturumudur. Sonradan okunsaydı arada kabul edilen
+      // başka bir görüşmenin oturumu olabilirdi.
+      final oturum = servis.oturum;
+      final kanal = await istek;
+      if (!mounted) {
+        // ⚠️ Kurulum sürerken ekrandan çıkıldı: arayan kanala MİKROFON
+        // YAYINLAYARAK katılmış, karşıya "çalıyor" gitmişti ama AramaEkrani
+        // hiç açılmayacak (zaman aşımı / kapat yalnız orada). Eskiden
+        // görüşme yarım kalıyordu: karşı taraf kabul edince haberi olmayan
+        // arayanın mikrofonunu canlı dinliyor, arayan da "meşgul" kalıyordu.
+        // oturum: arada başka görüşme devraldıysa ona dokunulmaz.
+        if (kanal != null) {
+          await servis.bitir(widget.chatId, oturum: oturum);
+        }
+        return;
+      }
       if (kanal == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Kamera/mikrofon izni gerekli')),
@@ -287,6 +307,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           context,
         ).showSnackBar(SnackBar(content: Text('$e')));
       }
+    } finally {
+      if (mounted) setState(() => _aramaBasliyor = false);
     }
   }
 
@@ -310,7 +332,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     SesOynaticiServisi.instance.durdur(chatId: widget.chatId);
     _kayitci.dispose();
     _mesajCtrl.dispose();
-    _scrollCtrl.dispose();
     _odak.dispose();
     _kayitYapiliyorVN.dispose();
     _kayitSaniyeVN.dispose();
@@ -390,8 +411,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _yanitVN.value = null;
     _yaziyorTimer?.cancel();
     _yaziyorGonderildi = false;
-    _presence.yaziyorAyarla(widget.chatId, false);
-    _zorlaKaydir = true;
+    // ⚠️ await'SİZ (bilinçli): Firestore set()'in Future'ı SUNUCU onayında
+    // biter; çevrimdışıyken beklemek mesaj gönderimini de bekletirdi. Yazma
+    // sırası istemcide korunur, hata da yaziyorAyarla içinde yutulur.
+    unawaited(_presence.yaziyorAyarla(widget.chatId, false));
+    // NOT: alta inmek için bayrak YOK — MesajListesi kendi mesajım gelince
+    // (yerel yazım anında akışa düşer) kendisi en alta iner.
     try {
       await _servis.gonder(
         widget.chatId,
@@ -411,48 +436,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
   }
 
-  // Kullanıcı en üste yaklaşınca daha eski mesajları yükle (sayfalama).
-  // Liste ters olduğu için "en üst" = maxScrollExtent.
-  void _eskiMesajKontrol() {
-    if (_hepsiYuklendi || _eskiYukleniyor) return;
-    if (!_scrollCtrl.hasClients) return;
-    final pos = _scrollCtrl.position;
-    if (pos.pixels >= pos.maxScrollExtent - 120) {
-      _eskiYukleniyor = true;
-      setState(() => _mesajLimit += _sayfaBoyu);
-    }
-  }
-
-  // Sadece EN ALTA yeni mesaj geldiğinde (kullanıcı en alttaysa ya da
-  // mesajı kendisi gönderdiyse) en alta kaydırır. Böylece klavye açılınca /
-  // yukarıda geçmişi okurken / eski sayfa yüklenirken liste zıplamaz.
-  // Ters listede en alt = offset 0; ilk açılışta liste zaten oradadır
-  // (eskiden ilk karede maxScrollExtent'e jumpTo gerekiyordu ve resimler
-  // yüklendikçe uzunluk değiştiği için tam dibe oturmuyordu).
-  void _yeniMesajKaydir(List<Mesaj> mesajlar) {
-    final enYeni = mesajlar.isEmpty ? null : mesajlar.first.id;
-    final yeniGeldi = enYeni != _enYeniId;
-    _enYeniId = enYeni;
-    if (_ilkKaydirma) {
-      _ilkKaydirma = false;
-      return;
-    }
-    // ⚠️ _zorlaKaydir YALNIZ yeni mesaj gelince tüketilir: eskiden ilgisiz
-    // bir yeniden çizimde (yükleme çubuğu vb.) harcanabiliyor, gönderilen
-    // mesaj birkaç kare sonra gelince artık kaydırılmıyordu.
-    if (!yeniGeldi) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollCtrl.hasClients) return;
-      final enAltaYakin = _scrollCtrl.position.pixels < 220;
-      if ((_zorlaKaydir || enAltaYakin) && _scrollCtrl.position.pixels > 0) {
-        _scrollCtrl.animateTo(
-          0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
-      _zorlaKaydir = false;
-    });
+  // Kullanıcı en üste yaklaşınca (MesajListesi çağırır) daha eski mesajları
+  // yükle (sayfalama): limit artar → akış yeni limitle yeniden kurulur.
+  void _eskiYukle() {
+    if (_hepsiYuklendi || _eskiYukleniyor || !mounted) return;
+    _eskiYukleniyor = true;
+    setState(() => _mesajLimit += _sayfaBoyu);
   }
 
   // ---- EMOJI ----
@@ -549,7 +538,6 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       builder: (_) => const GifSecici(),
     );
     if (url != null && url.isNotEmpty) {
-      _zorlaKaydir = true;
       await _servis.gifGonder(widget.chatId, widget.karsi.uid, url);
     }
   }
@@ -686,9 +674,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
         ),
       );
-    } else {
-      _zorlaKaydir = true;
     }
+    // ⚠️ Eskiden burada (gönderim BİTTİKTEN sonra) `_zorlaKaydir = true`
+    // kuruluyordu; mesaj ise yerel yazımla çok önce akışa düşmüş oluyordu →
+    // bayrak askıda kalıp dakikalar sonra karşının ilgisiz mesajında listeyi
+    // zorla dibe çekiyordu. Artık bayrak yok: MesajListesi, kendi mesajım
+    // akışa düştüğü AN en alta iner (yükleme ne kadar sürerse sürsün).
   }
 
   @override
@@ -712,41 +703,64 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
         ),
         actions: [
+          if (_aramaBasliyor)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Renkler.neon,
+                  semanticsLabel: 'Arama başlatılıyor',
+                ),
+              ),
+            ),
           IconButton(
             tooltip: 'Sesli ara',
             icon: const Icon(Icons.call_outlined),
-            onPressed: () => _aramaBaslat(AramaTipi.ses),
+            onPressed:
+                _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.ses),
           ),
           IconButton(
             tooltip: 'Görüntülü ara',
             icon: const Icon(Icons.videocam_outlined),
-            onPressed: () => _aramaBaslat(AramaTipi.video),
+            onPressed:
+                _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.video),
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Diğer',
-            color: Renkler.yuzey,
-            onSelected: (secim) {
-              if (secim == 'sessiz') _sessizDegistir();
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem<String>(
-                value: 'sessiz',
-                child: Row(
-                  children: [
-                    Icon(
-                      _sessiz
-                          ? Icons.notifications_active_outlined
-                          : Icons.notifications_off_outlined,
-                      color: Renkler.neon,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(_sessiz ? 'Sessizi kapat' : 'Sohbeti sessize al'),
-                  ],
+          // ⚠️ Menü (tek seçeneği "Sessize al") YALNIZ aktarıcılı derlemede:
+          // gizlilik gereği sessiz sohbet listesi artık yalnız SAHİBİNİN
+          // okuyabildiği gizli belgede (users/{uid}/ozel/bildirim). Sessizi
+          // bildirim GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
+          // aktarıcıdır; aktarıcısız (eski yol) derlemede gönderen karşının
+          // listesini okuyamaz → seçenek hiçbir şey yapmazken "sessize
+          // alındı" demek yanıltıcı olurdu.
+          if (AktariciServisi.etkin)
+            PopupMenuButton<String>(
+              tooltip: 'Diğer',
+              color: Renkler.yuzey,
+              onSelected: (secim) {
+                if (secim == 'sessiz') _sessizDegistir();
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem<String>(
+                  value: 'sessiz',
+                  child: Row(
+                    children: [
+                      Icon(
+                        _sessiz
+                            ? Icons.notifications_active_outlined
+                            : Icons.notifications_off_outlined,
+                        color: Renkler.neon,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(_sessiz ? 'Sessizi kapat' : 'Sohbeti sessize al'),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
       body: Zemin(
@@ -793,35 +807,30 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     );
                   }
 
-                  // NOT: liste artık YENİDEN ESKİYE sıralı; görüldü mantığı
+                  // NOT: liste YENİDEN ESKİYE sıralı; görüldü mantığı
                   // sıraya bakmaz (yalnız "karşıdan gelen + görülmemiş"
                   // filtresi), dolayısıyla etkilenmez.
                   _sonMesajlar = mesajlar;
                   WidgetsBinding.instance.addPostFrameCallback(
                     (_) => _gorulduGuncelle(),
                   );
-                  _yeniMesajKaydir(mesajlar);
 
-                  // TERS liste: index 0 (en yeni) en altta çizilir.
-                  return ListView.builder(
-                    controller: _scrollCtrl,
-                    reverse: true,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
+                  // Kaydırma mantığı (yeni mesajda kaymama, alta takip,
+                  // kendi mesajında alta inme, sayfalama) MesajListesi'nde.
+                  // Öğeler mesaj kimliğiyle anahtarlanır → oynayan video /
+                  // ses dalgası index'te değil MESAJDA kalır.
+                  return MesajListesi(
+                    mesajlar: mesajlar,
+                    benimUid: _uid,
+                    eskiYukle: _hepsiYuklendi ? null : _eskiYukle,
+                    ogeKurucu: (context, m) => _MesajBalonu(
+                      mesaj: m,
+                      benimMi: m.gonderen == _uid,
+                      chatId: widget.chatId,
+                      benimUid: _uid,
+                      karsiAd: widget.karsi.ad,
+                      onUzunBas: () => _tepkiSec(m),
                     ),
-                    itemCount: mesajlar.length,
-                    itemBuilder: (context, i) {
-                      final m = mesajlar[i];
-                      return _MesajBalonu(
-                        mesaj: m,
-                        benimMi: m.gonderen == _uid,
-                        chatId: widget.chatId,
-                        benimUid: _uid,
-                        karsiAd: widget.karsi.ad,
-                        onUzunBas: () => _tepkiSec(m),
-                      );
-                    },
                   );
                 },
               ),
@@ -1056,7 +1065,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 /// yazıyor / çevrimiçi / son görülme durumu.
 /// İki canlı kaynak: users/{karsi} (çevrimiçi/son görülme) ve
 /// chats/{chatId}.yaziyor (anlık yazıyor).
-class _AppBarBaslik extends StatelessWidget {
+class _AppBarBaslik extends StatefulWidget {
   final String chatId;
   final Kullanici karsi;
 
@@ -1068,6 +1077,38 @@ class _AppBarBaslik extends StatelessWidget {
     this.sessiz = false,
   });
 
+  @override
+  State<_AppBarBaslik> createState() => _AppBarBaslikState();
+}
+
+class _AppBarBaslikState extends State<_AppBarBaslik> {
+  // ⚠️ Akışlar State'te ÖNBELLEKTE: eskiden `stream:` build içinde
+  // kullaniciDinle/sohbetDinle çağırıyordu → sohbet ekranının HER yeniden
+  // çiziminde (emoji paneli, yükleme çubuğu, tema değişimi, sessiz durumu)
+  // iki Firestore aboneliği kapatılıp yeniden açılıyordu (okuma kotası;
+  // arada başlık bir an "çevrimdışı"/yazıyor-sız görünebiliyordu).
+  late Stream<Kullanici> _kullaniciAkisi;
+  late Stream<Sohbet> _sohbetAkisi;
+
+  @override
+  void initState() {
+    super.initState();
+    _kullaniciAkisi = PresenceServisi.instance.kullaniciDinle(widget.karsi.uid);
+    _sohbetAkisi = SohbetServisi.instance.sohbetDinle(widget.chatId);
+  }
+
+  @override
+  void didUpdateWidget(_AppBarBaslik old) {
+    super.didUpdateWidget(old);
+    if (old.karsi.uid != widget.karsi.uid) {
+      _kullaniciAkisi =
+          PresenceServisi.instance.kullaniciDinle(widget.karsi.uid);
+    }
+    if (old.chatId != widget.chatId) {
+      _sohbetAkisi = SohbetServisi.instance.sohbetDinle(widget.chatId);
+    }
+  }
+
   // Gün bilgisi de yazılır (bugün/dün/tarih) — bkz. zaman_metni.dart.
   String _sonGorulmeMetni(Kullanici k) {
     if (k.cevrimici) return 'çevrimiçi';
@@ -1078,13 +1119,15 @@ class _AppBarBaslik extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final karsi = widget.karsi;
+    final sessiz = widget.sessiz;
     return StreamBuilder<Kullanici>(
-      stream: PresenceServisi.instance.kullaniciDinle(karsi.uid),
+      stream: _kullaniciAkisi,
       initialData: karsi,
       builder: (context, snap) {
         final k = snap.data ?? karsi;
         return StreamBuilder<Sohbet>(
-          stream: SohbetServisi.instance.sohbetDinle(chatId),
+          stream: _sohbetAkisi,
           builder: (context, sohbetSnap) {
             final yaziyor =
                 sohbetSnap.data?.digerYaziyor(
@@ -1476,6 +1519,23 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
   bool _hata = false;
 
   @override
+  void didUpdateWidget(_VideoOynatici old) {
+    super.didUpdateWidget(old);
+    // ⚠️ Liste öğeleri artık mesaj kimliğiyle anahtarlı (MesajListesi), yani
+    // State normalde mesajıyla kalır. Yine de URL değişirse (aynı yere başka
+    // video düşerse) ESKİ videonun denetleyicisi yeni balonda oynamasın:
+    // eskiden yeni videonun balonunda bir önceki video oynuyordu.
+    if (old.url != widget.url) {
+      final c = _ctrl;
+      _ctrl = null;
+      _hazir = false;
+      _hata = false;
+      _yukleniyor = false;
+      c?.dispose();
+    }
+  }
+
+  @override
   void dispose() {
     _ctrl?.dispose();
     super.dispose();
@@ -1491,18 +1551,21 @@ class _VideoOynaticiState extends State<_VideoOynatici> {
     _ctrl = c;
     // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
     // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
+    // `_ctrl != c`: bekleme sırasında URL değişti (didUpdateWidget bu
+    // denetleyiciyi zaten serbest bıraktı) → bu deneme artık geçersiz.
     try {
       await c.initialize();
-      if (!mounted) return;
+      if (!mounted || !identical(_ctrl, c)) return;
       await c.play();
-      if (!mounted) return;
+      if (!mounted || !identical(_ctrl, c)) return;
       setState(() {
         _hazir = true;
         _yukleniyor = false;
       });
     } catch (e) {
       HataServisi.instance.iz('VIDEO acilamadi: $e');
-      if (!mounted) return; // dispose() denetleyiciyi zaten serbest bıraktı
+      // dispose()/didUpdateWidget denetleyiciyi zaten serbest bıraktı
+      if (!mounted || !identical(_ctrl, c)) return;
       _ctrl = null; // dokununca yeniden denenebilsin
       setState(() {
         _hata = true;
@@ -1622,13 +1685,21 @@ class _SesOynatici extends StatefulWidget {
 
 class _SesOynaticiState extends State<_SesOynatici> {
   final _servis = SesOynaticiServisi.instance;
-  late final List<double> _dalga;
+  late List<double> _dalga;
 
   @override
   void initState() {
     super.initState();
     // Ağ dosyası için gerçek dalga çıkarmak ağırdır → URL'den sabit dekoratif dalga.
     _dalga = _dalgaUret(widget.url);
+  }
+
+  @override
+  void didUpdateWidget(_SesOynatici old) {
+    super.didUpdateWidget(old);
+    // Dalga URL'den üretilir; State başka bir sesli mesaja geçerse (eskiden
+    // anahtarsız listede her yeni mesajda oluyordu) dalga da onunki olsun.
+    if (old.url != widget.url) _dalga = _dalgaUret(widget.url);
   }
 
   // NOT: dispose'ta oynatıcıya DOKUNULMAZ. Balon kaydırılıp listeden düşse
@@ -1649,7 +1720,9 @@ class _SesOynaticiState extends State<_SesOynatici> {
     );
     // Karşı tarafın sesli mesajıysa ve henüz dinlenmediyse "dinlendi" işaretle
     if (basladi && !widget.benimMi && !widget.dinlendi) {
-      MesajServisi.instance.sesDinlendiIsaretle(widget.chatId, widget.mesajId);
+      // Ateşle-unut: oynatmayı bekletmesin; hata servis içinde yutulur.
+      unawaited(MesajServisi.instance
+          .sesDinlendiIsaretle(widget.chatId, widget.mesajId));
     }
   }
 

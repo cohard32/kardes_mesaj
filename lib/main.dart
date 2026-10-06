@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -9,6 +11,7 @@ import 'firebase_options.dart';
 import 'ekranlar/arama_ekrani.dart';
 import 'ekranlar/sohbet_ekrani.dart';
 import 'kimlik/auth_gate.dart';
+import 'servisler/aktif_arama_kaydi.dart';
 import 'servisler/app_check_servisi.dart';
 import 'servisler/arama_servisi.dart';
 import 'servisler/ayar_servisi.dart';
@@ -22,6 +25,14 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // ⚠️ Bayat "görüşmedeyim" kaydını sil — runApp'ten ve FCM dinleyicilerinden
+  // ÖNCE. Yeni süreçte Dart tarafında süren bir görüşme OLAMAZ (Agora motoru
+  // süreçle birlikte ölür). Görüşme ortasında süreç ölünce (kaydırıp kapatma,
+  // native Agora çökmesi, OOM, yeniden başlatma) bitir() hiç çalışmadığı için
+  // kayıt diskte kalıyor ve başka herkesin araması sessizce "meşgul"
+  // alıyordu. Soğuk açılışta CallKit'ten kabul edilen arama kaydı bundan
+  // SONRA (_oldurulmuskenKabulEdileniAc → kabulEt → _katil) yeniden yazar.
+  await AktifAramaKaydi.sil();
   // Firebase'i baslat (firebase_options.dart flutterfire configure ile uretildi)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   // Sahte istemci koruması. initializeApp'tan HEMEN SONRA, ilk Firestore/Auth
@@ -55,8 +66,8 @@ void main() async {
   // ⚠️ runApp'ten SONRA ve await'SİZ: eskiden runApp'ten önce await ediliyordu;
   // auth beklemesi + izin isteği + Agora bağlanması UI HİÇ AÇILMADAN yapılıyor,
   // uygulama saniyelerce donuk/kapanmış görünüyordu (izin diyaloğunun da
-  // tutunacağı bir arayüz yoktu).
-  _oldurulmuskenKabulEdileniAc();
+  // tutunacağı bir arayüz yoktu). Hata içeride yakalanır.
+  unawaited(_oldurulmuskenKabulEdileniAc());
 }
 
 // NOT: dedupe bayrağı AramaServisi.islenenChatId'de tutulur (bitir() temizler),
@@ -96,10 +107,10 @@ Future<void> _aramayiKabulEt(String chatId) async {
     await _authHazirOlsun();
     iz('auth hazir');
     final bilgi = await AramaServisi.instance.aktifArama(chatId);
-    final durum = bilgi?['durum'];
     if (bilgi == null) return;
-    if (durum != 'cagriliyor' && durum != 'kabul') {
-      iz('KABUL iptal: durum=$durum');
+    final durum = aramaDurumuCoz(bilgi['durum']);
+    if (durum?.aktif != true) {
+      iz('KABUL iptal: durum=${durum?.name ?? bilgi['durum']}');
       return;
     }
     final servis = AramaServisi.instance;
@@ -137,7 +148,9 @@ Future<void> _aramayiKabulEt(String chatId) async {
     }
   } catch (e) {
     iz('KABUL AKISI HATA: $e');
-    HataServisi.instance.bildir(e, StackTrace.current, etiket: 'kabulAkisi');
+    // bildir() asla fırlatmaz; zili susturmayı rapor yazımı bekletmesin.
+    unawaited(HataServisi.instance
+        .bildir(e, StackTrace.current, etiket: 'kabulAkisi'));
     debugPrint('CallKit kabul hatası: $e');
     AramaServisi.instance.islemeBitti();
     // Hata olduysa arayan tarafın zili sussun.

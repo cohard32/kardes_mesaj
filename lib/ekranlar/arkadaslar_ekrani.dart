@@ -12,15 +12,30 @@ import 'sohbet_ekrani.dart';
 
 /// Arkadaşlar + istekler (FAZ 4.3). İki sekme: "Arkadaşlar" ve "İstekler".
 /// Üstte kişi bul (@ arama) butonu. İstek rozetleri canlı güncellenir.
-class ArkadaslarEkrani extends StatelessWidget {
+///
+/// ⚠️ Akışlar State'te BİR KEZ kurulur (build içinde değil): tema değişimi
+/// (`tumAgaciYenidenCiz`) ve her yeniden çizim yeni bir Firestore sorgu
+/// akışı üretip StreamBuilder'ı yeniden abone ettiriyordu → gereksiz okuma,
+/// liste bir kare boşalıp dönen çarka düşüyordu.
+class ArkadaslarEkrani extends StatefulWidget {
   final int baslangicSekme;
   const ArkadaslarEkrani({super.key, this.baslangicSekme = 0});
+
+  @override
+  State<ArkadaslarEkrani> createState() => _ArkadaslarEkraniState();
+}
+
+class _ArkadaslarEkraniState extends State<ArkadaslarEkrani> {
+  /// Sekme rozeti için gelen istekler (İstekler sekmesi kendi aboneliğini
+  /// tutar; sekme görünmezken TabBarView onu söker, rozet ise hep yaşar).
+  late final Stream<List<ArkadaslikIstegi>> _gelen =
+      ArkadasServisi.instance.gelenIstekler();
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
-      initialIndex: baslangicSekme,
+      initialIndex: widget.baslangicSekme,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Arkadaşlar'),
@@ -44,7 +59,7 @@ class ArkadaslarEkrani extends StatelessWidget {
               const Tab(text: 'Arkadaşlar'),
               Tab(
                 child: StreamBuilder<List<ArkadaslikIstegi>>(
-                  stream: ArkadasServisi.instance.gelenIstekler(),
+                  stream: _gelen,
                   builder: (context, snap) {
                     final adet = snap.data?.length ?? 0;
                     return Row(
@@ -84,15 +99,24 @@ class ArkadaslarEkrani extends StatelessWidget {
 }
 
 /// Sekme 1 — arkadaş listesi. Dokununca sohbet açılır; menüden çıkarılır.
-class _ArkadasListesi extends StatelessWidget {
+class _ArkadasListesi extends StatefulWidget {
   const _ArkadasListesi();
+
+  @override
+  State<_ArkadasListesi> createState() => _ArkadasListesiState();
+}
+
+class _ArkadasListesiState extends State<_ArkadasListesi> {
+  late final Stream<List<Kullanici>> _akis =
+      ArkadasServisi.instance.arkadaslar();
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Kullanici>>(
-      stream: ArkadasServisi.instance.arkadaslar(),
+      stream: _akis,
       builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+        // Çark yalnız ilk yüklemede; elde liste varken ekranı boşaltma.
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
           return Center(
               child: CircularProgressIndicator(color: Renkler.neon));
         }
@@ -180,16 +204,26 @@ class _ArkadasSatiri extends StatelessWidget {
 }
 
 /// Sekme 2 — gelen + giden istekler.
-class _IstekListesi extends StatelessWidget {
+class _IstekListesi extends StatefulWidget {
   const _IstekListesi();
+
+  @override
+  State<_IstekListesi> createState() => _IstekListesiState();
+}
+
+class _IstekListesiState extends State<_IstekListesi> {
+  late final Stream<List<ArkadaslikIstegi>> _gelen =
+      ArkadasServisi.instance.gelenIstekler();
+  late final Stream<List<ArkadaslikIstegi>> _giden =
+      ArkadasServisi.instance.gidenIstekler();
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<ArkadaslikIstegi>>(
-      stream: ArkadasServisi.instance.gelenIstekler(),
+      stream: _gelen,
       builder: (context, gelenSnap) {
         return StreamBuilder<List<ArkadaslikIstegi>>(
-          stream: ArkadasServisi.instance.gidenIstekler(),
+          stream: _giden,
           builder: (context, gidenSnap) {
             final gelen = gelenSnap.data ?? [];
             final giden = gidenSnap.data ?? [];
@@ -205,12 +239,20 @@ class _IstekListesi extends StatelessWidget {
                 if (gelen.isNotEmpty) ...[
                   _Baslik('Gelen istekler (${gelen.length})'),
                   for (final i in gelen)
-                    _IstekSatiri(istek: i, gelen: true, digerUid: i.gonderenUid),
+                    _IstekSatiri(
+                        key: ValueKey('g${i.id}'),
+                        istek: i,
+                        gelen: true,
+                        digerUid: i.gonderenUid),
                 ],
                 if (giden.isNotEmpty) ...[
                   _Baslik('Gönderdiklerim (${giden.length})'),
                   for (final i in giden)
-                    _IstekSatiri(istek: i, gelen: false, digerUid: i.alanUid),
+                    _IstekSatiri(
+                        key: ValueKey('c${i.id}'),
+                        istek: i,
+                        gelen: false,
+                        digerUid: i.alanUid),
                 ],
               ],
             );
@@ -221,21 +263,68 @@ class _IstekListesi extends StatelessWidget {
   }
 }
 
-class _IstekSatiri extends StatelessWidget {
+class _IstekSatiri extends StatefulWidget {
   final ArkadaslikIstegi istek;
   final bool gelen;
   final String digerUid;
   const _IstekSatiri({
+    super.key,
     required this.istek,
     required this.gelen,
     required this.digerUid,
   });
 
   @override
+  State<_IstekSatiri> createState() => _IstekSatiriState();
+}
+
+class _IstekSatiriState extends State<_IstekSatiri> {
+  /// ⚠️ Profil okuması State'te: build içinde `profilGetir` her yeniden
+  /// çizimde (istek listesi değişince, tema değişince) yeni bir Firestore
+  /// okuması yapıyor ve satır bir kare "boş kullanıcı"ya dönüyordu.
+  late Future<Kullanici?> _profil =
+      KullaniciServisi.instance.profilGetir(widget.digerUid);
+
+  @override
+  void didUpdateWidget(covariant _IstekSatiri eski) {
+    super.didUpdateWidget(eski);
+    if (eski.digerUid != widget.digerUid) {
+      _profil = KullaniciServisi.instance.profilGetir(widget.digerUid);
+    }
+  }
+
+  bool _islemde = false;
+
+  /// Kabul / reddet / iptal. ⚠️ Eskiden düğmeler Future'ı doğrudan
+  /// döndürüyordu: transaction hatası (ağ yok, kural reddi — ör. araya engel
+  /// girdiyse) yakalanmıyor, global işleyiciye rapor olarak düşüyor ve
+  /// kullanıcı hiçbir geri bildirim almıyordu; hızlı çift dokunuş da iki
+  /// transaction başlatabiliyordu.
+  Future<void> _islem(Future<void> Function() is_) async {
+    if (_islemde) return;
+    setState(() => _islemde = true);
+    try {
+      await is_();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('İşlem yapılamadı, tekrar dene.')),
+        );
+      }
+    } finally {
+      // Başarıda satır listeden kalkar (akış günceller); State yaşıyorsa sıfırla.
+      if (mounted) setState(() => _islemde = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final arkadas = ArkadasServisi.instance;
+    final istek = widget.istek;
+    final gelen = widget.gelen;
+    final digerUid = widget.digerUid;
     return FutureBuilder<Kullanici?>(
-      future: KullaniciServisi.instance.profilGetir(digerUid),
+      future: _profil,
       builder: (context, snap) {
         final k = snap.data ?? Kullanici.bos(digerUid);
         return Container(
@@ -264,7 +353,9 @@ class _IstekSatiri extends StatelessWidget {
                 Uc3DDugme(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  onTap: () => arkadas.kabulEt(istek),
+                  onTap: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.kabulEt(istek)),
                   cocuk: Text('Kabul',
                       style: Yazi.stil(12, FontWeight.w800, Renkler.metinKoyu)),
                 ),
@@ -272,11 +363,15 @@ class _IstekSatiri extends StatelessWidget {
                 IconButton(
                   tooltip: 'Reddet',
                   icon: Icon(Icons.close, color: Renkler.tehlike),
-                  onPressed: () => arkadas.reddet(istek),
+                  onPressed: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.reddet(istek)),
                 ),
               ] else
                 TextButton(
-                  onPressed: () => arkadas.iptalEt(istek),
+                  onPressed: _islemde
+                      ? null
+                      : () => _islem(() => arkadas.iptalEt(istek)),
                   child: Text('İptal',
                       style: TextStyle(color: Renkler.metinSoluk)),
                 ),

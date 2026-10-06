@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (88 senaryo).
+// Firestore güvenlik kuralları birim testi (97 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 88 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 97 PASS / 0 FAIL (T6 eski public fcmToken geçiş sınırı olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
   Timestamp as TS, serverTimestamp, writeBatch, increment,
-  arrayUnion, arrayRemove,
+  arrayUnion, arrayRemove, deleteField,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -70,7 +70,9 @@ log(await ok(assertFails(setDoc(doc(B(), `chats/${AB}/messages/m2`), { gonderen:
 log(await ok(assertSucceeds(setDoc(doc(B(), `chats/${AB}/messages/m3`), { gonderen: 'bob', metin: 'gercek', zaman: serverTimestamp() }))), 'T4b katilimci+arkadas kendi adina yazabilir');
 log(await ok(assertFails(updateDoc(doc(C(), 'users/alice'), { ad: 'HACKED' }))), 'T5 baskasinin profili degistirilemez');
 const t6 = await getDoc(doc(C(), 'users/alice')).then(s=>({ok:true,token:s.data()?.fcmToken}),()=>({ok:false}));
-log(t6.ok, 'T6 fcmToken (BILINEN SINIR: okunabilir, kabul edildi)', t6.ok?`token='${t6.token}'`:'');
+// T6: public profildeki ESKİ fcmToken hâlâ okunur (aktarıcısız eski derlemeler
+// yazar). Aktarıcı ona BAKMAZ (yalnız gizli belge, OZ-serisi) → kabul edildi.
+log(t6.ok, 'T6 eski public fcmToken (GECIS: okunabilir, aktarici kullanmaz)', t6.ok?`token='${t6.token}'`:'');
 log(await ok(assertFails(setDoc(doc(C(), 'usernames/alice'), { uid: 'carol' }))), 'T7a alinmis ad calinamaz');
 log(await ok(assertFails(setDoc(doc(C(), 'usernames/yeni'), { uid: 'alice' }))), 'T7b baska uid ile ad rezerve edilemez');
 log(await ok(assertFails(setDoc(doc(C(), `friendships/${pair('alice','carol')}`), { uidler: ['alice','carol'] }))), 'T8 istek olmadan zorla arkadaslik KURULAMAZ (DUZELTILDI)');
@@ -336,13 +338,45 @@ log(await ok(assertFails(yanitli('y7', { yanitId:'m1', yanitOnizleme:'selam', ya
 log(await ok(assertFails(updateDoc(doc(A(), `chats/${AB}/messages/y1`), { yanitOnizleme:'degistirildi' }))),
   'Y8 yanit alintisi sonradan DEGISTIRILEMEZ');
 
-// ---- S: SOHBETİ SESSİZE ALMA (users/{me}.sessizSohbetler) ----
-log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
+// ---- OZ: GİZLİ KULLANICI BELGESİ (users/{uid}/ozel/bildirim) ----
+// fcmToken + sessizSohbetler artık burada: YALNIZ sahibi okur/yazar
+// (aktarıcı hizmet hesabıyla okur). ⚠️ Eskiden token herkese okunur
+// profildeydi → saldırgan kurbanın token'ını kendi belgesine yazıp
+// aktarıcının yetki denetimini atlatabiliyordu (d10).
+const OZEL = (u) => `users/${u}/ozel/bildirim`;
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), OZEL('bob')), { fcmToken: 'GIZLI_BOB', sessizSohbetler: [AB] });
+});
+log(await ok(assertSucceeds(setDoc(doc(A(), OZEL('alice')), { fcmToken: 'GIZLI_ALICE', guncelleme: serverTimestamp() }, { merge: true }))),
+  'OZ1 sahibi kendi gizli belgesine token yazabilir (pozitif)');
+log(await ok(assertSucceeds(getDoc(doc(A(), OZEL('alice'))))),
+  'OZ2 sahibi kendi gizli belgesini okuyabilir (pozitif)');
+log(await ok(assertFails(getDoc(doc(A(), OZEL('bob'))))),
+  'OZ3 ARKADAS bile baskasinin gizli belgesini (token) OKUYAMAZ');
+log(await ok(assertFails(getDoc(doc(C(), OZEL('bob'))))),
+  'OZ4 yabanci baskasinin gizli belgesini OKUYAMAZ');
+log(await ok(assertFails(setDoc(doc(C(), OZEL('bob')), { fcmToken: 'SAHTE' }, { merge: true }))),
+  'OZ5 baskasinin gizli belgesine token YAZILAMAZ');
+log(await ok(assertFails(getDocs(collection(C(), 'users/bob/ozel')))),
+  'OZ6 baskasinin gizli belgeleri LISTELENEMEZ');
+log(await ok(assertFails(getDoc(doc(anon, OZEL('bob'))))),
+  'OZ7 girissiz gizli belge okunamaz');
+log(await ok(assertSucceeds(setDoc(doc(A(), OZEL('alice')), { fcmToken: deleteField() }, { merge: true }))),
+  'OZ8 cikista kendi tokenini silebilir (pozitif)');
+
+// ---- SZ: SOHBETİ SESSİZE ALMA (gizli belgede) ----
+log(await ok(assertSucceeds(setDoc(doc(A(), OZEL('alice')), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
   'SZ1 kendi sessiz listesine sohbet ekleyebilir (pozitif)');
-log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: arrayRemove(AB) }, { merge: true }))),
+log(await ok(assertSucceeds(setDoc(doc(A(), OZEL('alice')), { sessizSohbetler: arrayRemove(AB) }, { merge: true }))),
   'SZ2 sessizi kapatabilir (pozitif)');
-log(await ok(assertFails(setDoc(doc(C(), 'users/alice'), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
+log(await ok(assertFails(setDoc(doc(C(), OZEL('alice')), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
   'SZ3 BASKASININ sessiz listesi degistirilemez');
+// Geçiş: eski sürümün herkese okunur profile yazdığı liste temizlenebilmeli.
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), 'users/alice'), { sessizSohbetler: [AB] }, { merge: true });
+});
+log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: deleteField(), fcmToken: deleteField() }, { merge: true }))),
+  'SZ4 eski public sessizSohbetler/fcmToken alani silinebilir (pozitif, gecis)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

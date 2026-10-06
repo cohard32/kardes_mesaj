@@ -55,6 +55,44 @@ class BaglantiTakibi {
     // Hiç bağlanmamışken null → 45 sn kuralı geçerli, burada iş yok.
     return BaglantiOlayi.yok;
   }
+
+  /// 45 sn "Cevap verilmedi" zaman aşımı dolduğunda aramayı kapatmalı mı?
+  /// ⚠️ YALNIZ hiç bağlanılmamışken. Eskiden zamanlayıcı yalnız
+  /// `karsiUid == null`'a bakıyordu: ilk 45 sn içindeki bir KOPMA
+  /// (yenidenBaglaniyor) 20 sn yeniden bağlanma kuralını atlayıp yanlış
+  /// mesajla ("Cevap verilmedi") görüşmeyi kapatıyordu.
+  bool get cevapsizKapatilmali => _asama == AramaAsamasi.bekleniyor;
+}
+
+/// `aramalar/{chatId}` belgesindeki değişimin ekrana söylediği olay.
+enum BelgeOlayi { yok, devralindi, reddedildi, mesgul, bitti }
+
+/// Saf karar: arama belgesinin son hâli bu ekran için ne demek?
+/// [benimKanal] ekranın katıldığı kanal (açılışta [AramaServisi.aktifKanal]).
+///
+/// ⚠️ KANAL, DURUMDAN ÖNCE bakılır: belge sohbetin ORTAK belgesidir; içinde
+/// başka kanal varsa oradaki durum (çalıyor/red/bitti) YENİ aramaya aittir.
+/// Eski ekran onu kendi görüşmesi sanıp 'bitti' yazar, iptal push'u gönderir
+/// ve çalan zili kapatırsa yeni aramayı düşürür → yalnız sessizce çekilmeli
+/// (bkz. [aramaDevralindiMi]). Anlık görüntüler birleşebildiği için ara
+/// 'cagriliyor' hiç görülmeyip doğrudan yeni kanallı 'red'/'bitti' de
+/// gelebilir; o da devralmadır ("Arama reddedildi" denmez).
+BelgeOlayi aramaBelgesiOlayi(Map<String, dynamic>? veri, {String? benimKanal}) {
+  if (veri == null) return BelgeOlayi.yok;
+  final kanal = veri['kanal'];
+  if (aramaDevralindiMi(
+    benimKanal: benimKanal,
+    belgeKanali: kanal is String ? kanal : null,
+  )) {
+    return BelgeOlayi.devralindi;
+  }
+  // Bilinmeyen durum (null) → olay yok: ekran yanlışlıkla kapanmasın.
+  return switch (aramaDurumuCoz(veri['durum'])) {
+    AramaDurumu.red => BelgeOlayi.reddedildi,
+    AramaDurumu.mesgul => BelgeOlayi.mesgul,
+    AramaDurumu.bitti => BelgeOlayi.bitti,
+    AramaDurumu.cagriliyor || AramaDurumu.kabul || null => BelgeOlayi.yok,
+  };
 }
 
 /// Aktif arama ekranı (görüntülü + sesli ortak).
@@ -88,6 +126,12 @@ class _AramaEkraniState extends State<AramaEkrani> {
   Timer? _zamanAsimi;
   Timer? _yenidenBaglanma;
   final _takip = BaglantiTakibi();
+
+  /// Bu ekranın ait olduğu görüşme oturumu (bkz. AramaServisi.oturumVN).
+  late final int _oturum;
+
+  /// Bu ekranın görüşmesinin Agora kanalı (devralma tespiti için).
+  String? _kanal;
   int _saniye = 0;
   bool _micKapali = false;
   bool _kameraKapali = false;
@@ -100,7 +144,12 @@ class _AramaEkraniState extends State<AramaEkrani> {
   void initState() {
     super.initState();
     _hoparlor = _video;
-    HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name}');
+    // Ekran aramaBaslat/kabulEt BİTTİKTEN sonra açılır → şimdiki oturum bu
+    // ekranın görüşmesidir.
+    _oturum = _arama.oturum;
+    _kanal = _arama.aktifKanal;
+    HataServisi.instance.iz('ARAMA EKRANI acildi tip=${widget.tip.name} '
+        'oturum=$_oturum kanal=${_kanal ?? "-"}');
     // Ekran çizildikten sonra "hazır" işaretini bırak. Bir daha NATIVE çökme
     // olursa son_adim'da nerede öldüğü net görünsün (önceki çökme tam da
     // burada, kamera önizlemesinde oluyordu — artık önizleme çağrılmıyor).
@@ -112,7 +161,18 @@ class _AramaEkraniState extends State<AramaEkrani> {
       // yasağı yüzünden görüntülü kabul tam burada ölüyordu).
       if (_video) _arama.kamerayiYayinaAl();
     });
+    // Karşı taraf 45 sn içinde katılmazsa aramayı kapat.
+    // ⚠️ İlk _baglantiKontrol()'den ÖNCE kurulur: arananda karşı taraf zaten
+    // kanalda olduğundan o çağrı ilkBaglanti görüp `_zamanAsimi?.cancel()`
+    // yapar. Eskiden zamanlayıcı SONRA kuruluyordu → iptal boşa gidiyor,
+    // zamanlayıcı hep çalışır kalıyordu.
+    _zamanAsimi = Timer(const Duration(seconds: 45), () {
+      if (!_kapandi && _takip.cevapsizKapatilmali) {
+        _kapat(mesaj: 'Cevap verilmedi');
+      }
+    });
     _arama.karsiUid.addListener(_baglantiKontrol);
+    _arama.oturumVN.addListener(_oturumKontrol);
     // ARAYAN "çalıyor" tonu: SADECE arayanda ve karşı taraf henüz katılmadıysa.
     if (widget.benArayanim && _arama.karsiUid.value == null) {
       RingbackServisi.instance.baslat();
@@ -123,22 +183,75 @@ class _AramaEkraniState extends State<AramaEkrani> {
     // sanıp sonraki kopmayı da kaçırıyordu.
     _baglantiKontrol();
     _sub = _arama.aramaDinle(widget.chatId).listen((doc) {
-      final durum = doc.data()?['durum'];
-      if (durum == 'red') {
-        _kapat(mesaj: 'Arama reddedildi');
-      } else if (durum == 'mesgul') {
-        // Karşı taraf başka bir aramada → boşuna çalmaya devam etme.
-        _kapat(mesaj: 'Meşgul');
-      } else if (durum == 'bitti') {
-        _kapat();
+      switch (aramaBelgesiOlayi(doc.data(), benimKanal: _kanal)) {
+        case BelgeOlayi.devralindi:
+          // Aynı sohbetten YENİ arama (farklı kanal) — bu cihazda çalıyor
+          // olabilir. Oturum henüz değişmedi (kabulEt başlamadı) → 20/45 sn
+          // sayaçları yeni aramayı düşürmeden ÖNCE sessizce çekil.
+          _cekil(yerelTemizlik: true, neden: 'belgede yeni kanal');
+        case BelgeOlayi.reddedildi:
+          _kapat(mesaj: 'Arama reddedildi');
+        case BelgeOlayi.mesgul:
+          // Karşı taraf başka bir aramada → boşuna çalmaya devam etme.
+          _kapat(mesaj: 'Meşgul');
+        case BelgeOlayi.bitti:
+          _kapat();
+        case BelgeOlayi.yok:
+          break;
       }
     });
-    // Karşı taraf 45 sn içinde katılmazsa aramayı kapat.
-    _zamanAsimi = Timer(const Duration(seconds: 45), () {
-      if (!_kapandi && _arama.karsiUid.value == null) {
-        _kapat(mesaj: 'Cevap verilmedi');
-      }
-    });
+  }
+
+  /// Yeni bir aramaBaslat/kabulEt bu ekranın görüşmesini DEVRALDI mı?
+  /// (Aynı sohbetten yeniden arama: karşı tarafın uygulaması çökmüş/kopmuş.)
+  /// ⚠️ Devralındıysa bitir() ÇAĞRILMAZ: AramaServisi tekil olduğu için
+  /// YENİ görüşmenin motorunu bırakıp 'bitti' yazar, onu da düşürürdü.
+  /// Eski motoru zaten yeni oturumun _engineHazirla'sı kapatır.
+  void _oturumKontrol() {
+    if (_kapandi) return;
+    if (oturumGuncelMi(istenen: _oturum, guncel: _arama.oturum)) return;
+    // Eski motoru yeni oturumun _engineHazirla'sı kapatır → yerel temizlik
+    // BURADA YAPILMAZ (yeni görüşmenin bayraklarını/kaydını silerdi).
+    _cekil(
+      yerelTemizlik: false,
+      neden: 'oturum $_oturum → ${_arama.oturum}',
+    );
+  }
+
+  /// Görüşme devralındı: bitir() ÇAĞIRMADAN ('bitti' yok, iptal push'u yok,
+  /// endAllCalls yok) kapan. [yerelTemizlik]: oturum hâlâ bizimse eski
+  /// motoru/bayrakları servis bıraksın (bkz. AramaServisi.devredildi).
+  void _cekil({required bool yerelTemizlik, required String neden}) {
+    if (_kapandi) return;
+    HataServisi.instance
+        .iz('ARAMA EKRANI devredildi ($neden), bitir cagrilmadan kapaniyor');
+    _kapandi = true;
+    _zamanlayicilariBirak();
+    _sub?.cancel();
+    if (yerelTemizlik) _arama.devredildi(widget.chatId, oturum: _oturum);
+    if (mounted) _rotayiKapat();
+  }
+
+  void _zamanlayicilariBirak() {
+    RingbackServisi.instance.durdur();
+    _sayac?.cancel();
+    _zamanAsimi?.cancel();
+    _yenidenBaglanma?.cancel();
+    _arama.karsiUid.removeListener(_baglantiKontrol);
+    _arama.oturumVN.removeListener(_oturumKontrol);
+  }
+
+  /// Bu ekranın KENDİ rotasını kapatır. ⚠️ `Navigator.pop()` değil: pop
+  /// EN ÜSTTEKİ rotayı kapatır; devralmada yeni arama ekranı bunun üstüne
+  /// açılmış olabilir → yanlış ekranı (yeni görüşmeyi) kapatırdı.
+  void _rotayiKapat() {
+    final rota = ModalRoute.of(context);
+    if (rota == null || !rota.isActive) return;
+    if (rota.isCurrent) {
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).removeRoute(rota);
+    }
   }
 
   void _baglantiKontrol() {
@@ -176,13 +289,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   @override
   void dispose() {
-    _sayac?.cancel();
-    _zamanAsimi?.cancel();
-    _yenidenBaglanma?.cancel();
-    _arama.karsiUid.removeListener(_baglantiKontrol);
+    // Ringback durdurma burada da var: güvenlik ağı (çift çağrı güvenli).
+    _zamanlayicilariBirak();
     _sub?.cancel();
-    RingbackServisi.instance.durdur(); // güvenlik ağı (çift çağrı güvenli)
-    if (!_kapandi) _arama.bitir(widget.chatId);
+    // Kendi oturumu geçirilir: görüşme devralındıysa bitir hiçbir şeye dokunmaz.
+    if (!_kapandi) _arama.bitir(widget.chatId, oturum: _oturum);
     super.dispose();
   }
 
@@ -190,19 +301,17 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (_kapandi) return;
     _kapandi = true;
     HataServisi.instance.iz('ARAMA EKRANI kapaniyor mesaj=${mesaj ?? "-"}');
-    RingbackServisi.instance.durdur();
-    _sayac?.cancel();
-    _zamanAsimi?.cancel();
-    _yenidenBaglanma?.cancel();
-    _arama.karsiUid.removeListener(_baglantiKontrol);
+    _zamanlayicilariBirak();
     await _sub?.cancel();
-    await _arama.bitir(widget.chatId);
+    // bitir() artık yalnız YEREL işleri bekler (ağ yok) → çevrimdışıyken de
+    // ekran hemen kapanır. Kendi oturumu: devralındıysa yeni görüşmeye dokunmaz.
+    await _arama.bitir(widget.chatId, oturum: _oturum);
     if (!mounted) return;
     if (mesaj != null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(mesaj)));
     }
-    Navigator.of(context).pop();
+    _rotayiKapat();
   }
 
   String get _sure {

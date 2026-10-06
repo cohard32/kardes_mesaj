@@ -18,8 +18,8 @@ class AyarServisi {
   /// varyantı) → değişince `BildirimServisi.kanalYayinla()` çağrılmalı.
   /// Arama (CallKit) titreşimini ETKİLEMEZ (aşağıdaki NOT).
   final ValueNotifier<bool> titresimAcik = ValueNotifier<bool>(true);
-  // 'varsayilan' | 'sessiz' | 'kedi' | 'kedi2' | 'kedi3' | 'kedi4' |
-  // 'cingirak' | 'ozel'  (bkz. BildirimKanali.secimler)
+  // Hazır seslerden birinin anahtarı (liste: ses_secenekleri.dart →
+  // sesSecenekleri) ya da 'ozel' (bkz. BildirimKanali.secimler).
   final ValueNotifier<String> bildirimSesi = ValueNotifier<String>('varsayilan');
   // 'ozel' seçiliyse: kullanıcının telefondan seçtiği sesin content:// URI'si + adı
   final ValueNotifier<String?> ozelSesUri = ValueNotifier<String?>(null);

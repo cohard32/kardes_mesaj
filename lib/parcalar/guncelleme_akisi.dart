@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -149,7 +151,9 @@ Future<void> _indir(
   // Artık yalnız pencere hâlâ açıksa kapatılır. (Geri tuşunu tamamen
   // engellemek yerine bu: ağ takılırsa kullanıcı pencerede hapsolmasın.)
   var pencereAcik = true;
-  showDialog<void>(
+  // await'SİZ (bilinçli): pencere açıkken indirme aşağıda başlar; Future
+  // yalnızca pencere kapanınca biter (bkz. whenComplete).
+  unawaited(showDialog<void>(
     context: context,
     barrierDismissible: false,
     builder: (_) => AlertDialog(
@@ -175,7 +179,7 @@ Future<void> _indir(
         ),
       ),
     ),
-  ).whenComplete(() => pencereAcik = false);
+  ).whenComplete(() => pencereAcik = false));
 
   void pencereyiKapat() {
     if (pencereAcik && context.mounted) {
