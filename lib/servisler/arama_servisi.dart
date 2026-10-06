@@ -9,6 +9,8 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../gizli.dart'; // agoraSertifika (.gitignore'da)
+import 'aktarici_servisi.dart';
+import 'aktif_arama_kaydi.dart';
 import 'bildirim_servisi.dart';
 import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
@@ -232,12 +234,31 @@ class AramaServisi {
     }
   }
 
-  Future<void> _katil(
-    String kanal,
-    String karsiUid_, [
-    AramaTipi tip = AramaTipi.ses,
-  ]) async {
-    final token = RtcTokenBuilder.build(
+  /// Kanal token'ı. ⚠️ Aktarıcı tanımlıysa token SUNUCUDA üretilir: App
+  /// Certificate APK'dan çıkarılabildiği için (bkz. gizli.dart) yerel üretim
+  /// herkese sınırsız token demekti. Aktarıcı, isteyenin [chatId] çiftinin
+  /// üyesi olduğunu doğrulayıp token verir.
+  /// Aktarıcı tanımlı DEĞİLSE eski yerel yol aynen çalışır (hiçbir şey kırılmaz).
+  /// Aktarıcı tanımlı ama ulaşılamıyorsa yerel yola DÜŞMEYİZ: sertifika
+  /// sunucuya taşındığında APK'daki yer tutucuyla üretilen token zaten
+  /// reddedilir; kullanıcıya net bir hata göstermek daha iyi.
+  Future<String> _tokenAl(String chatId, String kanal) async {
+    if (AktariciServisi.etkin) {
+      String? token;
+      try {
+        token = await AktariciServisi.instance
+            .agoraTokeni(chatId: chatId, kanal: kanal);
+      } catch (e) {
+        // Zaman aşımı / ağ / oturum yok → aşağıda tek tip hata.
+        HataServisi.instance.iz('AKTARICI agora token hata: $e');
+      }
+      if (token == null || token.isEmpty) {
+        throw AramaHatasi('Arama sunucusuna ulaşılamadı');
+      }
+      HataServisi.instance.iz('agora token AKTARICIDAN alindi');
+      return token;
+    }
+    return RtcTokenBuilder.build(
       appId: appId,
       appCertificate: agoraSertifika,
       channelName: kanal,
@@ -245,6 +266,17 @@ class AramaServisi {
       role: RtcRole.publisher,
       expireTimestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
     );
+  }
+
+  Future<void> _katil(
+    String chatId,
+    String kanal,
+    String karsiUid_, [
+    AramaTipi tip = AramaTipi.ses,
+  ]) async {
+    // Token bir kez alınır; aşağıdaki -17 yeniden denemesi AYNI token'ı
+    // kullanır (aynı kanal + uid 0 → hâlâ geçerli, ikinci ağ isteği gerekmez).
+    final token = await _tokenAl(chatId, kanal);
     // ⚠️ Seçenekler AÇIKÇA verilmeli. Boş `ChannelMediaOptions()` ile mikrofon/
     // kamera yayını ve otomatik abonelik SDK varsayılanlarına bırakılıyordu;
     // "karşılıklı bağlanıyor ama SES YOK" tablosunun en olası sebebi buydu.
@@ -285,6 +317,13 @@ class AramaServisi {
     _aktifKarsiUid = karsiUid_;
     _aktifKanal = kanal;
     aktifAramaVar = true;
+    // ⚠️ `aktifAramaVar` yalnız BU isolate'te görünür; FCM arka plan
+    // handler'ı ayrı isolate'te çalıştığı için orada hep false'tu → kilit
+    // ekranındaki görüşmenin üstüne ikinci CallKit açılıyordu. Disk kaydı iki
+    // isolate'ten de okunur. `await` KASITLI: beklemeden bırakılırsa hızlı bir
+    // bitir() → sil() bu yazmadan ÖNCE bitip kaydı geride bırakabilir ve sonraki
+    // aramalar saatlerce "meşgul" görünürdü. (Hata yutulur, akışı durdurmaz.)
+    await AktifAramaKaydi.yaz(chatId);
   }
 
   /// Agora kanal adı. ⚠️ Eskiden `k_<milisaniye>` idi → TAHMİN EDİLEBİLİR:
@@ -320,7 +359,7 @@ class AramaServisi {
     try {
       await _engineHazirla(tip);
       iz('engine hazir');
-      await _katil(kanal, alanUid, tip);
+      await _katil(chatId, kanal, alanUid, tip);
       iz('kanala katildi kanal=$kanal');
 
       final me = _uid;
@@ -384,7 +423,7 @@ class AramaServisi {
       await _engineHazirla(tip);
       iz('engine hazir');
       await HataServisi.instance.sonAdim('KABUL: kanala katiliyor');
-      await _katil(kanal, karsi ?? '', tip);
+      await _katil(chatId, kanal, karsi ?? '', tip);
       iz('kanala katildi');
       await HataServisi.instance.sonAdim('KABUL: kanala katildi, ekran aciliyor');
       // ⚠️ Burada endAllCalls() ÇAĞIRMIYORUZ. Kabul anında sisteme "arama
@@ -478,6 +517,10 @@ class AramaServisi {
     bekleyenBaslik = null;
     // Sonraki aramanın işlenebilmesi için dedupe bayrağını SIFIRLA.
     islemeBitti();
+    // İsolate'ler arası "görüşmedeyim" kaydı da kalkmalı; kalırsa arka plan
+    // handler'ı yeni aramaları (tazelik süresi dolana dek) "meşgul" sayar.
+    // (Sonda: yukarıdaki eşzamanlı sıfırlamaların arasına await girmesin.)
+    await AktifAramaKaydi.sil();
   }
 
   /// Arama bitince OTOMATİK özet raporu (kullanıcı bir şeye basmak zorunda
