@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'hata_servisi.dart';
 
 import '../modeller/kullanici.dart';
+import 'presence_servisi.dart' show cevrimiciTazele;
 
 /// Kullanıcıya gösterilecek hata (kayıt/kullanıcı adı vb.).
 class KullaniciHatasi implements Exception {
@@ -245,8 +246,12 @@ class KullaniciServisi {
   }
 
   /// Bir kullanıcının profilini canlı dinler.
-  Stream<Kullanici> profilDinle(String uid) =>
-      _users.doc(uid).snapshots().map(Kullanici.firestoreDan);
+  /// [cevrimiciTazele]: uygulaması öldürülen kişinin dokümanı bir daha
+  /// değişmediği için sohbet listesi/arkadaşlar ekranındaki çevrimiçi noktası
+  /// takılı kalıyordu; eşik dolunca akış aynı değeri yeniden yayar.
+  Stream<Kullanici> profilDinle(String uid) => cevrimiciTazele(
+        _users.doc(uid).snapshots().map(Kullanici.firestoreDan),
+      );
 
   /// Bir kullanıcının profilini bir kez okur.
   Future<Kullanici?> profilGetir(String uid) async {
