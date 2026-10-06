@@ -1,0 +1,22 @@
+# ROY MESSANGER aktarıcısı — kurulum: README.md
+name = "roy-aktarici"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+# agora-token paketi node:crypto (createHmac) + node:zlib (deflateSync) +
+# Buffer kullanıyor → Workers'ta nodejs_compat şart.
+compatibility_flags = ["nodejs_compat"]
+# workers.dev alt alanı (https://roy-aktarici.<hesap>.workers.dev)
+workers_dev = true
+
+[vars]
+PROJE = "kardes-mesaj"
+# App ID gizli değil (istemcide zaten açık); SERTİFİKA gizlidir → secret.
+AGORA_APP_ID = "c2bf944aa30a48bcaad7f1be6694949e"
+
+# Gizliler (depoya ASLA yazılmaz):
+#   npx wrangler secret put SERVICE_ACCOUNT < yeni-anahtar.json
+#   npx wrangler secret put AGORA_APP_CERTIFICATE
+# ⚠️ TEST_JWKS yalnız testler içindir; üretimde TANIMLAMAYIN.
+
+[observability]
+enabled = true
