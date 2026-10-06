@@ -52,5 +52,25 @@ void main() {
       }
       expect(t.asama, AramaAsamasi.bagli);
     });
+
+    // 45 sn "Cevap verilmedi" zaman aşımı yalnız HİÇ bağlanılmamışken kapatır.
+    test('zaman aşımı: bekleniyorken kapatır', () {
+      final t = BaglantiTakibi();
+      expect(t.cevapsizKapatilmali, isTrue);
+      t.guncelle(null);
+      expect(t.cevapsizKapatilmali, isTrue);
+    });
+
+    test('zaman aşımı: bağlıyken ve KOPUKKEN kapatmaz (20 sn kuralı)', () {
+      final t = BaglantiTakibi()..guncelle(42);
+      expect(t.cevapsizKapatilmali, isFalse);
+      // İlk 45 sn içinde kopma: yeniden bağlanma süresi işlemeli,
+      // "Cevap verilmedi" ile kapanmamalı.
+      t.guncelle(null);
+      expect(t.asama, AramaAsamasi.yenidenBaglaniyor);
+      expect(t.cevapsizKapatilmali, isFalse);
+      t.guncelle(42);
+      expect(t.cevapsizKapatilmali, isFalse);
+    });
   });
 }
