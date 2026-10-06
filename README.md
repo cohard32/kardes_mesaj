@@ -160,8 +160,8 @@ Derleme için gerekli ama depoda **bulunmayan** dosyalar (hepsi `.gitignore`'da)
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| *sonraki* | Güvenlik kuralları sertleştirmesi (7 açık) · mesaja yanıt · sohbet sessize alma · 5 tema · kaymayan sohbet listesi · arka planda meşgul tespiti · onaylı güncelleme · aktarıcı · CI |
-| **1.8.0** | Engelleme · e-posta doğrulama · şifre gücü · App Check · gizlilik sıkılaştırması |
+| **1.9.0** | Güvenlik kuralları sertleştirmesi (7 açık) · mesaja yanıt · sohbet sessize alma · 5 tema · kaymayan sohbet listesi · arka planda meşgul tespiti · onaylı güncelleme · aktarıcı · CI |
+| 1.8.0 | Engelleme · e-posta doğrulama · şifre gücü · App Check · gizlilik sıkılaştırması |
 | 1.7.0 | Mesaj silme (60 sn) · orijinal kalitede medya · galeriye indirme |
 | 1.6.x | Görüntülü arama kararlılığı · zil sesi kök neden düzeltmesi · uzaktan teşhis |
 | 1.5.x | Yeni tema · arama düzeltmeleri · sohbet içi arama |

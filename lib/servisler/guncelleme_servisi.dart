@@ -24,7 +24,7 @@ class GuncellemeServisi {
   // Her release'te ikisini birlikte yükselt. (package_info_plus, Agora ffi
   // çakışması nedeniyle kaldırıldı; sürüm artık derleme-zamanı sabiti.)
   // test/surum_test.dart ikisini karşılaştırır → unutulursa CI kırmızı yanar.
-  static const String mevcutSurum = '1.8.0';
+  static const String mevcutSurum = '1.9.0';
 
   /// Repo bilgisi henüz ayarlanmadıysa kontrolü atla.
   bool get _ayarliMi => _repoOwner != 'KULLANICI_ADI';

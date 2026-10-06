@@ -60,9 +60,9 @@ keyAlias=androiddebugkey
 keyPassword=android
 EOF
 
-# 3) Artık key.properties olmadan sürüm derlenmesin
-sed -i 's/royImzaZorunlu=false/royImzaZorunlu=true/' android/gradle.properties
 ```
+`android/gradle.properties` içinde `royImzaZorunlu=true` zaten açık: key.properties
+olmadan sürüm derlemesi **durur** (sessizce yanlış anahtarla imzalanmaz).
 Derlerken artık "UYARI: … DEBUG anahtariyla" satırı **görünmemeli**.
 
 > İleri seviye (isteğe bağlı): güçlü parolalı **yeni** bir anahtara geçmek için
@@ -72,9 +72,9 @@ Derlerken artık "UYARI: … DEBUG anahtariyla" satırı **görünmemeli**.
 
 ## 3. Yeni sürümü yayınlayın
 
+Sürüm numarası depoda zaten `1.9.0+31` (pubspec.yaml ve `mevcutSurum` birlikte;
+farklı olurlarsa `test/surum_test.dart` CI'da kırılır).
 ```bash
-# pubspec.yaml: version: 1.9.0+31  ve  lib/servisler/guncelleme_servisi.dart:
-# mevcutSurum = '1.9.0'  (ikisi farklıysa test/surum_test.dart CI'da kırılır)
 flutter build apk --release --target-platform android-arm64
 ```
 GitHub Releases'e `v1.9.0` etiketiyle yükleyin. Uygulamalar açılışta artık
