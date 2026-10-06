@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (77 senaryo).
+// Firestore güvenlik kuralları birim testi (88 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 77 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
+// Beklenen: 88 PASS / 0 FAIL (T6 fcmToken bilinen sınır olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection,
   Timestamp as TS, serverTimestamp, writeBatch, increment,
+  arrayUnion, arrayRemove,
 } from 'firebase/firestore';
 
 const PROJECT = 'kardes-mesaj-test';
@@ -310,6 +311,38 @@ await env.withSecurityRulesDisabled(async (ctx) => {
 log(await ok(assertFails(setDoc(doc(M(), 'friend_requests/mallory_carol'),
   { gonderenUid:'mallory', alanUid:'carol', durum:'bekliyor' }))),
   'G7 engelliyken arkadaslik istegi GONDERILEMEZ');
+
+// ---- Y: MESAJA YANIT (alıntı) ----
+// yanitId / yanitOnizleme / yanitGonderen OPSİYONEL; tip ve uzunluk sunucuda
+// denetlenir (önizleme ≤ 120 karakter — istemci yanitOnizlemeSiniri ile aynı).
+const yanitli = (id, ek) => setDoc(doc(B(), `chats/${AB}/messages/${id}`), {
+  gonderen:'bob', metin:'katiliyorum', tip:'metin', zaman: serverTimestamp(), goruldu:false, ...ek });
+log(await ok(assertSucceeds(yanitli('y1', { yanitId:'m1', yanitOnizleme:'selam', yanitGonderen:'alice' }))),
+  'Y1 yanitli metin mesaji gonderilebilir (pozitif)');
+log(await ok(assertSucceeds(yanitli('y2', { yanitId:'g3', yanitOnizleme:'📷 Fotoğraf', yanitGonderen:'bob' }))),
+  'Y2 kendi medya mesajina yanit (etiketli onizleme) gonderilebilir (pozitif)');
+// Sınır değeri: tam 120 karakter (Türkçe harf) kabul — istemci kısaltması
+// kuralla uyumlu olmalı (kural karakter sayar, bayt değil).
+log(await ok(assertSucceeds(yanitli('y3', { yanitId:'m1', yanitOnizleme:'ş'.repeat(120), yanitGonderen:'alice' }))),
+  'Y3 tam 120 karakterlik (Turkce) onizleme kabul edilir (pozitif)');
+log(await ok(assertFails(yanitli('y4', { yanitId:'m1', yanitOnizleme:'a'.repeat(121), yanitGonderen:'alice' }))),
+  'Y4 121+ karakterlik onizleme REDDEDILIR');
+log(await ok(assertFails(yanitli('y5', { yanitId: 42, yanitOnizleme:'selam', yanitGonderen:'alice' }))),
+  'Y5 string olmayan yanitId REDDEDILIR');
+log(await ok(assertFails(yanitli('y6', { yanitId:'m1', yanitOnizleme:{ x: 1 }, yanitGonderen:'alice' }))),
+  'Y6 string olmayan yanitOnizleme REDDEDILIR');
+log(await ok(assertFails(yanitli('y7', { yanitId:'m1', yanitOnizleme:'selam', yanitGonderen:'mallory' }))),
+  'Y7 sohbet disi kisiye ait sahte alinti (yanitGonderen) REDDEDILIR');
+log(await ok(assertFails(updateDoc(doc(A(), `chats/${AB}/messages/y1`), { yanitOnizleme:'degistirildi' }))),
+  'Y8 yanit alintisi sonradan DEGISTIRILEMEZ');
+
+// ---- S: SOHBETİ SESSİZE ALMA (users/{me}.sessizSohbetler) ----
+log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
+  'SZ1 kendi sessiz listesine sohbet ekleyebilir (pozitif)');
+log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: arrayRemove(AB) }, { merge: true }))),
+  'SZ2 sessizi kapatabilir (pozitif)');
+log(await ok(assertFails(setDoc(doc(C(), 'users/alice'), { sessizSohbetler: arrayUnion(AB) }, { merge: true }))),
+  'SZ3 BASKASININ sessiz listesi degistirilemez');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

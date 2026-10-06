@@ -66,6 +66,36 @@ class SohbetServisi {
     } catch (_) {}
   }
 
+  // ---- SESSİZE ALMA ----
+  // Liste ALICININ kendi users/{uid} dokümanında tutulur: gönderen bildirim
+  // atmadan önce o dokümanı (fcmToken/kanal için) zaten okuyor → sessiz
+  // bilgisi EK OKUMA olmadan gelir, alıcının sessiz kanalına düşer
+  // (bkz. BildirimServisi). chats/{id}'ye yazılsaydı karşı taraf da görür
+  // ve kural `affectedKeys` listesini genişletmek gerekirdi.
+  // ⚠️ arrayUnion/arrayRemove + merge: tüm listeyi okuyup yeniden yazmak
+  // iki cihazdan aynı anda değişiklikte birinin işlemini EZERDİ.
+
+  /// Sohbeti sessize alır ([sessiz]=true) veya sessizi kapatır.
+  Future<void> sessizeAl(String chatId, bool sessiz) async {
+    final me = _uid;
+    if (me == null) return;
+    await _db.collection('users').doc(me).set({
+      'sessizSohbetler': sessiz
+          ? FieldValue.arrayUnion([chatId])
+          : FieldValue.arrayRemove([chatId]),
+    }, SetOptions(merge: true));
+  }
+
+  /// Bu sohbet sessizde mi (canlı). Alan yoksa / bozuksa false.
+  Stream<bool> sessizMi(String chatId) {
+    final me = _uid;
+    if (me == null) return Stream.value(false);
+    return _db.collection('users').doc(me).snapshots().map((s) {
+      final liste = s.data()?['sessizSohbetler'];
+      return liste is List && liste.contains(chatId);
+    }).distinct();
+  }
+
   /// Toplam okunmamış sohbet sayısı (alt bar rozeti için).
   Stream<int> toplamOkunmamis() {
     final me = _uid;
