@@ -2,7 +2,7 @@
 #
 # flutter            : analiz + birim testleri (sürüm tutarlılığı dahil:
 #                      test/surum_test.dart unutulan sürüm artışını yakalar).
-# kurallar           : Firestore güvenlik kuralları emülatörde (97 senaryo,
+# kurallar           : Firestore güvenlik kuralları emülatörde (107 senaryo,
 #                      tool/firestore_rules_test.mjs).
 # kurallari-yayinla  : main'e push'ta, iki iş de yeşilse kuralları + indeksleri
 #                      Firebase'e yayınlar. ⚠️ Eskiden kurallar elle (konsoldan)

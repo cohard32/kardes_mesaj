@@ -151,6 +151,36 @@ class MesajServisi {
     await _sonMesajTazele(chatId);
   }
 
+  /// Mesajın düzenlenebileceği süre. Sunucu kuralında da AYNI değer var
+  /// (firestore.rules → mesajDuzenlemeGecerli, 900 s). İkisi birlikte değişmeli.
+  static const Duration duzenlemeSuresi = Duration(minutes: 15);
+
+  /// Düzenlenen metnin üst sınırı (kuraldaki `metin.size() <= 4096`).
+  static const int metinSiniri = 4096;
+
+  /// Bu mesaj ŞU AN düzenlenebilir mi? (kendi METİN mesajım + ilk 15 dk)
+  /// Yalnızca ARAYÜZ içindir; asıl kısıt sunucu kuralındadır.
+  bool duzenlenebilirMi(Mesaj m) {
+    if (m.gonderen != _uid || m.tip != MesajTipi.metin) return false;
+    final t = m.zaman;
+    if (t == null) return false; // sunucu damgası gelmeden düzenleme yok
+    return DateTime.now().difference(t) < duzenlemeSuresi;
+  }
+
+  /// Metin mesajını düzenler. Sohbet listesindeki önizleme, düzenlenen
+  /// mesaj EN SON mesajsa güncellenir. Süre dolduysa sunucu reddeder
+  /// (çağıran yakalar).
+  Future<void> mesajDuzenle(String chatId, String mesajId, String metin) async {
+    final temiz = metin.trim();
+    if (temiz.isEmpty) return;
+    HataServisi.instance.iz('MESAJ duzenleniyor chat=$chatId');
+    await _mesajlar(chatId).doc(mesajId).update({
+      'metin': temiz,
+      'duzenlendi': FieldValue.serverTimestamp(),
+    });
+    await _sonMesajTazele(chatId);
+  }
+
   /// Silmeden sonra sohbet meta'sını kalan SON mesaja göre günceller.
   Future<void> _sonMesajTazele(String chatId) async {
     try {
