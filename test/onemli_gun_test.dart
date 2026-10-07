@@ -62,4 +62,13 @@ void main() {
     expect(a, isNot(hatirlaticiBildirimKimligi('dg_abd')));
     expect(a, inInclusiveRange(700000000, 799999999));
   });
+
+  test('bugün doğum günü mü', () {
+    final simdi = DateTime(2026, 10, 7, 23, 59);
+    expect(bugunDogumGunuMu('10-07', simdi: simdi), isTrue);
+    expect(bugunDogumGunuMu('10-08', simdi: simdi), isFalse);
+    expect(bugunDogumGunuMu(null, simdi: simdi), isFalse);
+    expect(bugunDogumGunuMu('02-29', simdi: DateTime(2027, 2, 28)), isTrue);
+  });
 }
+

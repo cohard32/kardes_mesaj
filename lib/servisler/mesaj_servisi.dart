@@ -69,6 +69,39 @@ class MesajServisi {
         .map((s) => s.docs.map(Mesaj.firestoreDan).toList());
   }
 
+  // ---- MEDYA GALERİSİ (bkz. firestore.indexes.json: tip+zaman, link+zaman)
+
+  /// Sohbetteki foto/videolar, yeniden eskiye.
+  Future<List<Mesaj>> medyalar(String chatId, {int limit = 90}) async {
+    final s = await _mesajlar(chatId)
+        .where('tip', whereIn: [MesajTipi.resim.name, MesajTipi.video.name])
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
+  /// Sohbetteki belgeler (PDF, Word…), yeniden eskiye.
+  Future<List<Mesaj>> belgeler(String chatId, {int limit = 60}) async {
+    final s = await _mesajlar(chatId)
+        .where('tip', isEqualTo: MesajTipi.dosya.name)
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
+  /// Link içeren mesajlar (yalnız `link: true` işaretli — bu sürümden sonra
+  /// gönderilenler), yeniden eskiye.
+  Future<List<Mesaj>> linkler(String chatId, {int limit = 60}) async {
+    final s = await _mesajlar(chatId)
+        .where('link', isEqualTo: true)
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
   /// Metin mesajı gönderir + sohbet meta güncelle + karşı tarafa bildirim.
   /// [yanit] verilirse mesaj o mesaja yanıt (alıntı) olarak gider.
   Future<void> gonder(

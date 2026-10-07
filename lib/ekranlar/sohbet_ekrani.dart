@@ -15,6 +15,7 @@ import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
 import '../parcalar/balon_hareketleri.dart';
+import '../parcalar/konfeti.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../parcalar/linkli_metin.dart';
 import '../parcalar/mesaj_listesi.dart';
@@ -35,12 +36,14 @@ import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
 import '../yardimcilar/hatirlatma_zamani.dart';
 import '../yardimcilar/mesaj_metni.dart';
+import '../yardimcilar/onemli_gun.dart';
 import '../yardimcilar/sohbet_arama.dart';
 import '../yardimcilar/tarih_ayraci.dart';
 import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
 import 'medya_goruntuleyici.dart';
+import 'medya_galerisi_ekrani.dart';
 import 'medya_gonder_ekrani.dart';
 import 'profil_goruntule_ekrani.dart';
 
@@ -247,7 +250,18 @@ class _SohbetEkraniState extends State<SohbetEkrani>
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _paylasimiIsle(paylasim));
     }
+    // Küçük sürpriz: bugün karşı tarafın doğum günüyse konfeti (günde bir).
+    if (_dogumGunu) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (await bugunIlkKezMi('dg_${widget.chatId}') && mounted) {
+          konfetiPatlat(context);
+        }
+      });
+    }
   }
+
+  /// Bugün karşı tarafın doğum günü mü? (sohbetin üstünde kutlama şeridi)
+  bool get _dogumGunu => bugunDogumGunuMu(widget.karsi.dogumGunu);
 
   /// "Paylaş → ROY" ile gelen içerik: metin/link yazma alanına konur (kişi
   /// düzenleyip gönderir), foto/video önizleme+açıklama ekranına gider,
@@ -1089,21 +1103,32 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               onPressed:
                   _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.video),
             ),
-            // ⚠️ Menü (tek seçeneği "Sessize al") YALNIZ aktarıcılı derlemede:
-            // gizlilik gereği sessiz sohbet listesi artık yalnız SAHİBİNİN
-            // okuyabildiği gizli belgede (users/{uid}/ozel/bildirim). Sessizi
-            // bildirim GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
-            // aktarıcıdır; aktarıcısız (eski yol) derlemede gönderen karşının
-            // listesini okuyamaz → seçenek hiçbir şey yapmazken "sessize
-            // alındı" demek yanıltıcı olurdu.
-            if (AktariciServisi.etkin)
-              PopupMenuButton<String>(
-                tooltip: 'Diğer',
-                color: Renkler.yuzey,
-                onSelected: (secim) {
-                  if (secim == 'sessiz') _sessizDegistir();
-                },
-                itemBuilder: (_) => [
+            PopupMenuButton<String>(
+              tooltip: 'Diğer',
+              color: Renkler.yuzey,
+              onSelected: (secim) {
+                if (secim == 'sessiz') _sessizDegistir();
+                if (secim == 'galeri') _galeriyiAc();
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem<String>(
+                  value: 'galeri',
+                  child: Row(
+                    children: [
+                      Icon(Icons.perm_media_outlined,
+                          color: Renkler.neon, size: 20),
+                      const SizedBox(width: 12),
+                      const Text('Medya, belgeler ve linkler'),
+                    ],
+                  ),
+                ),
+                // ⚠️ "Sessize al" YALNIZ aktarıcılı derlemede: gizlilik
+                // gereği sessiz sohbet listesi yalnız SAHİBİNİN okuyabildiği
+                // gizli belgede (users/{uid}/ozel/bildirim). Sessizi bildirim
+                // GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
+                // aktarıcıdır; aktarıcısız derlemede seçenek hiçbir şey
+                // yapmazken "sessize alındı" demek yanıltıcı olurdu.
+                if (AktariciServisi.etkin)
                   PopupMenuItem<String>(
                     value: 'sessiz',
                     child: Row(
@@ -1120,8 +1145,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       ],
                     ),
                   ),
-                ],
-              ),
+              ],
+            ),
           ],
         ),
         body: Zemin(
@@ -1137,6 +1162,29 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(_yuklemeMetni!, style: Yazi.kucuk),
+                ),
+              if (_dogumGunu)
+                GestureDetector(
+                  onTap: () => konfetiPatlat(context),
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Renkler.neonSis,
+                      borderRadius: Kose.kartKose,
+                      border: Border.all(color: Renkler.neon),
+                    ),
+                    child: Text(
+                      '🎂 Bugün ${widget.karsi.ad} doğum gününde! '
+                      'Bir mesajla kutla 🎉',
+                      textAlign: TextAlign.center,
+                      style: Yazi.stil(14, FontWeight.w700, Renkler.metin),
+                    ),
+                  ),
                 ),
               Expanded(
                 child: StreamBuilder<List<Mesaj>>(
@@ -1741,6 +1789,18 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           onPressed: _aramaIndeks > 0 ? () => _aramaSonraki(-1) : null,
         ),
       ],
+    );
+  }
+
+  void _galeriyiAc() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MedyaGalerisiEkrani(
+          chatId: widget.chatId,
+          karsi: widget.karsi,
+          benimUid: _uid,
+        ),
+      ),
     );
   }
 

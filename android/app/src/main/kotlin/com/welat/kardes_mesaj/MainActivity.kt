@@ -159,6 +159,22 @@ class MainActivity : FlutterActivity() {
                     // işlenmemiş içerik (bkz. PaylasimAktivitesi). Alınınca silinir.
                     "paylasimAl" -> result.success(PaylasimDeposu.al())
 
+                    // Metni telefonun paylaşım menüsüyle gönderir ("Davet et").
+                    "metinPaylas" -> {
+                        val metin = call.argument<String>("metin") ?: ""
+                        val baslik = call.argument<String>("baslik") ?: "Paylaş"
+                        try {
+                            val gonder = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, metin)
+                            }
+                            startActivity(Intent.createChooser(gonder, baslik))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+
                     // KÜÇÜK PENCERE (PiP). Android 12+: izin verilince sistem
                     // ana ekrana dönüşte kendiliğinden geçer (otomatik giriş);
                     // 8-11: onUserLeaveHint'te elle geçilir.

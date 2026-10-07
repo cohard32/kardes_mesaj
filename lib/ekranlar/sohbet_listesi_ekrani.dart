@@ -8,6 +8,7 @@ import '../servisler/kullanici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/onemli_gun.dart';
 import '../yardimcilar/zaman_metni.dart';
 import 'arkadaslar_ekrani.dart';
 import 'sohbet_ekrani.dart';
@@ -126,8 +127,19 @@ class _SohbetSatiri extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(k.ad, maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: Yazi.isim),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(k.ad,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Yazi.isim),
+                          ),
+                          // Bugün doğum günü → pasta 🎂
+                          if (bugunDogumGunuMu(k.dogumGunu))
+                            const Text(' 🎂', style: TextStyle(fontSize: 15)),
+                        ],
+                      ),
                       const SizedBox(height: 2),
                       // Yarım kalan mesaj varsa "Taslak: …" (yazıyor… öncelikli).
                       ValueListenableBuilder<Map<String, String>>(

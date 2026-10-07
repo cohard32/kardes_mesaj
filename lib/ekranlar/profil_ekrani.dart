@@ -10,6 +10,7 @@ import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/davet_servisi.dart';
 import '../servisler/hatirlatici_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../servisler/medya_servisi.dart';
@@ -366,6 +367,16 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
           decoration: Kutular.duzYuzey(kose: Kose.kartKose, kenarli: true),
           child: Column(
             children: [
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('Arkadaşlarını davet et'),
+                subtitle: Text('İndirme bağlantısı + kullanıcı adın',
+                    style: Yazi.kucuk),
+                trailing: Icon(Icons.chevron_right,
+                    color: Renkler.metinSoluk),
+                onTap: () => DavetServisi.davetEt(k.kullaniciAdi),
+              ),
+              const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.cake_outlined),
                 title: const Text('Doğum günleri ve önemli günler'),

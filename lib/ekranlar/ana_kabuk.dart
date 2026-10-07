@@ -4,9 +4,11 @@ import '../servisler/hata_servisi.dart';
 
 import '../main.dart' show bekleyenSohbetiAc;
 import '../parcalar/guncelleme_akisi.dart';
+import '../parcalar/konfeti.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/hatirlatici_servisi.dart';
+import '../servisler/kullanici_servisi.dart';
 import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/resim_onbellegi.dart';
@@ -14,6 +16,7 @@ import '../servisler/taslak_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../servisler/yerel_olaylar.dart';
 import '../tema.dart';
+import '../yardimcilar/onemli_gun.dart';
 import 'arama_ekrani.dart';
 import 'arkadaslar_ekrani.dart';
 import 'paylasim_hedefi_ekrani.dart';
@@ -65,10 +68,30 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
       _paylasimKontrol();
       // Uygulama bir hatırlatma bildirimine dokunularak açıldıysa sohbeti aç.
       BildirimServisi.instance.acilisBildiriminiIsle();
+      _kendiDogumGunum();
       // Açılışta güncelleme kontrolü (eskiden SohbetEkrani'ndaydı; FAZ 4'te
       // ana ekran AnaKabuk olduğu için buraya taşındı → her açılışta çalışır).
       if (mounted) guncellemeAkisi(context, sessiz: true);
     });
+  }
+
+  /// Küçük sürpriz: bugün KENDİ doğum günümse günde bir kez konfeti +
+  /// kutlama mesajı.
+  Future<void> _kendiDogumGunum() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final ben = await KullaniciServisi.instance.profilGetir(uid);
+      if (!mounted || !bugunDogumGunuMu(ben?.dogumGunu)) return;
+      if (!await bugunIlkKezMi('ben_$uid') || !mounted) return;
+      konfetiPatlat(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          duration: Duration(seconds: 5),
+          content: Text('🎂 İyi ki doğdun! Nice mutlu yıllara 🎉'),
+        ),
+      );
+    } catch (_) {}
   }
 
   /// Bekleyen paylaşım varsa "Kime gönderilsin?" ekranını açar.
