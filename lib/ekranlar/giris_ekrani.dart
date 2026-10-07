@@ -89,25 +89,21 @@ class _GirisEkraniState extends State<GirisEkrani> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Neon 3D logo rozeti
+                  // Uygulama ikonunun kendisi (3B balonlar).
                   Center(
                     child: Container(
-                      width: 76,
-                      height: 76,
-                      decoration: Kutular.accent(
-                        kose: Kose.dugme,
-                        golge: Golgeler.neonGlowGuclu,
+                      width: 84,
+                      height: 84,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: Golgeler.neonGlowGuclu,
                       ),
-                      child: Stack(
-                        children: [
-                          const Positioned.fill(
-                            child: IcIsik(kose: Kose.dugme),
-                          ),
-                          Center(
-                            child: Icon(Icons.forum_rounded,
-                                size: 36, color: Renkler.metinKoyu),
-                          ),
-                        ],
+                      child: Image.asset(
+                        'assets/ikon/logo.png',
+                        width: 84,
+                        height: 84,
+                        filterQuality: FilterQuality.medium,
+                        semanticLabel: 'ROY MESSANGER',
                       ),
                     ),
                   ),
