@@ -22,6 +22,7 @@ import 'arama_durumu.dart';
 import 'app_check_servisi.dart';
 import 'ayar_servisi.dart';
 import 'ses_secenekleri.dart';
+import '../yardimcilar/bildirim_yuku.dart';
 
 /// Bildirim KANAL KİMLİĞİ seçimi — SAF mantık (Firebase/eklenti yok →
 /// `test/bildirim_kanal_test.dart` ile birim testi yapılır).
@@ -645,6 +646,9 @@ class BildirimServisi {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _yerel.initialize(
       settings: const InitializationSettings(android: androidInit),
+      // Yerel bildirime (mesaj hatırlatması, ön planda gösterilen mesaj)
+      // dokununca ilgili sohbet açılır.
+      onDidReceiveNotificationResponse: _yerelBildirimeTiklandi,
     );
 
     await _kanallariKur();
@@ -652,6 +656,29 @@ class BildirimServisi {
     // 3) Uygulama AÇIKKEN gelen mesajı elle göster (foreground'da sistem
     //    otomatik göstermez)
     FirebaseMessaging.onMessage.listen(_gelenMesaj);
+  }
+
+  /// Yerel bildirime dokununca açılacak sohbet. main.dart bağlar
+  /// (navigator orada; dairesel import olmasın diye geri çağırım).
+  void Function(String chatId, String karsiUid)? sohbetAc;
+
+  void _yerelBildirimeTiklandi(NotificationResponse yanit) {
+    final hedef = sohbetYukuCoz(yanit.payload);
+    if (hedef != null) sohbetAc?.call(hedef.chatId, hedef.karsiUid);
+  }
+
+  /// Uygulama KAPALIYKEN yerel bildirime dokunularak açıldıysa ilgili
+  /// sohbeti açar. AnaKabuk ilk karede çağırır (navigator hazır).
+  Future<void> acilisBildiriminiIsle() async {
+    try {
+      final d = await _yerel.getNotificationAppLaunchDetails();
+      final yanit = d?.notificationResponse;
+      if ((d?.didNotificationLaunchApp ?? false) && yanit != null) {
+        _yerelBildirimeTiklandi(yanit);
+      }
+    } catch (e) {
+      HataServisi.instance.iz('acilis bildirimi okunamadi: $e');
+    }
   }
 
   /// Foreground mesaj yönlendiricisi.

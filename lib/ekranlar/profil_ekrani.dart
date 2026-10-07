@@ -15,6 +15,7 @@ import '../servisler/kullanici_servisi.dart';
 import '../servisler/medya_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
+import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
 import 'ayarlar_ekrani.dart';
 import 'hatirlaticilar_ekrani.dart';
@@ -229,6 +230,7 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
       await BildirimServisi.instance.tokenSil();
       // Bu hesabın arkadaşlarının doğum günü hatırlatıcıları silinir.
       await HatirlaticiServisi.instance.durdur();
+      TaslakServisi.instance.sifirla();
       MesajServisi.instance.adOnbelleginiSifirla();
       await FirebaseAuth.instance.signOut();
     }

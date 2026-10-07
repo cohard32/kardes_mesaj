@@ -29,6 +29,10 @@
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD"/>
     <!-- Cihaz yeniden baslatildiktan sonra da cagri altyapisi hazir olsun -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- "Bunu bana hatırlat": izin verilmişse hatırlatma dakikası dakikasına
+         çalar (Android 12-13'te çoğunlukla hazır gelir). Verilmemişse
+         hatırlatma yine çalışır, yalnız birkaç dakika sapabilir. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
 
     <application
         android:label="ROY MESSANGER"

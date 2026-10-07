@@ -52,6 +52,8 @@ void main() async {
   FirebaseMessaging.onBackgroundMessage(arkaplanMesajHandler);
   // Bildirim servisi: izin, kanal, foreground dinleyici
   await BildirimServisi.instance.baslat();
+  // Yerel bildirime (hatırlatma, ön planda gösterilen mesaj) dokununca sohbet.
+  BildirimServisi.instance.sohbetAc = sohbetAcIstegi;
   // CallKit (gelen arama ekranı) olaylarını dinle
   _callkitDinle();
   // Mesaj bildirimine tıklama → doğru sohbeti aç.
@@ -195,6 +197,13 @@ void _mesajBildirimineTiklandi(RemoteMessage message) {
 
 /// Bekleyen sohbet varsa VE navigator hazırsa açar. Soğuk başlangıçta
 /// AnaKabuk kurulunca (postFrame) tekrar çağrılır.
+/// Yerel bildirimden (hatırlatma vb.) gelen "şu sohbeti aç" isteği.
+void sohbetAcIstegi(String chatId, String karsiUid) {
+  _bekleyenSohbetChatId = chatId;
+  _bekleyenSohbetKarsiUid = karsiUid;
+  bekleyenSohbetiAc();
+}
+
 Future<void> bekleyenSohbetiAc() async {
   final chatId = _bekleyenSohbetChatId;
   final karsiUid = _bekleyenSohbetKarsiUid;

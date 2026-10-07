@@ -29,7 +29,10 @@ import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/ses_oynatici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
+import '../servisler/hatirlatici_servisi.dart';
+import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/hatirlatma_zamani.dart';
 import '../yardimcilar/mesaj_metni.dart';
 import '../yardimcilar/sohbet_arama.dart';
 import '../yardimcilar/tarih_ayraci.dart';
@@ -193,6 +196,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // geri çıkınca kullanıcı uygulama AÇIKKEN "çevrimdışı" görünüyordu.
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
     HataServisi.instance.iz('SOHBET acildi chat=${widget.chatId}');
+    // Yarım kalan mesaj (TASLAK) yerine konur. ⚠️ Dinleyiciden ÖNCE: yoksa
+    // taslağı geri koymak karşı tarafa "yazıyor…" gönderirdi.
+    if (widget.paylasim == null) {
+      final taslak = TaslakServisi.instance.al(widget.chatId);
+      if (taslak != null) {
+        _mesajCtrl.value = TextEditingValue(
+          text: taslak,
+          selection: TextSelection.collapsed(offset: taslak.length),
+        );
+      }
+    }
     _mesajCtrl.addListener(_yaziyorDinle);
     _odak.addListener(() {
       if (_odak.hasFocus && _emojiAcik) {
@@ -452,6 +466,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // (oynatıcı paylaşılan TEK örnektir; dispose edilmez, yalnız durdurulur).
     SesOynaticiServisi.instance.durdur(chatId: widget.chatId);
     _kayitci.dispose();
+    _taslakKaydet();
     _mesajCtrl.dispose();
     _odak.dispose();
     _kayitYapiliyorVN.dispose();
@@ -468,8 +483,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     super.dispose();
   }
 
+  /// Yazma alanındaki metni TASLAK olarak saklar (boşsa siler). Düzenleme
+  /// sırasındaki metin taslak sayılmaz (o, gönderilmiş bir mesajın metni).
+  void _taslakKaydet() {
+    if (_duzenleVN.value != null) return;
+    TaslakServisi.instance.kaydet(widget.chatId, _mesajCtrl.text);
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Uygulama arka plana atılıp öldürülürse dispose çalışmaz → taslak şimdi.
+    if (state == AppLifecycleState.paused) _taslakKaydet();
     _onPlanda = state == AppLifecycleState.resumed;
     // Uygulamaya dönüldü → bu arada gelen mesajlar ŞİMDİ görüldü sayılır.
     if (_onPlanda) _gorulduGuncelle();
@@ -1357,6 +1381,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   _duzenle(mesaj);
                 },
               ),
+            ListTile(
+              leading: Icon(Icons.alarm_add_rounded, color: Renkler.neon),
+              title: Text('Bunu bana hatırlat', style: Yazi.isim),
+              onTap: () {
+                Navigator.pop(context);
+                _hatirlatmaSec(mesaj);
+              },
+            ),
             if (kopyalanabilir)
               ListTile(
                 leading: Icon(Icons.copy_rounded, color: Renkler.neon),
@@ -1669,6 +1701,104 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         content: Text(ok ? 'Galeriye kaydedildi ✓' : 'İndirilemedi'),
       ),
     );
+  }
+
+  /// "Bunu bana hatırlat": hazır süreler ya da tarih/saat seç → o an
+  /// bildirim gelir, dokununca bu sohbet açılır.
+  Future<void> _hatirlatmaSec(Mesaj mesaj) async {
+    final simdi = DateTime.now();
+    final secim = await showModalBottomSheet<DateTime>(
+      context: context,
+      backgroundColor: Renkler.yuzey,
+      shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
+      builder: (bc) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Row(
+                children: [
+                  Icon(Icons.alarm_rounded, color: Renkler.neon),
+                  const SizedBox(width: 10),
+                  Text('Ne zaman hatırlatayım?', style: Yazi.baslikOrta),
+                ],
+              ),
+            ),
+            for (final s in hatirlatmaSecenekleri(simdi))
+              ListTile(
+                title: Text(s.etiket, style: Yazi.isim),
+                trailing: Text(
+                  hatirlatmaMetni(s.zaman, simdi),
+                  style: Yazi.kucuk,
+                ),
+                onTap: () => Navigator.pop(bc, s.zaman),
+              ),
+            ListTile(
+              leading: Icon(Icons.edit_calendar_rounded, color: Renkler.neon),
+              title: Text('Tarih ve saat seç…', style: Yazi.isim),
+              onTap: () async {
+                final gun = await showDatePicker(
+                  context: bc,
+                  initialDate: simdi,
+                  firstDate: DateTime(simdi.year, simdi.month, simdi.day),
+                  lastDate: simdi.add(const Duration(days: 365)),
+                );
+                if (gun == null || !bc.mounted) return;
+                final saat = await showTimePicker(
+                  context: bc,
+                  initialTime: TimeOfDay.fromDateTime(
+                    simdi.add(const Duration(hours: 1)),
+                  ),
+                );
+                if (saat == null || !bc.mounted) return;
+                Navigator.pop(
+                  bc,
+                  DateTime(gun.year, gun.month, gun.day, saat.hour, saat.minute),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    if (secim == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!secim.isAfter(DateTime.now())) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Geçmiş bir zaman seçilemez.')),
+      );
+      return;
+    }
+    final kimden = mesaj.gonderen == _uid ? 'Sen' : widget.karsi.ad;
+    try {
+      final id = await HatirlaticiServisi.instance.mesajHatirlat(
+        chatId: widget.chatId,
+        karsiUid: widget.karsi.uid,
+        baslik: '⏰ Hatırlatma · ${widget.karsi.ad}',
+        ozet: '$kimden: ${mesaj.yanitIcinOnizleme}',
+        mesajId: mesaj.id,
+        zaman: secim,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '⏰ ${hatirlatmaMetni(secim, DateTime.now())} hatırlatılacak',
+          ),
+          action: SnackBarAction(
+            label: 'Geri al',
+            onPressed: () =>
+                HatirlaticiServisi.instance.mesajHatirlatmaIptal(id),
+          ),
+        ),
+      );
+    } catch (e) {
+      HataServisi.instance.iz('hatirlatma kurulamadi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Hatırlatma kurulamadı.')),
+      );
+    }
   }
 
   /// Dosyayı telefonun İndirilenler klasörüne kaydeder.

@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../servisler/hata_servisi.dart';
 
@@ -9,6 +10,7 @@ import '../servisler/hatirlatici_servisi.dart';
 import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/resim_onbellegi.dart';
+import '../servisler/taslak_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../servisler/yerel_olaylar.dart';
 import '../tema.dart';
@@ -50,6 +52,9 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     HatirlaticiServisi.instance.baslat();
     // Resim önbelleği sınırı aştıysa en eski kullanılanları sil (arka planda).
     ResimOnbellegi.instance.budama();
+    // Bu hesabın yarım kalan mesajları (taslaklar).
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) TaslakServisi.instance.yukle(uid);
     YerelOlaylar.paylasimGeldi.addListener(_paylasimKontrol);
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi
     // varsa (navigator artık hazır) ilgili ekranı aç.
@@ -58,6 +63,8 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
       bekleyenSohbetiAc();
       // "Paylaş → ROY" ile uygulama KAPALIYKEN gelen içerik.
       _paylasimKontrol();
+      // Uygulama bir hatırlatma bildirimine dokunularak açıldıysa sohbeti aç.
+      BildirimServisi.instance.acilisBildiriminiIsle();
       // Açılışta güncelleme kontrolü (eskiden SohbetEkrani'ndaydı; FAZ 4'te
       // ana ekran AnaKabuk olduğu için buraya taşındı → her açılışta çalışır).
       if (mounted) guncellemeAkisi(context, sessiz: true);

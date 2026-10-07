@@ -6,7 +6,9 @@ import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
+import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/zaman_metni.dart';
 import 'arkadaslar_ekrani.dart';
 import 'sohbet_ekrani.dart';
 
@@ -80,11 +82,12 @@ class _SohbetSatiri extends StatelessWidget {
   final String me;
   const _SohbetSatiri({required this.sohbet, required this.me});
 
+  /// Bugün → "14:05"; daha eski → "Dün", gün adı ya da "12 Eylül".
+  /// (Eskiden hep saat yazıyordu: 3 gün önceki mesaj bugünkü sanılıyordu.)
   String _saat(DateTime? t) {
     if (t == null) return '';
-    final s = t.hour.toString().padLeft(2, '0');
-    final d = t.minute.toString().padLeft(2, '0');
-    return '$s:$d';
+    final gun = gunAyraciMetni(t);
+    return gun == 'Bugün' ? saatMetni(t) : gun;
   }
 
   @override
@@ -126,15 +129,48 @@ class _SohbetSatiri extends StatelessWidget {
                       Text(k.ad, maxLines: 1, overflow: TextOverflow.ellipsis,
                           style: Yazi.isim),
                       const SizedBox(height: 2),
-                      Text(
-                        onizleme,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: yaziyor
-                            ? Yazi.neonKucuk
-                            : (okunmamis > 0
-                                ? Yazi.stil(13, FontWeight.w600, Renkler.metin)
-                                : Yazi.kucuk),
+                      // Yarım kalan mesaj varsa "Taslak: …" (yazıyor… öncelikli).
+                      ValueListenableBuilder<Map<String, String>>(
+                        valueListenable: TaslakServisi.instance.taslaklar,
+                        builder: (_, taslaklar, _) {
+                          final taslak = taslaklar[sohbet.chatId];
+                          if (!yaziyor && taslak != null) {
+                            return Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Taslak: ',
+                                    style: Yazi.stil(
+                                      13,
+                                      FontWeight.w700,
+                                      Renkler.tehlike,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: taslak.replaceAll('\n', ' '),
+                                    style: Yazi.kucuk,
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            );
+                          }
+                          return Text(
+                            onizleme,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: yaziyor
+                                ? Yazi.neonKucuk
+                                : (okunmamis > 0
+                                    ? Yazi.stil(
+                                        13,
+                                        FontWeight.w600,
+                                        Renkler.metin,
+                                      )
+                                    : Yazi.kucuk),
+                          );
+                        },
                       ),
                     ],
                   ),
