@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../modeller/kullanici.dart';
 import '../tema.dart';
+import '../yardimcilar/mesaj_metni.dart';
+import 'onbellekli_resim.dart';
 
 /// Kullanıcı avatarı — profil fotoğrafı varsa onu, yoksa gradient + baş harf.
 /// Organik köşe + iç ışık (tema dili). Tüm ekranlarda ortak kullanılır.
@@ -31,12 +33,16 @@ class KullaniciAvatar extends StatelessWidget {
       // 40-52 px'lik avatar için tam çözünürlükte decode etmek, sohbet
       // listesinde her satırda megabaytlarca bellek demekti. Hedefin 2 katına
       // sığacak şekilde küçültülür (BoxFit.cover kırparken bulanıklaşmasın).
+      // İNDİRME de küçük: Cloudinary'den ~256 px'lik hâli gelir ve telefonda
+      // saklanır (eskiden her açılışta orijinal, birkaç MB, yeniden iniyordu).
       final hedef = (boyut * MediaQuery.devicePixelRatioOf(context) * 2).round();
       icerik = ClipRRect(
         borderRadius: kose,
         child: Image(
           image: ResizeImage(
-            NetworkImage(foto),
+            OnbellekliResim(
+              kucukResimUrl(foto, genislik: hedef > 256 ? 512 : 256),
+            ),
             width: hedef,
             height: hedef,
             policy: ResizeImagePolicy.fit,

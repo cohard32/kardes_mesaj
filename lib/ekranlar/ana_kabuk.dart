@@ -7,6 +7,7 @@ import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/hatirlatici_servisi.dart';
 import '../servisler/presence_servisi.dart';
+import '../servisler/resim_onbellegi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
 import 'arama_ekrani.dart';
@@ -44,6 +45,8 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     PresenceServisi.instance.nabziBaslat();
     // Doğum günü / önemli gün bildirimlerini (yerel alarm) güncel tut.
     HatirlaticiServisi.instance.baslat();
+    // Resim önbelleği sınırı aştıysa en eski kullanılanları sil (arka planda).
+    ResimOnbellegi.instance.budama();
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi
     // varsa (navigator artık hazır) ilgili ekranı aç.
     WidgetsBinding.instance.addPostFrameCallback((_) {

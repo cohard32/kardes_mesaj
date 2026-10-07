@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../modeller/mesaj.dart';
 import 'hata_servisi.dart';
+import 'resim_onbellegi.dart';
 
 /// Sohbetteki foto/video/GIF'i TELEFON GALERİSİNE indirir.
 ///
@@ -58,28 +59,16 @@ class MedyaIndirServisi {
       final dizin = await getTemporaryDirectory();
       gecici = File('${dizin.path}/$ad');
 
-      final istemci = http.Client();
-      try {
-        final yanit = await istemci.send(http.Request('GET', Uri.parse(url)));
-        if (yanit.statusCode != 200) {
-          HataServisi.instance.iz('INDIRME HTTP ${yanit.statusCode}');
-          return false;
-        }
-        final toplam = yanit.contentLength ?? 0;
-        final sink = gecici.openWrite();
-        var alinan = 0;
-        try {
-          await for (final parca in yanit.stream) {
-            sink.add(parca);
-            alinan += parca.length;
-            if (toplam > 0) ilerleme?.call(alinan / toplam);
-          }
-        } finally {
-          await sink.flush();
-          await sink.close();
-        }
-      } finally {
-        istemci.close();
+      // Orijinal tam ekranda zaten indiyse (resim önbelleği) YENİDEN
+      // İNDİRİLMEZ: telefondaki kopyası anında galeriye kaydedilir.
+      final onbellekte = tip == MesajTipi.video
+          ? null
+          : await ResimOnbellegi.instance.dosyasi(url);
+      if (onbellekte != null) {
+        await onbellekte.copy(gecici.path);
+        ilerleme?.call(1);
+      } else {
+        await _indir(url, gecici, ilerleme);
       }
 
       final ok = await _native.invokeMethod<bool>('galeriyeKaydet', {
@@ -97,6 +86,36 @@ class MedyaIndirServisi {
       try {
         if (gecici != null && await gecici.exists()) await gecici.delete();
       } catch (_) {}
+    }
+  }
+
+  /// [url]'i [hedef] dosyaya AKITARAK indirir (RAM'de biriktirmez).
+  Future<void> _indir(
+    String url,
+    File hedef,
+    void Function(double)? ilerleme,
+  ) async {
+    final istemci = http.Client();
+    try {
+      final yanit = await istemci.send(http.Request('GET', Uri.parse(url)));
+      if (yanit.statusCode != 200) {
+        throw HttpException('INDIRME HTTP ${yanit.statusCode}');
+      }
+      final toplam = yanit.contentLength ?? 0;
+      final sink = hedef.openWrite();
+      var alinan = 0;
+      try {
+        await for (final parca in yanit.stream) {
+          sink.add(parca);
+          alinan += parca.length;
+          if (toplam > 0) ilerleme?.call(alinan / toplam);
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
+      }
+    } finally {
+      istemci.close();
     }
   }
 }

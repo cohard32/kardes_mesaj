@@ -9,7 +9,6 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:video_player/video_player.dart';
 
 import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
@@ -17,6 +16,7 @@ import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../parcalar/linkli_metin.dart';
 import '../parcalar/mesaj_listesi.dart';
+import '../parcalar/onbellekli_resim.dart';
 import '../servisler/aktarici_servisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/arkadas_servisi.dart';
@@ -29,9 +29,11 @@ import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
 import '../yardimcilar/mesaj_metni.dart';
 import '../yardimcilar/sohbet_arama.dart';
+import '../yardimcilar/tarih_ayraci.dart';
 import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
+import 'medya_goruntuleyici.dart';
 import 'profil_goruntule_ekrani.dart';
 
 /// Bir arkadaşla sohbeti açar (yoksa oluşturur) ve ekranı push eder.
@@ -864,33 +866,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     // kendi mesajında alta inme, sayfalama) MesajListesi'nde.
                     // Öğeler mesaj kimliğiyle anahtarlanır → oynayan video /
                     // ses dalgası index'te değil MESAJDA kalır.
+                    // Her günün ilk mesajının üstüne "Bugün / Dün / 12 Eylül".
+                    final ayraclar = tarihAyraclari(mesajlar);
                     return MesajListesi(
                       key: _listeAnahtari,
                       mesajlar: mesajlar,
                       benimUid: _uid,
                       eskiYukle: _hepsiYuklendi ? null : _eskiYukle,
-                      // Aramada bulunan mesaj kısa süre parlar.
-                      ogeKurucu: (context, m) => ValueListenableBuilder<String?>(
-                        valueListenable: _vurguVN,
-                        builder: (_, vurgu, cocuk) => AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          decoration: BoxDecoration(
-                            color: vurgu == m.id
-                                ? Renkler.neon.withValues(alpha: 0.16)
-                                : Renkler.neon.withValues(alpha: 0),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: cocuk,
-                        ),
-                        child: _MesajBalonu(
-                          mesaj: m,
-                          benimMi: m.gonderen == _uid,
-                          chatId: widget.chatId,
-                          benimUid: _uid,
-                          karsiAd: widget.karsi.ad,
-                          onUzunBas: () => _tepkiSec(m),
-                        ),
-                      ),
+                      ogeKurucu: (context, m) => _ogeKur(m, ayraclar[m.id]),
                     );
                   },
                 ),
@@ -969,6 +952,38 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           ),
         ),
       ),
+    );
+  }
+
+  /// Listedeki tek öğe: (gerekirse) tarih ayracı + mesaj balonu.
+  /// Aramada bulunan mesaj kısa süre parlar.
+  Widget _ogeKur(Mesaj m, String? ayrac) {
+    final balon = ValueListenableBuilder<String?>(
+      valueListenable: _vurguVN,
+      builder: (_, vurgu, cocuk) => AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        decoration: BoxDecoration(
+          color: vurgu == m.id
+              ? Renkler.neon.withValues(alpha: 0.16)
+              : Renkler.neon.withValues(alpha: 0),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: cocuk,
+      ),
+      child: _MesajBalonu(
+        mesaj: m,
+        benimMi: m.gonderen == _uid,
+        chatId: widget.chatId,
+        benimUid: _uid,
+        karsiAd: widget.karsi.ad,
+        onUzunBas: () => _tepkiSec(m),
+      ),
+    );
+    if (ayrac == null) return balon;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [_TarihAyraci(ayrac), balon],
     );
   }
 
@@ -1530,6 +1545,9 @@ class _MesajBalonu extends StatelessWidget {
 
   String _saat(DateTime? t) => t == null ? '' : saatMetni(t);
 
+  /// Tam ekran görüntüleyicinin başlığı: kimin gönderdiği.
+  String get _kimden => benimMi ? 'Sen' : karsiAd;
+
   /// Yanıt balonunun üstündeki alıntı kutusu (kimden + önizleme).
   /// Neon balonda koyu, karşı tarafın koyu balonunda neon tonlarla çizilir.
   Widget _alintiKutusu() {
@@ -1579,22 +1597,30 @@ class _MesajBalonu extends StatelessWidget {
 
   // Mesaj türüne göre içerik
   Widget _icerik(BuildContext context) {
-    // ⚠️ BELLEK: fotoğraflar artık ORİJİNAL kalitede (ör. 4000×3000) gidiyor.
-    // cacheWidth verilmezse 220 px'lik balon için görüntü TAM boyutta
-    // çözülür (~48 MB RGBA / foto) → foto dolu sohbette takılma ve OOM.
-    // Balon genişliğine göre çözülür; tam boyut yalnız büyütünce yüklenir.
+    // ⚠️ VERİ + BELLEK: fotoğraflar ORİJİNAL kalitede (ör. 4000×3000, birkaç
+    // MB) gidiyor. Balonda artık Cloudinary'nin KÜÇÜK hâli (kucukResimUrl,
+    // ~100 KB) iner ve telefonda saklanır (OnbellekliResim) — eskiden her
+    // açılışta orijinal yeniden iniyordu. Balon genişliğinde çözülür;
+    // ORİJİNAL yalnız dokununca, tam ekranda yüklenir.
     final dpr = MediaQuery.devicePixelRatioOf(context);
     switch (mesaj.tip) {
       case MesajTipi.resim:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return GestureDetector(
-          onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
+          onTap: () => FotoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
           child: ClipRRect(
             borderRadius: _medyaKose,
-            child: Image.network(
-              mesaj.medyaUrl!,
+            child: Image(
+              image: ResizeImage(
+                OnbellekliResim(kucukResimUrl(mesaj.medyaUrl!)),
+                width: (220 * dpr).round(),
+              ),
               width: 220,
-              cacheWidth: (220 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1617,7 +1643,16 @@ class _MesajBalonu extends StatelessWidget {
         );
       case MesajTipi.video:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
-        return _VideoOynatici(url: mesaj.medyaUrl!, kose: _medyaKose);
+        return _VideoKapagi(
+          url: mesaj.medyaUrl!,
+          kose: _medyaKose,
+          onTap: () => VideoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
+        );
       case MesajTipi.ses:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return _SesOynatici(
@@ -1630,13 +1665,23 @@ class _MesajBalonu extends StatelessWidget {
       case MesajTipi.gif:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return GestureDetector(
-          onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
+          onTap: () => FotoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            tip: MesajTipi.gif,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
           child: ClipRRect(
             borderRadius: _medyaKose,
-            child: Image.network(
-              mesaj.medyaUrl!,
+            child: Image(
+              // GIPHY adresi (Cloudinary değil) → küçültülmez, yalnız
+              // telefonda saklanır.
+              image: ResizeImage(
+                OnbellekliResim(mesaj.medyaUrl!),
+                width: (170 * dpr).round(),
+              ),
               width: 170,
-              cacheWidth: (170 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1666,22 +1711,6 @@ class _MesajBalonu extends StatelessWidget {
           linkRengi: benimMi ? Renkler.metinKoyu : Renkler.neon,
         );
     }
-  }
-
-  void _resmiBuyut(BuildContext context, String url) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(12),
-        child: InteractiveViewer(
-          child: ClipRRect(
-            borderRadius: Kose.kartKose,
-            child: Image.network(url),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -1822,169 +1851,65 @@ class _MesajBalonu extends StatelessWidget {
   }
 }
 
-/// İnline video oynatıcı: önce KAPAK, dokununca yükle + oynat/duraklat.
-class _VideoOynatici extends StatefulWidget {
+/// Video balonu: hafif KAPAK (Cloudinary'nin videodan çıkardığı küçük JPEG,
+/// telefonda saklanır) + oynat rozeti. Dokununca TAM EKRAN oynatıcı açılır
+/// (orada ileri-geri sarma ve "Galeriye indir" var).
+///
+/// ⚠️ Balonda oynatıcı KURULMAZ: eskiden her video balonu kendi
+/// VideoPlayerController'ını kuruyordu; video dolu bir sohbeti açmak ekrana
+/// giren her video için ağdan dosya başı indirip ExoPlayer açıyordu
+/// (mobil veri, bellek, takılma).
+class _VideoKapagi extends StatelessWidget {
   final String url;
 
   /// Balonun organik köşesiyle uyumlu medya köşesi
   final BorderRadius kose;
-  const _VideoOynatici({required this.url, required this.kose});
-
-  @override
-  State<_VideoOynatici> createState() => _VideoOynaticiState();
-}
-
-class _VideoOynaticiState extends State<_VideoOynatici> {
-  // ⚠️ TEMBEL BAŞLATMA: eskiden her video balonu initState'te
-  // VideoPlayerController oluşturup initialize ediyordu → video dolu bir
-  // sohbeti açmak, ekrana giren HER video için ağdan dosya başı indirip yerel
-  // bir ExoPlayer örneği açıyordu (mobil veri, bellek, takılma; donanım
-  // çözücü sayısı sınırlı cihazlarda videolar açılamayabilir).
-  // Artık başta yalnız Cloudinary'nin ürettiği hafif JPEG kapak çizilir;
-  // oynatıcı kullanıcı dokununca kurulur.
-  VideoPlayerController? _ctrl;
-  bool _yukleniyor = false;
-  bool _hazir = false;
-  bool _hata = false;
-
-  @override
-  void didUpdateWidget(_VideoOynatici old) {
-    super.didUpdateWidget(old);
-    // ⚠️ Liste öğeleri artık mesaj kimliğiyle anahtarlı (MesajListesi), yani
-    // State normalde mesajıyla kalır. Yine de URL değişirse (aynı yere başka
-    // video düşerse) ESKİ videonun denetleyicisi yeni balonda oynamasın:
-    // eskiden yeni videonun balonunda bir önceki video oynuyordu.
-    if (old.url != widget.url) {
-      final c = _ctrl;
-      _ctrl = null;
-      _hazir = false;
-      _hata = false;
-      _yukleniyor = false;
-      c?.dispose();
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _baslat() async {
-    if (_yukleniyor || _ctrl != null) return;
-    setState(() {
-      _yukleniyor = true;
-      _hata = false;
-    });
-    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-    _ctrl = c;
-    // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
-    // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
-    // `_ctrl != c`: bekleme sırasında URL değişti (didUpdateWidget bu
-    // denetleyiciyi zaten serbest bıraktı) → bu deneme artık geçersiz.
-    try {
-      await c.initialize();
-      if (!mounted || !identical(_ctrl, c)) return;
-      await c.play();
-      if (!mounted || !identical(_ctrl, c)) return;
-      setState(() {
-        _hazir = true;
-        _yukleniyor = false;
-      });
-    } catch (e) {
-      HataServisi.instance.iz('VIDEO acilamadi: $e');
-      // dispose()/didUpdateWidget denetleyiciyi zaten serbest bıraktı
-      if (!mounted || !identical(_ctrl, c)) return;
-      _ctrl = null; // dokununca yeniden denenebilsin
-      setState(() {
-        _hata = true;
-        _yukleniyor = false;
-      });
-      await c.dispose();
-    }
-  }
-
-  /// Neon 3D oynat rozeti
-  Widget get _oynatRozeti => Container(
-    decoration: BoxDecoration(
-      gradient: Gradyanlar.accent,
-      shape: BoxShape.circle,
-      boxShadow: Golgeler.neonGlow,
-    ),
-    padding: const EdgeInsets.all(10),
-    child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
-  );
+  final VoidCallback onTap;
+  const _VideoKapagi({
+    required this.url,
+    required this.kose,
+    required this.onTap,
+  });
 
   Widget _koyuKutu() =>
       Container(width: 220, height: 160, color: Renkler.zeminDerin);
 
-  /// Oynatıcı kurulmadan önceki görünüm: kapak + rozet (yükleniyorsa spinner,
-  /// hatadaysa eski "video açılamadı" ikonu — dokununca yeniden denenir).
-  Widget _kapak(BuildContext context) {
-    final kapakUrl = videoKapakUrl(widget.url);
+  @override
+  Widget build(BuildContext context) {
+    final kapakUrl = videoKapakUrl(url);
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return GestureDetector(
-      onTap: _baslat,
+      onTap: onTap,
       child: ClipRRect(
-        borderRadius: widget.kose,
+        borderRadius: kose,
         child: Stack(
           alignment: Alignment.center,
           children: [
             if (kapakUrl == null)
               _koyuKutu()
             else
-              Image.network(
-                kapakUrl,
+              Image(
+                image: ResizeImage(
+                  OnbellekliResim(kucukResimUrl(kapakUrl)),
+                  width: (220 * dpr).round(),
+                ),
                 width: 220,
                 height: 160,
-                // Balon boyutunda çöz (bkz. fotoğraflardaki cacheWidth notu).
-                cacheWidth: (220 * dpr).round(),
                 fit: BoxFit.cover,
                 // Kapak üretilemezse (eski/harici URL, ağ hatası) düz koyu
-                // kutu: video yine dokununca açılabilir.
+                // kutu: video yine dokununca açılır.
                 errorBuilder: (c, e, s) => _koyuKutu(),
               ),
-            if (_hata)
-              Container(
-                width: 220,
-                height: 160,
-                color: Renkler.zeminDerin.withValues(alpha: 0.7),
-                alignment: Alignment.center,
-                child: Icon(
-                  Icons.videocam_off_outlined,
-                  color: Renkler.metinSoluk,
-                  size: 36,
-                ),
-              )
-            else if (_yukleniyor)
-              CircularProgressIndicator(color: Renkler.neon)
-            else
-              _oynatRozeti,
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = _ctrl;
-    if (!_hazir || c == null) return _kapak(context);
-    return GestureDetector(
-      onTap: () => setState(() {
-        c.value.isPlaying ? c.pause() : c.play();
-      }),
-      child: ClipRRect(
-        borderRadius: widget.kose,
-        child: SizedBox(
-          width: 220,
-          child: AspectRatio(
-            aspectRatio: c.value.aspectRatio,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [VideoPlayer(c), if (!c.value.isPlaying) _oynatRozeti],
+            Container(
+              decoration: BoxDecoration(
+                gradient: Gradyanlar.accent,
+                shape: BoxShape.circle,
+                boxShadow: Golgeler.neonGlow,
+              ),
+              padding: const EdgeInsets.all(10),
+              child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2181,10 +2106,36 @@ class _SesOynaticiState extends State<_SesOynatici> {
   }
 }
 
-/// Yazma alanının üstündeki yanıt çubuğu: kime yanıt verildiği + alıntı
-/// önizlemesi + kapat (X). Kapatınca mesaj normal (yanıtsız) gider.
-/// Yazma alanının üstündeki çubuk: yanıtlanan mesaj (alıntı) ya da
-/// düzenlenen mesaj ([ikon] = kalem).
+/// Sohbetteki tarih ayracı: ortada küçük, yarı saydam "Bugün" etiketi.
+class _TarihAyraci extends StatelessWidget {
+  final String metin;
+  const _TarihAyraci(this.metin);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: Renkler.yuzey.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Renkler.kenar),
+          ),
+          child: Text(
+            metin,
+            style: Yazi.stil(12, FontWeight.w700, Renkler.metinSoluk),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Yazma alanının üstündeki çubuk: yanıtlanan mesaj (kime + alıntı
+/// önizlemesi) ya da düzenlenen mesaj ([ikon] = kalem) + kapat (X).
+/// Kapatınca mesaj normal (yanıtsız) gider / düzenleme iptal olur.
 class _YanitCubugu extends StatelessWidget {
   final String kimden;
   final String onizleme;
