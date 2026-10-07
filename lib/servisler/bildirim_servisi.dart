@@ -737,11 +737,31 @@ class BildirimServisi {
     //  - varsayilan: raw yok + playSound → sistem varsayılan sesi çalar
     //  - sessiz: playSound false (sessiz_tsz aynı zamanda SESSİZE ALINMIŞ
     //    sohbetlerin kanalı, bkz. [BildirimKanali.sessizSohbet])
+    //
+    // ⚠️ YALNIZ GEREKENLER kurulur: varsayılan, sessiz (sessize alınmış
+    // sohbetlerin kanalı) ve SEÇİLİ ses. Eskiden listedeki HER ses için
+    // kurulurdu; 20'yi aşan seste Android'in bildirim ayarlarında 40+ kanal
+    // birikirdi. Seçim değişince [sesGuncelle] yenisini kurar.
     for (final s in sesSecenekleri) {
+      if (!_kanaliGerekli(s.anahtar)) continue;
       await _ciftKanalKur(a, s.anahtar, s.ad,
           aciklama: s.aciklama, sesCalsin: s.sesCalar, ses: _rawSes(s));
     }
     await _ozelKanaliKur();
+  }
+
+  bool _kanaliGerekli(String anahtar) =>
+      anahtar == 'varsayilan' ||
+      anahtar == 'sessiz' ||
+      anahtar == AyarServisi.instance.bildirimSesi.value;
+
+  /// Seçili HAZIR sesin kanal çiftini kurar (zaten varsa dokunmaz).
+  Future<void> _seciliKanaliKur() async {
+    final a = _android;
+    final s = sesSecenegiBul(AyarServisi.instance.bildirimSesi.value);
+    if (a == null || s == null) return;
+    await _ciftKanalKur(a, s.anahtar, s.ad,
+        aciklama: s.aciklama, sesCalsin: s.sesCalar, ses: _rawSes(s));
   }
 
   /// [secim] için titreşimli (`km_v3_<secim>`) ve titreşimsiz
@@ -809,6 +829,7 @@ class BildirimServisi {
   /// kimlikle) kurar + tercihi Firestore'a yayınlar (push bu kanalı kullanır
   /// → kapalıyken bile doğru ses).
   Future<void> sesGuncelle() async {
+    await _seciliKanaliKur();
     await _ozelKanaliKur();
     await kanalYayinla();
   }

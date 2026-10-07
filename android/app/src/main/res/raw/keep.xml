@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Bildirim sesleri koddan SADECE string adıyla (RawResourceAndroidNotificationSound)
-  kullanılıyor → kaynak optimizasyonu/küçültücü bunları "kullanılmıyor" sanıp
-  silebiliyor. Bu dosya onları açıkça KORUR (APK'da kalmalarını sağlar).
+  Bildirim sesleri ve zil melodileri koddan SADECE string adıyla
+  (RawResourceAndroidNotificationSound, CallKit ringtonePath) kullanılıyor →
+  kaynak küçültücü bunları "kullanılmıyor" sanıp silebiliyor. Bu dosya
+  onları açıkça KORUR (APK'da kalmalarını sağlar). Yeni ses eklenince
+  buraya da eklenmeli (test/ses_secenekleri_test.dart denetler).
 -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@raw/kedi,@raw/kedi2,@raw/kedi3,@raw/kedi4,@raw/cingirak"
+    tools:keep="@raw/arp,@raw/cingirak,@raw/damla,@raw/dingdong,@raw/gitar,@raw/kalimba,@raw/kampana,@raw/kedi,@raw/kedi2,@raw/kedi3,@raw/kedi4,@raw/kristal,@raw/kus,@raw/marimba,@raw/neon,@raw/pit,@raw/tik,@raw/yumusak,@raw/zil_kalimba,@raw/zil_klasik,@raw/zil_kristal,@raw/zil_marimba,@raw/zil_neon,@raw/zil_retro,@raw/zil_sakin"
     tools:shrinkMode="safe" />

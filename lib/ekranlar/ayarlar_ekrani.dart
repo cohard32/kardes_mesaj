@@ -160,13 +160,17 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
 
           const _BolumBaslik('Bildirim Sesi'),
 
-          // Hazır sesler TEK KAYNAKTAN (kanalları da buradan kurulur).
-          for (final s in sesSecenekleri)
-            _sesTile(
-              deger: s.anahtar,
-              baslik: s.ad,
-              onizlemeAsset: s.onizlemeAsset,
-            ),
+          // Hazır sesler TEK KAYNAKTAN, kategorilere göre gruplu.
+          // Bir sese dokunmak onu seçer VE çalar (önizleme).
+          for (final g in kategorilereAyir(sesSecenekleri)) ...[
+            if (g.kategori != 'Temel') _AltBaslik(g.kategori),
+            for (final s in g.sesler)
+              _sesTile(
+                deger: s.anahtar,
+                baslik: s.ad,
+                onizlemeAsset: s.onizlemeAsset,
+              ),
+          ],
 
           // Telefondan özel ses
           ValueListenableBuilder<String?>(
@@ -224,12 +228,44 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             altYazi: 'ROY MESSANGER varsayılan zili',
           ),
           // Zil değeri = res/raw kaynak adı (CallKit ringtonePath).
-          for (final s in zilSecenekleri)
+          const _AltBaslik('Zil melodileri'),
+          for (final s in zilMelodileri)
             _zilTile(
               deger: s.rawKaynak!,
               baslik: s.ad,
               onizlemeAsset: s.onizlemeAsset,
             ),
+          // Kısa bildirim sesleri de zil olabilir (döngüyle tekrarlanır);
+          // liste uzamasın diye katlanır — seçili olan buradaysa açık gelir.
+          ValueListenableBuilder<String>(
+            valueListenable: _ayar.aramaZili,
+            builder: (context, secili, _) {
+              final kisalar = [
+                for (final s in zilSecenekleri)
+                  if (!zilMelodileri.contains(s)) s,
+              ];
+              return Theme(
+                data: Theme.of(context)
+                    .copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  initiallyExpanded:
+                      kisalar.any((s) => s.rawKaynak == secili),
+                  iconColor: Renkler.neon,
+                  collapsedIconColor: Renkler.metinSoluk,
+                  title: Text('Kısa sesler (zil olarak tekrarlanır)',
+                      style: Yazi.etiket),
+                  children: [
+                    for (final s in kisalar)
+                      _zilTile(
+                        deger: s.rawKaynak!,
+                        baslik: s.ad,
+                        onizlemeAsset: s.onizlemeAsset,
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
 
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
@@ -343,7 +379,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
                   ),
-            onTap: () => _ayar.aramaZiliAyarla(deger),
+            onTap: () {
+              _ayar.aramaZiliAyarla(deger);
+              if (onizlemeAsset != null) _onizle(onizlemeAsset);
+            },
           ),
         );
       },
@@ -372,10 +411,30 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
                   ),
-            onTap: () => _sesSec(deger),
+            onTap: () {
+              _sesSec(deger);
+              if (onizlemeAsset != null) _onizle(onizlemeAsset);
+            },
           ),
         );
       },
+    );
+  }
+}
+
+/// Ses listelerindeki kategori başlığı ("Melodik", "Zarif"…).
+class _AltBaslik extends StatelessWidget {
+  final String yazi;
+  const _AltBaslik(this.yazi);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 20, 4),
+      child: Text(
+        yazi,
+        style: Yazi.stil(12, FontWeight.w700, Renkler.metinSoluk),
+      ),
     );
   }
 }
