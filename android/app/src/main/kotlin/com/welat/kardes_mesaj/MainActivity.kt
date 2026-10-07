@@ -150,6 +150,33 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    // Bu uygulamanın sistem bildirim ayarları (Ayarlar →
+                    // "Telefonun bildirim ayarları"). Android 8 altında ya da
+                    // ekran yoksa uygulama detay ayarlarına düşer.
+                    "bildirimAyarlariniAc" -> {
+                        try {
+                            if (Build.VERSION.SDK_INT >= 26) {
+                                startActivity(
+                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                )
+                            } else {
+                                throw IllegalStateException("eski android")
+                            }
+                        } catch (e: Exception) {
+                            try {
+                                startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:$packageName")
+                                    )
+                                )
+                            } catch (_: Exception) {
+                            }
+                        }
+                        result.success(null)
+                    }
+
                     // Sistem dosya seçicisini açar (PDF, Word, Excel…). Seçilen
                     // dosya uygulamanın önbelleğine KOPYALANIR (content:// URI
                     // kalıcı değil) ve {yol, ad, boyut, mime} döner. Boyut

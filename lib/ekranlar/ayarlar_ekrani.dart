@@ -21,17 +21,65 @@ class AyarlarEkrani extends StatefulWidget {
   State<AyarlarEkrani> createState() => _AyarlarEkraniState();
 }
 
-class _AyarlarEkraniState extends State<AyarlarEkrani> {
+class _AyarlarEkraniState extends State<AyarlarEkrani>
+    with WidgetsBindingObserver {
   final _ayar = AyarServisi.instance;
   final _onizleyici = AudioPlayer();
 
   // Özel ses seçimi için native kanal (sistem zil sesi seçici).
   static const _sesKanali = MethodChannel('kardes_mesaj/sesler');
 
+  /// Telefonun ayarlarında bu uygulamanın bildirimleri açık mı? Kapalıysa
+  /// (Android 13+ izni reddedildiyse de) hiçbir bildirim görünmez → uyarı.
+  bool _telefondaAcik = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _telefonKontrol();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _onizleyici.dispose();
     super.dispose();
+  }
+
+  // Telefonun ayarlarından dönünce uyarı kendiliğinden kalksın.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _telefonKontrol();
+  }
+
+  Future<void> _telefonKontrol() async {
+    final acik = await BildirimServisi.telefondaBildirimAcikMi();
+    if (mounted && acik != _telefondaAcik) {
+      setState(() => _telefondaAcik = acik);
+    }
+  }
+
+  Future<void> _bildirimiDene() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!await BildirimServisi.telefondaBildirimAcikMi()) {
+      if (!mounted) return;
+      setState(() => _telefondaAcik = false);
+      messenger.showSnackBar(SnackBar(
+        content: const Text(
+            'Telefonun ayarlarında bu uygulamanın bildirimleri kapalı.'),
+        action: SnackBarAction(
+          label: 'Aç',
+          onPressed: BildirimServisi.sistemBildirimAyarlariniAc,
+        ),
+      ));
+      return;
+    }
+    if (!await BildirimServisi.instance.bildirimiDene()) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Bildirimler kapalı — önce yukarıdaki anahtarı aç.'),
+      ));
+    }
   }
 
   Future<void> _sesSec(String deger) async {
@@ -130,6 +178,22 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
 
           const _BolumBaslik('Bildirimler'),
 
+          if (!_telefondaAcik)
+            _Kart(
+              child: ListTile(
+                leading: Icon(Icons.notifications_off_rounded,
+                    color: Renkler.tehlike),
+                title: Text('Telefon bildirimleri kapalı', style: Yazi.isim),
+                subtitle: Text(
+                  'Mesaj ve arama bildirimleri görünmez. Açmak için dokun.',
+                  style: Yazi.kucuk,
+                ),
+                trailing: Icon(Icons.chevron_right_rounded,
+                    color: Renkler.metinSoluk),
+                onTap: BildirimServisi.sistemBildirimAyarlariniAc,
+              ),
+            ),
+
           ValueListenableBuilder<bool>(
             valueListenable: _ayar.bildirimAcik,
             builder: (context, acik, _) => _Kart(
@@ -155,6 +219,29 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                 value: acik,
                 onChanged: _titresimDegistir,
               ),
+            ),
+          ),
+
+          _Kart(
+            child: ListTile(
+              leading: Icon(Icons.notifications_active_rounded,
+                  color: Renkler.neon),
+              title: Text('Bildirimi dene', style: Yazi.isim),
+              subtitle: Text('Seçili ses ve titreşimle örnek bildirim',
+                  style: Yazi.kucuk),
+              onTap: _bildirimiDene,
+            ),
+          ),
+
+          _Kart(
+            child: ListTile(
+              leading: Icon(Icons.tune_rounded, color: Renkler.neon),
+              title: Text('Telefonun bildirim ayarları', style: Yazi.isim),
+              subtitle: Text('Kilit ekranı, rozet, açılır bildirim…',
+                  style: Yazi.kucuk),
+              trailing: Icon(Icons.open_in_new_rounded,
+                  size: 18, color: Renkler.metinSoluk),
+              onTap: BildirimServisi.sistemBildirimAyarlariniAc,
             ),
           ),
 

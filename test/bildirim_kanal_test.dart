@@ -256,4 +256,14 @@ void main() {
       );
     });
   });
+
+  test('sohbet bildirim kimliği: kararlı, 31 bit pozitif, sohbete özgü', () {
+    final a = BildirimServisi.sohbetBildirimKimligi('uidA_uidB');
+    // Aynı sohbetin yeni mesajı eskisinin YERİNE geçer (aynı kimlik)…
+    expect(a, BildirimServisi.sohbetBildirimKimligi('uidA_uidB'));
+    // …başka sohbetinki ayrı durur.
+    expect(a, isNot(BildirimServisi.sohbetBildirimKimligi('uidA_uidC')));
+    expect(a, inInclusiveRange(0, 0x7fffffff));
+    expect(BildirimServisi.sohbetBildirimKimligi(''), inInclusiveRange(0, 0x7fffffff));
+  });
 }

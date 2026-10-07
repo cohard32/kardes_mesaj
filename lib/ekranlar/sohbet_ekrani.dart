@@ -471,6 +471,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    BildirimServisi.instance.sohbetGizlendi(widget.chatId);
     _yaziyorTimer?.cancel();
     // ⚠️ Zamanlayıcı iptal edildiği için "yazmayı bıraktım" sinyali artık
     // ondan gelmeyecek → yazarken ekrandan çıkılırsa karşı tarafta
@@ -520,6 +521,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _onPlanda = state == AppLifecycleState.resumed;
     // Uygulamaya dönüldü → bu arada gelen mesajlar ŞİMDİ görüldü sayılır.
     if (_onPlanda) _gorulduGuncelle();
+    if (_onPlanda && _rotaGorunur) {
+      BildirimServisi.instance.sohbetGorunur(widget.chatId);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      BildirimServisi.instance.sohbetGizlendi(widget.chatId);
+    }
   }
 
   // ---- GÖRÜLDÜ / OKUNDU ----
@@ -1051,6 +1058,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // ModalRoute'a bağımlılık: üstteki ekran kapanıp bu sohbet tekrar en üste
     // gelince build yeniden çalışır → bekleyen mesajlar o an "görüldü" olur.
     _rotaGorunur = ModalRoute.of(context)?.isCurrent ?? true;
+    // Bu sohbet gözünün önündeyken mesajları bir de bildirim olarak çalmasın.
+    if (_rotaGorunur && _onPlanda) {
+      BildirimServisi.instance.sohbetGorunur(widget.chatId);
+    }
     return PopScope(
       // Geri tuşu önce aramayı kapatır.
       canPop: !_aramaAcik,

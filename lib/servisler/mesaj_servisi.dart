@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/mesaj.dart';
 import '../yardimcilar/link_metni.dart';
+import '../yardimcilar/mesaj_metni.dart';
 import 'bildirim_servisi.dart';
 import 'kullanici_servisi.dart';
 import 'medya_servisi.dart';
@@ -154,7 +155,14 @@ class MesajServisi {
     // Açıklama varsa önizleme "📷 açıklama", yoksa "📷 Fotoğraf".
     final etiket = Mesaj(id: '', gonderen: uid, metin: metin, tip: tip).onizleme;
     await _metaGuncelle(chatId, alanUid, etiket);
-    unawaited(_bildir(alanUid, chatId, etiket));
+    // Bildirimde fotoğrafın (videoda kapağın) küçük hâli görünsün.
+    final kapak = tip == MesajTipi.video ? videoKapakUrl(url) : null;
+    final resim = switch (tip) {
+      MesajTipi.resim => kucukResimUrl(url),
+      MesajTipi.video when kapak != null => kucukResimUrl(kapak),
+      _ => null,
+    };
+    unawaited(_bildir(alanUid, chatId, etiket, resimUrl: resim));
     return true;
   }
 
@@ -375,13 +383,19 @@ class MesajServisi {
   /// verince bu, yakalanmamış async hata olarak global işleyiciye düşüp
   /// HER mesajda hata raporu yazdırıyordu. Mesaj zaten gönderildi; bildirim
   /// gitmezse yalnızca ize düşülür.
-  Future<void> _bildir(String alanUid, String chatId, String onizleme) async {
+  Future<void> _bildir(
+    String alanUid,
+    String chatId,
+    String onizleme, {
+    String? resimUrl,
+  }) async {
     try {
       final ad = await _benimAdim();
       await BildirimServisi.instance.hedefeBildirimGonder(
         hedefUid: alanUid,
         baslik: ad,
         govde: onizleme,
+        resimUrl: resimUrl,
         ekstraData: {
           'tur': 'mesaj',
           'chatId': chatId,

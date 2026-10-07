@@ -94,6 +94,13 @@
                 <data android:mimeType="video/*"/>
             </intent-filter>
         </activity>
+        <!-- FCM bildirimlerinin küçük ikonu (tek renk) ve vurgu rengi -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_bildirim" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/km_bildirim" />
         <!-- FCM varsayilan bildirim kanali (bildirim_servisi.dart ile ayni id) -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
