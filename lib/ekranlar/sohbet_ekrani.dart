@@ -1390,7 +1390,6 @@ class _MesajBalonu extends StatelessWidget {
                 top: 4,
                 bottom: mesaj.tepki != null ? 16 : 4,
               ),
-              padding: EdgeInsets.all(medyaMi ? 5 : 12),
               // Kendi balonun: neon gradient + ÇOK HAFİF glow (göz yormasın).
               // Karşı taraf: zeminden net ayrışan koyu yüzey, GLOW YOK.
               // Organik köşe — dip köşe kısa. 3D his gradient + iç ışıktan gelir.
@@ -1407,59 +1406,67 @@ class _MesajBalonu extends StatelessWidget {
                     ),
               child: Stack(
                 children: [
-                  // Neon balonda iç highlight/gölge (3D hacim)
-                  if (benimMi)
-                    const Positioned.fill(child: IcIsik(kose: Kose.balonBen)),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (mesaj.yanitMi) _alintiKutusu(),
-                      _icerik(context),
-                      Padding(
-                        padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Gelen, henüz dinlenmemiş sesli mesaj → neon nokta
-                            if (mesaj.tip == MesajTipi.ses &&
-                                !benimMi &&
-                                !mesaj.sesDinlendi) ...[
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: Kutular.neonNokta(),
-                              ),
-                              const SizedBox(width: 5),
-                            ],
-                            Text(
-                              _saat(mesaj.zaman),
-                              style: benimMi ? Yazi.zamanAccent : Yazi.zaman,
-                            ),
-                            if (benimMi) ...[
-                              const SizedBox(width: 4),
-                              Icon(
-                                mesaj.goruldu ? Icons.done_all : Icons.done,
-                                size: 15,
-                                color: mesaj.goruldu
-                                    ? Renkler.metinKoyu
-                                    : Renkler.metinKoyuYumusak,
-                              ),
-                              // Gönderdiğim ses dinlendiyse kulaklık
+                  // Cam parıltısı BALONUN TAMAMINDA (bkz. BalonParilti):
+                  // iç boşluk aşağıdaki Padding'de, parıltı onun dışında.
+                  Positioned.fill(
+                    child: BalonParilti(
+                      kose: benimMi ? Kose.balonBen : Kose.balonKarsi,
+                      vurgu: benimMi,
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(medyaMi ? 5 : 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (mesaj.yanitMi) _alintiKutusu(),
+                        _icerik(context),
+                        Padding(
+                          padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Gelen, henüz dinlenmemiş sesli mesaj → neon nokta
                               if (mesaj.tip == MesajTipi.ses &&
-                                  mesaj.sesDinlendi) ...[
+                                  !benimMi &&
+                                  !mesaj.sesDinlendi) ...[
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: Kutular.neonNokta(),
+                                ),
+                                const SizedBox(width: 5),
+                              ],
+                              Text(
+                                _saat(mesaj.zaman),
+                                style: benimMi ? Yazi.zamanAccent : Yazi.zaman,
+                              ),
+                              if (benimMi) ...[
                                 const SizedBox(width: 4),
                                 Icon(
-                                  Icons.headset_rounded,
-                                  size: 13,
-                                  color: Renkler.metinKoyu,
+                                  mesaj.goruldu ? Icons.done_all : Icons.done,
+                                  size: 15,
+                                  color: mesaj.goruldu
+                                      ? Renkler.metinKoyu
+                                      : Renkler.metinKoyuYumusak,
                                 ),
+                                // Gönderdiğim ses dinlendiyse kulaklık
+                                if (mesaj.tip == MesajTipi.ses &&
+                                    mesaj.sesDinlendi) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.headset_rounded,
+                                    size: 13,
+                                    color: Renkler.metinKoyu,
+                                  ),
+                                ],
                               ],
                             ],
-                          ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),

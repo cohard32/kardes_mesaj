@@ -535,20 +535,25 @@ class Kose {
   static const double buyuk = 20;
   static const double kart = 24;
 
+  /// Mesaj balonu köşeleri. Biraz daha yuvarlak (22) ve "kuyruk" köşesi
+  /// 6 yerine 8 → balon daha yumuşak, daha az köşeli görünür.
+  static const double balon = 22;
+  static const double balonUc = 8;
+
   /// Kendi mesaj balonun (sağ alt köşe kısa)
   static const BorderRadius balonBen = BorderRadius.only(
-    topLeft: Radius.circular(buyuk),
-    topRight: Radius.circular(buyuk),
-    bottomRight: Radius.circular(kucuk),
-    bottomLeft: Radius.circular(buyuk),
+    topLeft: Radius.circular(balon),
+    topRight: Radius.circular(balon),
+    bottomRight: Radius.circular(balonUc),
+    bottomLeft: Radius.circular(balon),
   );
 
   /// Karşı tarafın balonu (sol alt köşe kısa)
   static const BorderRadius balonKarsi = BorderRadius.only(
-    topLeft: Radius.circular(buyuk),
-    topRight: Radius.circular(buyuk),
-    bottomRight: Radius.circular(buyuk),
-    bottomLeft: Radius.circular(kucuk),
+    topLeft: Radius.circular(balon),
+    topRight: Radius.circular(balon),
+    bottomRight: Radius.circular(balon),
+    bottomLeft: Radius.circular(balonUc),
   );
 
   /// Kart (sol alt köşe kısa)
@@ -804,6 +809,44 @@ class IcIsik extends StatelessWidget {
               ),
             ],
             stops: const [0, 0.55, 1],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Mesaj balonunun cam parıltısı — balonun TAMAMINI kaplar.
+///
+/// ⚠️ Eskiden balonda [IcIsik] kullanılıyordu ve iç boşluğun (padding)
+/// İÇİNE yerleştirilmişti: parıltı yalnız yazı alanını kaplıyor, üstte %50
+/// beyaz / altta koyu geçişiyle balonun içinde keskin kenarlı ikinci bir kutu
+/// gibi duruyordu. Bu katman balonla aynı köşeye sahip, kenarsız ve yumuşak:
+/// üstten aşağı sönen hafif bir ışık; alt gölge yok (derinliği dış gölge verir).
+class BalonParilti extends StatelessWidget {
+  final BorderRadius kose;
+
+  /// Vurgu (kendi) balonunda daha belirgin, koyu (gelen) balonda çok hafif.
+  final bool vurgu;
+
+  const BalonParilti({super.key, required this.kose, this.vurgu = true});
+
+  @override
+  Widget build(BuildContext context) {
+    final guc = vurgu ? 0.22 : 0.05;
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: kose,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: guc),
+              Colors.white.withValues(alpha: guc * 0.25),
+              Colors.white.withValues(alpha: 0),
+            ],
+            stops: const [0, 0.35, 0.7],
           ),
         ),
       ),
