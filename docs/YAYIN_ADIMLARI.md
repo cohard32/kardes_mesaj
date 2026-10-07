@@ -15,8 +15,15 @@ Sıra önemlidir; adımları yukarıdan aşağıya uygulayın.
 Kurallar 7 kritik/yüksek açığı kapatır (onaysız arkadaşlık, sahte engel,
 başkasının sohbetini işgal…). Yayınlanmadan bu açıklar canlıda açıktır.
 Yeni kurallar **mevcut v1.8.0 uygulamalarıyla uyumludur** — önce kural, sonra
-uygulama sırası güvenlidir. (Yeni uygulama kurallardan önce çıkarsa yanıtlı
-mesajlar reddedilir.)
+uygulama sırası güvenlidir.
+
+> ⚠️ **v1.9.0 APK'sını dağıtmadan ÖNCE kurallar VE dizinler yayında olmalı**
+> (aşağıdaki komut ikisini birlikte yayınlar). Eski kurallarla yeni uygulamada
+> şunlar **reddedilir**: yanıtlı mesaj, link içeren mesaj, mesaj düzenleme,
+> tepkiler (❤️ vb.), dosya/PDF gönderme, cevapsız arama kaydı. Dizinler
+> (`firestore.indexes.json`) olmadan **Medya galerisi** sekmeleri açılmaz.
+> Dizinlerin kurulması birkaç dakika sürebilir (Firebase Konsolu → Firestore →
+> *Dizinler* sekmesinde "Etkin" olunca hazırdır).
 
 **Seçenek A — bir kerelik, elle:**
 ```bash
@@ -75,10 +82,31 @@ Derlerken artık "UYARI: … DEBUG anahtariyla" satırı **görünmemeli**.
 Sürüm numarası depoda zaten `1.9.0+31` (pubspec.yaml ve `mevcutSurum` birlikte;
 farklı olurlarsa `test/surum_test.dart` CI'da kırılır).
 ```bash
+git pull
+flutter pub get
 flutter build apk --release --target-platform android-arm64
 ```
 GitHub Releases'e `v1.9.0` etiketiyle yükleyin. Uygulamalar açılışta artık
 **sürüm notlarını gösterip onay ister** ("Sonra" / "Bu sürümü atla" / "Güncelle").
+Notlar uygulamada **düz metin** görünür (Markdown işlenmez); aşağıdaki metni
+olduğu gibi sürümün açıklamasına yapıştırabilirsiniz:
+
+```text
+Neler yeni:
+• Fotoğraflar önce küçük ve hızlı açılır, dokununca ORİJİNAL boyutta; fotoğraf ve videoları telefona indirme düğmesi
+• Kameradan çekip gönderme, birden çok fotoğraf/video seçme, fotoğrafa açıklama
+• Dosya / PDF gönderme
+• Başka uygulamadan "Paylaş → ROY MESSANGER"
+• Mesajı sağa kaydırınca yanıt, çift dokununca ❤️, herkesin tepkisi ayrı görünür
+• Mesaj düzenleme (15 dk), sohbet içinde arama, tıklanabilir linkler
+• Tarih ayraçları (Bugün / Dün / tarih), taslak, "Bunu bana hatırlat"
+• Ses kaydını yukarı kaydırıp kilitleme, göndermeden önce dinleme
+• Cevapsız arama kaydı, görüşmede bağlantı kalitesi, görüntülü aramada küçük pencere
+• Medya galerisi (Medya / Belgeler / Linkler), Davet et, doğum günleri ve önemli günler
+• Yenilenen bildirimler: gönderenin fotoğrafı, fotoğraf önizlemesi, sohbet başına ayrı bildirim, Ayarlar → Bildirimi dene
+• 13 yeni bildirim sesi ve 7 zil melodisi
+• Yeni 3B uygulama ikonu
+```
 
 ## 4. Aktarıcı — APK'daki gizli anahtarları çıkarın (önerilen, sonra)
 
@@ -105,6 +133,11 @@ Ayrıntılı rehber: [`sunucu/aktarici/README.md`](../sunucu/aktarici/README.md)
    - İsteğe bağlı: `firestore.rules`'taki yorum hâlindeki "public fcmToken yasağı"
      satırlarını açıp yayınlayın.
 
+> **Aktarıcı zaten kuruluysa** bu sürümle bir kez yeniden yayınlayın
+> (`cd sunucu/aktarici && npx wrangler deploy`): fotoğraf mesajının bildirimde
+> görünen küçük hâli yalnız yeni aktarıcıdan geçer. Yayınlamazsanız hiçbir şey
+> bozulmaz; bildirimler yalnız fotoğrafsız gelir.
+
 > Sessize alma özelliği gizlilik gereği yalnız aktarıcılı derlemede görünür
 > (liste artık yalnız sahibinin okuyabildiği bir belgede; kararı aktarıcı verir).
 
@@ -117,8 +150,15 @@ Ayrıntılı rehber: [`sunucu/aktarici/README.md`](../sunucu/aktarici/README.md)
 - **App Check:** *İzleme* modunda bırakın, **zorlamayı açmayın.** Uygulama
   Google Play dışından (GitHub) dağıtıldığı için Play Integrity doğrulaması
   büyük olasılıkla hiç %100'e çıkmaz; zorlama tüm kullanıcıları kilitleyebilir.
-- **Cloudinary:** *Settings → Upload → kardes_mesaj* ön ayarında maksimum dosya
-  boyutu (ör. 100 MB) ve izinli biçimler (jpg, png, gif, webp, mp4, m4a) tanımlayın.
+- **Cloudinary:**
+  - *Settings → Upload → kardes_mesaj* ön ayarında maksimum dosya boyutunu
+    (ör. 100 MB) tanımlayın. **İzinli biçimler (Allowed formats) alanını boş
+    bırakın** ya da belge türlerini de ekleyin (pdf, doc, docx, xls, xlsx, ppt,
+    pptx, txt, csv, zip, rar, apk): yalnız medya biçimleri yazılırsa dosya/PDF
+    gönderimi "yüklenemedi" hatası verir.
+  - *Settings → Security → "Allow delivery of PDF and ZIP files"* kutusunu
+    işaretleyin. Ücretsiz hesaplarda varsayılan kapalıdır; kapalıyken gönderilen
+    PDF/ZIP karşı tarafta **açılmaz/inmez**.
 
 ## 6. Telefonda kontrol listesi
 
@@ -140,6 +180,27 @@ Bu dalın arama/bildirim değişiklikleri gerçek cihaz gerektirir:
 - [ ] Profil → Doğum günleri ve önemli günler: kendi doğum gününü ayarla, bir gün ekle; arkadaşın profilinde 🎂 görünüyor
 - [ ] Hatırlatıcı testi: bugünün tarihine bir gün ekle → ertesi yıl için kurulur; yarının tarihine ekleyip telefon saatini ertesi gün 09:01'e alınca bildirim geliyor
 
-> **Mesaj düzenleme için kuralları YENİDEN yayınlayın** (1. adım, aynı komut):
-> `firebase deploy --only firestore:rules --project kardes-mesaj`. Yayınlanmadan
-> düzenleme "Düzenlenemedi" hatası verir; diğer her şey çalışır.
+**v1.9.0 yeni özellikleri** (1. adımdaki kurallar + dizinler yayında olmalı):
+
+- [ ] Fotoğraf balonda hızlı (küçük hâli) görünüyor; dokununca netleşip orijinal boyutta açılıyor, iki parmakla / çift dokunarak yakınlaşıyor
+- [ ] Tam ekran fotoğraf ve videoda ⬇ (Galeriye indir) → telefonun galerisinde "ROY MESSANGER" albümünde görünüyor
+- [ ] Videoya dokununca tam ekran oynatıcı açılıyor (balonda artık yerinde oynamıyor)
+- [ ] Sohbette gün değişiminde "Bugün", "Dün", tarih ayraçları görünüyor
+- [ ] Cevaplanmayan / reddedilen arama sohbette arama kaydı olarak düşüyor; kayda dokununca geri arıyor
+- [ ] 📎 → Fotoğraf çek / Video çek ile gönderme; Galeri'den birden çok seçim; her fotoğrafa ayrı açıklama
+- [ ] 📎 → Belge / Dosya: PDF gönder, karşı tarafta dokununca açılıyor; uzun bas → Telefona kaydet
+- [ ] Galeri / Dosyalar uygulamasında Paylaş → ROY MESSANGER → kişi seç → sohbete geliyor
+- [ ] Mesajı sağa kaydır → yanıt; çift dokun → ❤️; iki kişi farklı tepki verince ikisi de görünüyor
+- [ ] Yarım bırakılan mesaj sohbet listesinde "Taslak:" diye görünüyor, geri dönünce yerinde
+- [ ] Mesaja uzun bas → Bunu bana hatırlat → seçilen saatte bildirim; dokununca o sohbet açılıyor
+- [ ] Mikrofona basılı tut, yukarı kaydır → kilitleniyor; durdurunca dinleyip sonra gönderiliyor
+- [ ] Görüşmede sinyal çubukları görünüyor; görüntülü aramada Ana ekran tuşu → küçük pencere
+- [ ] Sohbette sağ üst ⋮ → Medya, belgeler ve linkler: üç sekme doluyor
+- [ ] Profil / Arkadaşlar → Davet et → paylaşım menüsü açılıyor
+- [ ] Doğum günü olan arkadaşın sohbetinde pasta 🎂 ve konfeti; kendi doğum gününde açılışta konfeti
+- [ ] Ayarlar → Bildirim sesi: sese dokununca seçiliyor ve çalıyor; zil melodileri çalıyor
+- [ ] Ayarlar → **Bildirimi dene**: seçili sesle bildirim geliyor; telefon bildirimleri kapalıysa kırmızı uyarı kartı çıkıyor
+- [ ] Uygulama açıkken başka bir sohbetten mesaj: bildirimde gönderenin fotoğrafı; fotoğraf mesajında fotoğrafın kendisi
+- [ ] O sohbet açıkken gelen mesaj ayrıca bildirim çalmıyor; sohbete girince bildirim çubuğundaki bildirimi kalkıyor
+- [ ] İki farklı kişiden mesaj → iki ayrı bildirim (biri diğerini silmiyor)
+- [ ] Ana ekranda yeni 3B ikon; Android 13+ "Temalı simgeler" açıkken tek renkli sürümü görünüyor

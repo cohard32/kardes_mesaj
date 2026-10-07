@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show Color;
 import 'hata_servisi.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -22,6 +23,9 @@ import 'arama_durumu.dart';
 import 'app_check_servisi.dart';
 import 'ayar_servisi.dart';
 import 'ses_secenekleri.dart';
+import '../yardimcilar/bildirim_yuku.dart';
+import '../yardimcilar/mesaj_metni.dart';
+import 'resim_onbellegi.dart';
 
 /// Bildirim KANAL KİMLİĞİ seçimi — SAF mantık (Firebase/eklenti yok →
 /// `test/bildirim_kanal_test.dart` ile birim testi yapılır).
@@ -399,6 +403,15 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       'tip': data['tip'],
       'arayan': arayan,
     },
+    // Eklentinin kendi "Missed call" bildirimi KAPALI: İngilizce ve
+    // dokununca sohbeti açmıyor. Yerine ARAYAN, bağlanmayan aramayı
+    // sohbete "📞 Cevapsız sesli arama" olarak yazar ve normal mesaj
+    // bildirimi gelir (bkz. AramaEkrani._cevapsizKaydet) — arayan erken
+    // vazgeçtiğinde de (eklenti o durumda zaten göstermiyordu).
+    missedCallNotification: const NotificationParams(
+      showNotification: false,
+      isShowCallback: false,
+    ),
     android: AndroidParams(
       // ⚠️ FALSE — KASITLI (kullanıcı ekran görüntüsü: bildirim YARIM görünüyor,
       // arayan adı ve Kabul/Reddet düğmeleri kırpılıyordu).
@@ -633,9 +646,14 @@ class BildirimServisi {
     await _mesajlasma.requestPermission(alert: true, badge: true, sound: true);
 
     // 2) Yerel bildirim eklentisi + kanal (foreground'da göstermek için)
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    // Küçük ikon TEK RENK olmalı (res/drawable/ic_bildirim.xml); renkli
+    // uygulama ikonu durum çubuğunda beyaz kare görünüyordu.
+    const androidInit = AndroidInitializationSettings('@drawable/ic_bildirim');
     await _yerel.initialize(
       settings: const InitializationSettings(android: androidInit),
+      // Yerel bildirime (mesaj hatırlatması, ön planda gösterilen mesaj)
+      // dokununca ilgili sohbet açılır.
+      onDidReceiveNotificationResponse: _yerelBildirimeTiklandi,
     );
 
     await _kanallariKur();
@@ -643,6 +661,29 @@ class BildirimServisi {
     // 3) Uygulama AÇIKKEN gelen mesajı elle göster (foreground'da sistem
     //    otomatik göstermez)
     FirebaseMessaging.onMessage.listen(_gelenMesaj);
+  }
+
+  /// Yerel bildirime dokununca açılacak sohbet. main.dart bağlar
+  /// (navigator orada; dairesel import olmasın diye geri çağırım).
+  void Function(String chatId, String karsiUid)? sohbetAc;
+
+  void _yerelBildirimeTiklandi(NotificationResponse yanit) {
+    final hedef = sohbetYukuCoz(yanit.payload);
+    if (hedef != null) sohbetAc?.call(hedef.chatId, hedef.karsiUid);
+  }
+
+  /// Uygulama KAPALIYKEN yerel bildirime dokunularak açıldıysa ilgili
+  /// sohbeti açar. AnaKabuk ilk karede çağırır (navigator hazır).
+  Future<void> acilisBildiriminiIsle() async {
+    try {
+      final d = await _yerel.getNotificationAppLaunchDetails();
+      final yanit = d?.notificationResponse;
+      if ((d?.didNotificationLaunchApp ?? false) && yanit != null) {
+        _yerelBildirimeTiklandi(yanit);
+      }
+    } catch (e) {
+      HataServisi.instance.iz('acilis bildirimi okunamadi: $e');
+    }
   }
 
   /// Foreground mesaj yönlendiricisi.
@@ -672,7 +713,7 @@ class BildirimServisi {
       }
     }
     if (await aramaMesajiIsle(message.data)) return; // çağrı/iptal ise bitti
-    _foregroundGoster(message); // normal mesaj bildirimi
+    await _foregroundGoster(message); // normal mesaj bildirimi
   }
 
   AndroidFlutterLocalNotificationsPlugin? get _android =>
@@ -701,11 +742,31 @@ class BildirimServisi {
     //  - varsayilan: raw yok + playSound → sistem varsayılan sesi çalar
     //  - sessiz: playSound false (sessiz_tsz aynı zamanda SESSİZE ALINMIŞ
     //    sohbetlerin kanalı, bkz. [BildirimKanali.sessizSohbet])
+    //
+    // ⚠️ YALNIZ GEREKENLER kurulur: varsayılan, sessiz (sessize alınmış
+    // sohbetlerin kanalı) ve SEÇİLİ ses. Eskiden listedeki HER ses için
+    // kurulurdu; 20'yi aşan seste Android'in bildirim ayarlarında 40+ kanal
+    // birikirdi. Seçim değişince [sesGuncelle] yenisini kurar.
     for (final s in sesSecenekleri) {
+      if (!_kanaliGerekli(s.anahtar)) continue;
       await _ciftKanalKur(a, s.anahtar, s.ad,
           aciklama: s.aciklama, sesCalsin: s.sesCalar, ses: _rawSes(s));
     }
     await _ozelKanaliKur();
+  }
+
+  bool _kanaliGerekli(String anahtar) =>
+      anahtar == 'varsayilan' ||
+      anahtar == 'sessiz' ||
+      anahtar == AyarServisi.instance.bildirimSesi.value;
+
+  /// Seçili HAZIR sesin kanal çiftini kurar (zaten varsa dokunmaz).
+  Future<void> _seciliKanaliKur() async {
+    final a = _android;
+    final s = sesSecenegiBul(AyarServisi.instance.bildirimSesi.value);
+    if (a == null || s == null) return;
+    await _ciftKanalKur(a, s.anahtar, s.ad,
+        aciklama: s.aciklama, sesCalsin: s.sesCalar, ses: _rawSes(s));
   }
 
   /// [secim] için titreşimli (`km_v3_<secim>`) ve titreşimsiz
@@ -773,6 +834,7 @@ class BildirimServisi {
   /// kimlikle) kurar + tercihi Firestore'a yayınlar (push bu kanalı kullanır
   /// → kapalıyken bile doğru ses).
   Future<void> sesGuncelle() async {
+    await _seciliKanaliKur();
     await _ozelKanaliKur();
     await kanalYayinla();
   }
@@ -789,13 +851,95 @@ class BildirimServisi {
     } catch (_) {}
   }
 
-  void _foregroundGoster(RemoteMessage message) {
+  /// Ekranda ŞU AN açık olan sohbet (SohbetEkrani yazar/siler). O sohbetten
+  /// gelen mesaj için ön planda bildirim gösterilmez — mesaj zaten gözünün
+  /// önünde (eskiden okuduğun sohbetin her mesajı bir de bildirim olarak
+  /// çalıyordu).
+  String? acikSohbet;
+
+  /// Sohbet ekranı GÖRÜNÜR oldu: o sohbetin mesajı artık bildirim olarak
+  /// çalmaz; bildirim çubuğunda bekleyen bildirimi de kalkar (okundu say).
+  void sohbetGorunur(String chatId) {
+    if (acikSohbet == chatId) return;
+    acikSohbet = chatId;
+    unawaited(_sohbetBildiriminiKaldir(chatId));
+  }
+
+  /// Sohbet ekranı kapandı ya da uygulama arka plana gitti.
+  void sohbetGizlendi(String chatId) {
+    if (acikSohbet == chatId) acikSohbet = null;
+  }
+
+  Future<void> _sohbetBildiriminiKaldir(String chatId) async {
+    try {
+      // Uygulama açıkken bizim çizdiğimiz…
+      await _yerel.cancel(id: sohbetBildirimKimligi(chatId));
+      // …ve kapalıyken sistemin (FCM) 'km_<chatId>' etiketiyle çizdiği.
+      await _yerel.cancel(id: 0, tag: 'km_$chatId');
+    } catch (_) {}
+  }
+
+  /// Bildirim vurgu rengi (res/values/colors.xml → km_bildirim ile aynı).
+  static const Color _vurgu = Color(0xFF4E9A12);
+
+  /// Sohbet başına SABİT bildirim kimliği: aynı kişiden yeni mesaj eskisinin
+  /// yerine geçer, farklı kişilerinki ayrı durur.
+  static int sohbetBildirimKimligi(String chatId) =>
+      int.parse(BildirimKanali.fnv1a32Hex(chatId), radix: 16) & 0x7fffffff;
+
+  // uid → profil fotoğrafı (ön plan bildirimlerinde her mesajda profil
+  // okunmasın; 10 dk geçerli).
+  final Map<String, ({String? foto, DateTime zaman})> _fotoOnbellek = {};
+
+  /// Gönderenin avatarının telefondaki (önbellek) dosya yolu; yoksa null.
+  Future<String?> _avatarDosyasi(String? uid) async {
+    if (uid == null || uid.isEmpty) return null;
+    try {
+      var kayit = _fotoOnbellek[uid];
+      if (kayit == null ||
+          DateTime.now().difference(kayit.zaman) > const Duration(minutes: 10)) {
+        final d = (await _users.doc(uid).get()).data();
+        kayit = (foto: d?['fotoUrl'] as String?, zaman: DateTime.now());
+        _fotoOnbellek[uid] = kayit;
+      }
+      final foto = kayit.foto;
+      if (foto == null || foto.isEmpty) return null;
+      return await _resimDosyasi(kucukResimUrl(foto, genislik: 256));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [url]'deki resmi (önbellekten ya da indirip) dosya olarak verir.
+  /// En fazla 4 sn beklenir: bildirim resim yüzünden gecikmesin.
+  Future<String?> _resimDosyasi(String? url) async {
+    if (url == null || url.isEmpty) return null;
+    try {
+      await ResimOnbellegi.instance
+          .getir(url)
+          .timeout(const Duration(seconds: 4));
+      return (await ResimOnbellegi.instance.dosyasi(url))?.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Uygulama AÇIKKEN gelen mesajın bildirimi (arka planda sistem çizer).
+  /// Gönderenin fotoğrafı büyük ikon; fotoğraf mesajıysa fotoğrafın kendisi
+  /// açılınca büyük görünür; dokununca o sohbet açılır.
+  Future<void> _foregroundGoster(RemoteMessage message) async {
     final bildirim = message.notification;
     if (bildirim == null) return;
 
     // Kullanıcı ayarlarını uygula
     final ayar = AyarServisi.instance;
     if (!ayar.bildirimAcik.value) return; // bildirim kapalıysa gösterme
+
+    final chatId = message.data['chatId']?.toString();
+    final g = message.data['gonderenUid']?.toString();
+    final gonderenUid = g == null || g.isEmpty ? null : g;
+    // O sohbet zaten ekranda → bildirim yok.
+    if (chatId != null && chatId == acikSohbet) return;
 
     // SESSİZE ALINMIŞ sohbet: gönderen bunu alıcının listesine bakıp push'un
     // kanalına yazdı ([BildirimKanali.alicininKanali]). Ön planda bildirimi
@@ -806,30 +950,107 @@ class BildirimServisi {
 
     // Ses hem kanaldan (Android 8+) hem detaydan (8 altı) gelir.
     final secim = sessizSohbet ? 'sessiz' : ayar.bildirimSesi.value;
-    _yerel.show(
-      id: bildirim.hashCode,
+    final sonuclar = await Future.wait([
+      _avatarDosyasi(gonderenUid),
+      _resimDosyasi(bildirim.android?.imageUrl),
+    ]);
+    final avatar = sonuclar[0];
+    final resim = sonuclar[1];
+    final buyukIkon = avatar == null ? null : FilePathAndroidBitmap(avatar);
+    final StyleInformation stil = resim != null
+        ? BigPictureStyleInformation(
+            FilePathAndroidBitmap(resim),
+            largeIcon: buyukIkon,
+            hideExpandedLargeIcon: true,
+            contentTitle: bildirim.title,
+            summaryText: bildirim.body,
+          )
+        // Uzun mesaj tek satıra kırpılmasın, açılabilir olsun
+        : BigTextStyleInformation(
+            bildirim.body ?? '',
+            contentTitle: bildirim.title,
+          );
+    await _yerel.show(
+      id: chatId == null ? bildirim.hashCode : sohbetBildirimKimligi(chatId),
       title: bildirim.title,
       body: bildirim.body,
+      // Dokununca bu sohbet açılır (bkz. _yerelBildirimeTiklandi).
+      payload: chatId != null && gonderenUid != null
+          ? sohbetYuku(chatId, gonderenUid)
+          : null,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           sessizSohbet ? BildirimKanali.sessizSohbet : aktifKanalId,
           'ROY MESSANGER',
           importance: Importance.high,
           priority: Priority.high,
-          icon: '@mipmap/ic_launcher',
+          icon: '@drawable/ic_bildirim',
+          color: _vurgu,
+          largeIcon: buyukIkon,
           playSound: secim != 'sessiz',
           sound: _sesFor(secim),
           enableVibration: !sessizSohbet && ayar.titresimAcik.value,
           // Kilit ekranında içerik GİZLENMESİN (yarım görünme sorunu)
           visibility: NotificationVisibility.public,
-          // Uzun mesaj tek satıra kırpılmasın, açılabilir olsun
-          styleInformation: BigTextStyleInformation(
-            bildirim.body ?? '',
-            contentTitle: bildirim.title,
-          ),
+          category: AndroidNotificationCategory.message,
+          styleInformation: stil,
         ),
       ),
     );
+  }
+
+  /// Ayarlar → "Bildirimi dene": SEÇİLİ ses ve titreşimle örnek bildirim
+  /// (uygulama açıkken de görünür). Bildirimler kapalıysa false.
+  Future<bool> bildirimiDene() async {
+    final ayar = AyarServisi.instance;
+    if (!ayar.bildirimAcik.value) return false;
+    await _seciliKanaliKur();
+    await _ozelKanaliKur();
+    final secim = ayar.bildirimSesi.value;
+    await _yerel.show(
+      id: 424242,
+      title: 'ROY MESSANGER',
+      body: 'Bildirimler çalışıyor 🎉 Mesaj geldiğinde böyle görünür ve duyulur.',
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          aktifKanalId,
+          'ROY MESSANGER',
+          importance: Importance.high,
+          priority: Priority.high,
+          icon: '@drawable/ic_bildirim',
+          color: _vurgu,
+          playSound: secim != 'sessiz',
+          sound: _sesFor(secim),
+          enableVibration: ayar.titresimAcik.value,
+          visibility: NotificationVisibility.public,
+        ),
+      ),
+    );
+    return true;
+  }
+
+  /// Telefonun ayarlarında bu uygulamanın bildirimleri AÇIK mı? (Kapalıysa
+  /// hiçbir bildirim görünmez — uygulama içi ayardan bağımsız.)
+  /// `static`: Firebase'e dokunmaz (Ayarlar ekranı testlerde de açılır).
+  static Future<bool> telefondaBildirimAcikMi() async {
+    try {
+      return await FlutterLocalNotificationsPlugin()
+              .resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin>()
+              ?.areNotificationsEnabled() ??
+          true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Android'in bu uygulamaya ait bildirim ayarları ekranını açar.
+  static Future<void> sistemBildirimAyarlariniAc() async {
+    try {
+      await _native.invokeMethod<void>('bildirimAyarlariniAc');
+    } catch (e) {
+      HataServisi.instance.iz('bildirim ayarlari acilamadi: $e');
+    }
   }
 
   /// GİZLİ kullanıcı belgesi: `users/{uid}/ozel/bildirim`
@@ -989,10 +1210,18 @@ class BildirimServisi {
     required String baslik,
     required String govde,
     Map<String, String>? ekstraData,
+    String? resimUrl,
   }) async {
+    final chatId = ekstraData?['chatId'];
     // [kanal] null → channel_id yazılmaz (aktarıcı kendisi seçer).
     Map<String, dynamic> mesaj(String? kanal) => <String, dynamic>{
-          'notification': {'title': baslik, 'body': govde},
+          'notification': {
+            'title': baslik,
+            'body': govde,
+            // Fotoğraf mesajında bildirim açılınca fotoğraf görünür
+            // (Cloudinary küçük hâli; aktarıcı yalnız bu bulutu geçirir).
+            'image': ?resimUrl,
+          },
           'data': ?ekstraData,
           'android': {
             // ⚠️ HTTP v1 kanonik değeri BÜYÜK harf 'HIGH'. Küçük harf 'high'
@@ -1003,7 +1232,11 @@ class BildirimServisi {
             'notification': {
               'channel_id': ?kanal,
               'visibility': 'PUBLIC',
-              'tag': 'km_$hedefUid',
+              // SOHBET BAŞINA tek bildirim: aynı kişinin yeni mesajı
+              // eskisinin yerine geçer, farklı kişilerinki ayrı durur.
+              // ⚠️ Eskiden alıcı başına tekti ('km_<alıcı>'): Ali'den sonra
+              // Ayşe yazınca Ali'nin bildirimi KAYBOLUYORDU.
+              'tag': chatId != null ? 'km_$chatId' : 'km_$hedefUid',
             },
           },
         };

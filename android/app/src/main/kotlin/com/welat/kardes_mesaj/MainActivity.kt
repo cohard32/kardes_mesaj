@@ -22,8 +22,24 @@ class MainActivity : FlutterActivity() {
     private val sesSecKodu = 4671
     private var beklenenSonuc: MethodChannel.Result? = null
 
+    // Kotlin → Dart olayları (paylaşım geldi, küçük pencere değişti).
+    private var olayKanali: MethodChannel? = null
+
+    // Görüntülü görüşme bağlıyken true: ana ekrana dönülünce görüntü
+    // küçük pencerede (PiP) sürer.
+    private var pipIzinli = false
+
+    // Dosya (PDF, Word…) seçici
+    private val dosyaSecKodu = 4672
+    private var beklenenDosya: MethodChannel.Result? = null
+    private var dosyaAzami: Long = Long.MAX_VALUE
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        olayKanali = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "kardes_mesaj/olaylar"
+        )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, kanalAdi)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -134,6 +150,109 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    // Bu uygulamanın sistem bildirim ayarları (Ayarlar →
+                    // "Telefonun bildirim ayarları"). Android 8 altında ya da
+                    // ekran yoksa uygulama detay ayarlarına düşer.
+                    "bildirimAyarlariniAc" -> {
+                        try {
+                            if (Build.VERSION.SDK_INT >= 26) {
+                                startActivity(
+                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                )
+                            } else {
+                                throw IllegalStateException("eski android")
+                            }
+                        } catch (e: Exception) {
+                            try {
+                                startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:$packageName")
+                                    )
+                                )
+                            } catch (_: Exception) {
+                            }
+                        }
+                        result.success(null)
+                    }
+
+                    // Sistem dosya seçicisini açar (PDF, Word, Excel…). Seçilen
+                    // dosya uygulamanın önbelleğine KOPYALANIR (content:// URI
+                    // kalıcı değil) ve {yol, ad, boyut, mime} döner. Boyut
+                    // `azami`yı aşıyorsa kopyalanmaz: {hata: "buyuk", ad, boyut}.
+                    // Vazgeçilirse null.
+                    // Başka uygulamadan "Paylaş → ROY" ile gelen ve henüz
+                    // işlenmemiş içerik (bkz. PaylasimAktivitesi). Alınınca silinir.
+                    "paylasimAl" -> result.success(PaylasimDeposu.al())
+
+                    // Metni telefonun paylaşım menüsüyle gönderir ("Davet et").
+                    "metinPaylas" -> {
+                        val metin = call.argument<String>("metin") ?: ""
+                        val baslik = call.argument<String>("baslik") ?: "Paylaş"
+                        try {
+                            val gonder = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, metin)
+                            }
+                            startActivity(Intent.createChooser(gonder, baslik))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+
+                    // KÜÇÜK PENCERE (PiP). Android 12+: izin verilince sistem
+                    // ana ekrana dönüşte kendiliğinden geçer (otomatik giriş);
+                    // 8-11: onUserLeaveHint'te elle geçilir.
+                    "kucukPencereIzni" -> {
+                        pipIzinli = call.argument<Boolean>("acik") == true
+                        if (Build.VERSION.SDK_INT >= 31) {
+                            try {
+                                setPictureInPictureParams(pipParametreleri())
+                            } catch (e: Exception) {
+                                // Cihaz PiP desteklemiyor: sessizce geç.
+                            }
+                        }
+                        // Görüşme küçük penceredeyken BİTTİ → pencereyi kapat
+                        // (yoksa köşede minik bir sohbet ekranı kalırdı).
+                        if (!pipIzinli && Build.VERSION.SDK_INT >= 26 &&
+                            isInPictureInPictureMode
+                        ) {
+                            moveTaskToBack(false)
+                        }
+                        result.success(null)
+                    }
+
+                    "kucukPencereyeGec" -> {
+                        var ok = false
+                        if (Build.VERSION.SDK_INT >= 26) {
+                            ok = try {
+                                enterPictureInPictureMode(pipParametreleri())
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        result.success(ok)
+                    }
+
+                    "dosyaSec" -> {
+                        beklenenDosya?.success(null) // aynı anda tek seçici
+                        beklenenDosya = result
+                        dosyaAzami = (call.argument<Number>("azami"))?.toLong()
+                            ?: Long.MAX_VALUE
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                        }
+                        try {
+                            startActivityForResult(intent, dosyaSecKodu)
+                        } catch (e: Exception) {
+                            beklenenDosya = null
+                            result.error("SECICI_YOK", e.message, null)
+                        }
+                    }
+
                     // Mesajdaki bağlantıyı tarayıcıda (ya da adresi işleyen
                     // uygulamada) açar. ⚠️ Yalnız http/https: karşı tarafın
                     // gönderdiği "intent:" / "file:" / "content:" gibi bir
@@ -175,16 +294,21 @@ class MainActivity : FlutterActivity() {
         val kaynak = if (yol != null) java.io.File(yol) else null
         if (kaynak == null || !kaynak.exists()) return false
         val video = mime.startsWith("video")
-        val klasor = if (video)
-            android.os.Environment.DIRECTORY_MOVIES
-        else android.os.Environment.DIRECTORY_PICTURES
+        // Foto/video DEĞİLSE (PDF, Word…) → İndirilenler klasörü.
+        val belge = !video && !mime.startsWith("image")
+        val klasor = when {
+            video -> android.os.Environment.DIRECTORY_MOVIES
+            belge -> android.os.Environment.DIRECTORY_DOWNLOADS
+            else -> android.os.Environment.DIRECTORY_PICTURES
+        }
 
         if (Build.VERSION.SDK_INT >= 29) {
-            val koleksiyon = if (video)
-                android.provider.MediaStore.Video.Media
-                    .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            else android.provider.MediaStore.Images.Media
-                .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val hacim = android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY
+            val koleksiyon = when {
+                video -> android.provider.MediaStore.Video.Media.getContentUri(hacim)
+                belge -> android.provider.MediaStore.Downloads.getContentUri(hacim)
+                else -> android.provider.MediaStore.Images.Media.getContentUri(hacim)
+            }
             val degerler = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, ad)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -238,9 +362,70 @@ class MainActivity : FlutterActivity() {
         return true
     }
 
+    @android.annotation.TargetApi(26)
+    private fun pipParametreleri(): android.app.PictureInPictureParams {
+        val b = android.app.PictureInPictureParams.Builder()
+            .setAspectRatio(android.util.Rational(9, 16))
+        if (Build.VERSION.SDK_INT >= 31) {
+            b.setAutoEnterEnabled(pipIzinli)
+            b.setSeamlessResizeEnabled(false)
+        }
+        return b.build()
+    }
+
+    // Kullanıcı "ev" tuşuyla uygulamadan çıkıyor → görüşme sürüyorsa küçük
+    // pencere. (Android 12+ bunu otomatik giriş ile kendisi yapar.)
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (pipIzinli && Build.VERSION.SDK_INT in 26..30) {
+            try {
+                enterPictureInPictureMode(pipParametreleri())
+            } catch (e: Exception) {
+                // Desteklenmiyor
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        olayKanali?.invokeMethod("pipDegisti", isInPictureInPictureMode)
+    }
+
+    // Uygulama AÇIKKEN yeni paylaşım geldi (PaylasimAktivitesi bu aktiviteyi
+    // SINGLE_TOP ile öne getirdi) → Dart'a haber ver, o da paylasimAl ister.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(PaylasimAktivitesi.EK_ANAHTAR, false)) {
+            olayKanali?.invokeMethod("paylasimGeldi", null)
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == dosyaSecKodu) {
+            val sonuc = beklenenDosya ?: return
+            beklenenDosya = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) {
+                sonuc.success(null)
+                return
+            }
+            val azami = dosyaAzami
+            Thread {
+                try {
+                    val bilgi = uriyiKopyala(this, uri, azami)
+                    runOnUiThread { sonuc.success(bilgi) }
+                } catch (e: Exception) {
+                    runOnUiThread { sonuc.error("KOPYALANAMADI", e.message, null) }
+                }
+            }.start()
+            return
+        }
         if (requestCode != sesSecKodu) return
         val sonuc = beklenenSonuc ?: return
         beklenenSonuc = null

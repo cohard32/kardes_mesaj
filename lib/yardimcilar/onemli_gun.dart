@@ -107,3 +107,11 @@ int hatirlaticiBildirimKimligi(String id) {
   }
   return 700000000 + (h % 100000000);
 }
+
+/// Bugün bu kişinin ("AA-GG") doğum günü mü? (29 Şubat artık olmayan
+/// yılda 28 Şubat'ta kutlanır.)
+bool bugunDogumGunuMu(String? dogumGunu, {DateTime? simdi}) {
+  final ag = ayGunCoz(dogumGunu);
+  if (ag == null) return false;
+  return kalanGun(ag.ay, ag.gun, simdi ?? DateTime.now()) == 0;
+}

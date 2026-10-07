@@ -21,17 +21,65 @@ class AyarlarEkrani extends StatefulWidget {
   State<AyarlarEkrani> createState() => _AyarlarEkraniState();
 }
 
-class _AyarlarEkraniState extends State<AyarlarEkrani> {
+class _AyarlarEkraniState extends State<AyarlarEkrani>
+    with WidgetsBindingObserver {
   final _ayar = AyarServisi.instance;
   final _onizleyici = AudioPlayer();
 
   // Özel ses seçimi için native kanal (sistem zil sesi seçici).
   static const _sesKanali = MethodChannel('kardes_mesaj/sesler');
 
+  /// Telefonun ayarlarında bu uygulamanın bildirimleri açık mı? Kapalıysa
+  /// (Android 13+ izni reddedildiyse de) hiçbir bildirim görünmez → uyarı.
+  bool _telefondaAcik = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _telefonKontrol();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _onizleyici.dispose();
     super.dispose();
+  }
+
+  // Telefonun ayarlarından dönünce uyarı kendiliğinden kalksın.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _telefonKontrol();
+  }
+
+  Future<void> _telefonKontrol() async {
+    final acik = await BildirimServisi.telefondaBildirimAcikMi();
+    if (mounted && acik != _telefondaAcik) {
+      setState(() => _telefondaAcik = acik);
+    }
+  }
+
+  Future<void> _bildirimiDene() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!await BildirimServisi.telefondaBildirimAcikMi()) {
+      if (!mounted) return;
+      setState(() => _telefondaAcik = false);
+      messenger.showSnackBar(SnackBar(
+        content: const Text(
+            'Telefonun ayarlarında bu uygulamanın bildirimleri kapalı.'),
+        action: SnackBarAction(
+          label: 'Aç',
+          onPressed: BildirimServisi.sistemBildirimAyarlariniAc,
+        ),
+      ));
+      return;
+    }
+    if (!await BildirimServisi.instance.bildirimiDene()) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Bildirimler kapalı — önce yukarıdaki anahtarı aç.'),
+      ));
+    }
   }
 
   Future<void> _sesSec(String deger) async {
@@ -130,6 +178,22 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
 
           const _BolumBaslik('Bildirimler'),
 
+          if (!_telefondaAcik)
+            _Kart(
+              child: ListTile(
+                leading: Icon(Icons.notifications_off_rounded,
+                    color: Renkler.tehlike),
+                title: Text('Telefon bildirimleri kapalı', style: Yazi.isim),
+                subtitle: Text(
+                  'Mesaj ve arama bildirimleri görünmez. Açmak için dokun.',
+                  style: Yazi.kucuk,
+                ),
+                trailing: Icon(Icons.chevron_right_rounded,
+                    color: Renkler.metinSoluk),
+                onTap: BildirimServisi.sistemBildirimAyarlariniAc,
+              ),
+            ),
+
           ValueListenableBuilder<bool>(
             valueListenable: _ayar.bildirimAcik,
             builder: (context, acik, _) => _Kart(
@@ -158,15 +222,42 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             ),
           ),
 
+          _Kart(
+            child: ListTile(
+              leading: Icon(Icons.notifications_active_rounded,
+                  color: Renkler.neon),
+              title: Text('Bildirimi dene', style: Yazi.isim),
+              subtitle: Text('Seçili ses ve titreşimle örnek bildirim',
+                  style: Yazi.kucuk),
+              onTap: _bildirimiDene,
+            ),
+          ),
+
+          _Kart(
+            child: ListTile(
+              leading: Icon(Icons.tune_rounded, color: Renkler.neon),
+              title: Text('Telefonun bildirim ayarları', style: Yazi.isim),
+              subtitle: Text('Kilit ekranı, rozet, açılır bildirim…',
+                  style: Yazi.kucuk),
+              trailing: Icon(Icons.open_in_new_rounded,
+                  size: 18, color: Renkler.metinSoluk),
+              onTap: BildirimServisi.sistemBildirimAyarlariniAc,
+            ),
+          ),
+
           const _BolumBaslik('Bildirim Sesi'),
 
-          // Hazır sesler TEK KAYNAKTAN (kanalları da buradan kurulur).
-          for (final s in sesSecenekleri)
-            _sesTile(
-              deger: s.anahtar,
-              baslik: s.ad,
-              onizlemeAsset: s.onizlemeAsset,
-            ),
+          // Hazır sesler TEK KAYNAKTAN, kategorilere göre gruplu.
+          // Bir sese dokunmak onu seçer VE çalar (önizleme).
+          for (final g in kategorilereAyir(sesSecenekleri)) ...[
+            if (g.kategori != 'Temel') _AltBaslik(g.kategori),
+            for (final s in g.sesler)
+              _sesTile(
+                deger: s.anahtar,
+                baslik: s.ad,
+                onizlemeAsset: s.onizlemeAsset,
+              ),
+          ],
 
           // Telefondan özel ses
           ValueListenableBuilder<String?>(
@@ -224,12 +315,44 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
             altYazi: 'ROY MESSANGER varsayılan zili',
           ),
           // Zil değeri = res/raw kaynak adı (CallKit ringtonePath).
-          for (final s in zilSecenekleri)
+          const _AltBaslik('Zil melodileri'),
+          for (final s in zilMelodileri)
             _zilTile(
               deger: s.rawKaynak!,
               baslik: s.ad,
               onizlemeAsset: s.onizlemeAsset,
             ),
+          // Kısa bildirim sesleri de zil olabilir (döngüyle tekrarlanır);
+          // liste uzamasın diye katlanır — seçili olan buradaysa açık gelir.
+          ValueListenableBuilder<String>(
+            valueListenable: _ayar.aramaZili,
+            builder: (context, secili, _) {
+              final kisalar = [
+                for (final s in zilSecenekleri)
+                  if (!zilMelodileri.contains(s)) s,
+              ];
+              return Theme(
+                data: Theme.of(context)
+                    .copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  initiallyExpanded:
+                      kisalar.any((s) => s.rawKaynak == secili),
+                  iconColor: Renkler.neon,
+                  collapsedIconColor: Renkler.metinSoluk,
+                  title: Text('Kısa sesler (zil olarak tekrarlanır)',
+                      style: Yazi.etiket),
+                  children: [
+                    for (final s in kisalar)
+                      _zilTile(
+                        deger: s.rawKaynak!,
+                        baslik: s.ad,
+                        onizlemeAsset: s.onizlemeAsset,
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
 
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
@@ -343,7 +466,10 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
                   ),
-            onTap: () => _ayar.aramaZiliAyarla(deger),
+            onTap: () {
+              _ayar.aramaZiliAyarla(deger);
+              if (onizlemeAsset != null) _onizle(onizlemeAsset);
+            },
           ),
         );
       },
@@ -372,10 +498,30 @@ class _AyarlarEkraniState extends State<AyarlarEkrani> {
                     tooltip: 'Önizle',
                     onPressed: () => _onizle(onizlemeAsset),
                   ),
-            onTap: () => _sesSec(deger),
+            onTap: () {
+              _sesSec(deger);
+              if (onizlemeAsset != null) _onizle(onizlemeAsset);
+            },
           ),
         );
       },
+    );
+  }
+}
+
+/// Ses listelerindeki kategori başlığı ("Melodik", "Zarif"…).
+class _AltBaslik extends StatelessWidget {
+  final String yazi;
+  const _AltBaslik(this.yazi);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 20, 4),
+      child: Text(
+        yazi,
+        style: Yazi.stil(12, FontWeight.w700, Renkler.metinSoluk),
+      ),
     );
   }
 }

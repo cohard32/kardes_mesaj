@@ -8,30 +8,43 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
-import 'package:video_player/video_player.dart';
 
 import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
+import '../parcalar/balon_hareketleri.dart';
+import '../parcalar/konfeti.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../parcalar/linkli_metin.dart';
 import '../parcalar/mesaj_listesi.dart';
+import '../parcalar/onbellekli_resim.dart';
 import '../servisler/aktarici_servisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/arkadas_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/dosya_servisi.dart';
 import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
+import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/ses_oynatici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
+import '../servisler/hatirlatici_servisi.dart';
+import '../servisler/taslak_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/hatirlatma_zamani.dart';
 import '../yardimcilar/mesaj_metni.dart';
+import '../yardimcilar/onemli_gun.dart';
 import '../yardimcilar/sohbet_arama.dart';
+import '../yardimcilar/tarih_ayraci.dart';
 import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
+import 'medya_goruntuleyici.dart';
+import 'medya_galerisi_ekrani.dart';
+import 'medya_gonder_ekrani.dart';
 import 'profil_goruntule_ekrani.dart';
 
 /// Bir arkadaşla sohbeti açar (yoksa oluşturur) ve ekranı push eder.
@@ -61,7 +74,16 @@ class SohbetEkrani extends StatefulWidget {
   final String chatId;
   final Kullanici karsi;
 
-  const SohbetEkrani({super.key, required this.chatId, required this.karsi});
+  /// Başka uygulamadan "Paylaş → ROY" ile gelen ve bu sohbete gönderilecek
+  /// içerik (bkz. PaylasimHedefiEkrani). Açılışta bir kez işlenir.
+  final GelenPaylasim? paylasim;
+
+  const SohbetEkrani({
+    super.key,
+    required this.chatId,
+    required this.karsi,
+    this.paylasim,
+  });
 
   @override
   State<SohbetEkrani> createState() => _SohbetEkraniState();
@@ -81,6 +103,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Timer? _yaziyorTimer;
   bool _yaziyorGonderildi = false;
   bool _yukleniyor = false;
+  // Birden çok medya gönderilirken "2/5 gönderiliyor…".
+  String? _yuklemeMetni;
 
   // Arama kurulurken (izin + token + kanala katılma birkaç saniye sürebilir)
   // ara düğmeleri pasif ve AppBar'da ilerleme göstergesi var.
@@ -122,6 +146,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Timer? _kayitTimer;
   StreamSubscription<Amplitude>? _ampSub;
   final _kayitYapiliyorVN = ValueNotifier<bool>(false);
+  // KİLİT: kayıtta parmak yukarı kaydırılınca kayıt eller serbest sürer
+  // (bırakınca gönderilmez; sil / durdur-dinle / gönder düğmeleri çıkar).
+  final _kilitliVN = ValueNotifier<bool>(false);
+  // Durdurulmuş, göndermeden önce dinlenen kaydın yolu (null = önizleme yok).
+  final _onizlemeVN = ValueNotifier<String?>(null);
+  int _onizlemeSaniye = 0;
   final _kayitSaniyeVN = ValueNotifier<int>(0);
   final _dalgaVN = ValueNotifier<List<double>>(<double>[]);
   final _iptalBolgesindeVN = ValueNotifier<bool>(false);
@@ -150,6 +180,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   final _vurguVN = ValueNotifier<String?>(null);
   Timer? _vurguTimer;
 
+  // Çift dokunulup ❤️ verilen mesajın kalp animasyonu (mesaj kimliği).
+  final _kalpVN = ValueNotifier<String?>(null);
+  Timer? _kalpTimer;
+
   // SESSİZE ALMA (canlı; başlıktaki ikon + menü metni için).
   bool _sessiz = false;
   StreamSubscription<bool>? _sessizAbone;
@@ -172,6 +206,17 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // geri çıkınca kullanıcı uygulama AÇIKKEN "çevrimdışı" görünüyordu.
     _sohbetServis.okunduIsaretle(widget.chatId); // sohbeti açınca okundu
     HataServisi.instance.iz('SOHBET acildi chat=${widget.chatId}');
+    // Yarım kalan mesaj (TASLAK) yerine konur. ⚠️ Dinleyiciden ÖNCE: yoksa
+    // taslağı geri koymak karşı tarafa "yazıyor…" gönderirdi.
+    if (widget.paylasim == null) {
+      final taslak = TaslakServisi.instance.al(widget.chatId);
+      if (taslak != null) {
+        _mesajCtrl.value = TextEditingValue(
+          text: taslak,
+          selection: TextSelection.collapsed(offset: taslak.length),
+        );
+      }
+    }
     _mesajCtrl.addListener(_yaziyorDinle);
     _odak.addListener(() {
       if (_odak.hasFocus && _emojiAcik) {
@@ -200,6 +245,96 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
+    final paylasim = widget.paylasim;
+    if (paylasim != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _paylasimiIsle(paylasim));
+    }
+    // Küçük sürpriz: bugün karşı tarafın doğum günüyse konfeti (günde bir).
+    if (_dogumGunu) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (await bugunIlkKezMi('dg_${widget.chatId}') && mounted) {
+          konfetiPatlat(context);
+        }
+      });
+    }
+  }
+
+  /// Bugün karşı tarafın doğum günü mü? (sohbetin üstünde kutlama şeridi)
+  bool get _dogumGunu => bugunDogumGunuMu(widget.karsi.dogumGunu);
+
+  /// "Paylaş → ROY" ile gelen içerik: metin/link yazma alanına konur (kişi
+  /// düzenleyip gönderir), foto/video önizleme+açıklama ekranına gider,
+  /// belge onayla gönderilir. Çok büyük dosyalar söylenir.
+  Future<void> _paylasimiIsle(GelenPaylasim p) async {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (p.buyukler.isNotEmpty) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '${p.buyukler.join(', ')} çok büyük olduğu için alınamadı '
+            '(en fazla 100 MB).',
+          ),
+        ),
+      );
+    }
+    final metin = p.metin?.trim();
+    if (metin != null && metin.isNotEmpty) {
+      _mesajCtrl.value = TextEditingValue(
+        text: metin,
+        selection: TextSelection.collapsed(offset: metin.length),
+      );
+      _odak.requestFocus();
+    }
+    final medya = [
+      for (final d in p.dosyalar)
+        if (!d.belgeMi) File(d.yol),
+    ];
+    if (medya.isNotEmpty) await _onizleVeGonder(medya);
+    for (final d in p.dosyalar.where((d) => d.belgeMi)) {
+      if (!mounted) return;
+      if (d.boyut > DosyaServisi.azamiBoyut) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              '"${d.ad}" çok büyük (${boyutMetni(d.boyut)}). '
+              'Belgeler en fazla 10 MB olabilir.',
+            ),
+          ),
+        );
+        continue;
+      }
+      final onay = await showDialog<bool>(
+        context: context,
+        builder: (dc) => AlertDialog(
+          title: const Text('Belge gönderilsin mi?'),
+          content: Text('"${d.ad}" (${boyutMetni(d.boyut)}) '
+              '${widget.karsi.ad} kişisine gönderilecek.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dc, false),
+              child: const Text('Vazgeç'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dc, true),
+              child: const Text('Gönder'),
+            ),
+          ],
+        ),
+      );
+      if (onay != true || !mounted) continue;
+      await _yukleVeGonder(
+        () => _servis.dosyaGonder(
+          widget.chatId,
+          widget.karsi.uid,
+          File(d.yol),
+          ad: d.ad,
+          boyut: d.boyut,
+        ),
+        hata: '"${d.ad}" gönderilemedi.',
+      );
+    }
   }
 
   // Ekran KAPALIYKEN aramanın çalışması için gereken izinler:
@@ -318,6 +453,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             tip: tip,
             baslik: widget.karsi.ad,
             benArayanim: true, // "çalıyor" tonu burada çalar
+            karsiUid: widget.karsi.uid, // bağlanmazsa "cevapsız arama" kaydı
           ),
         ),
       );
@@ -335,6 +471,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    BildirimServisi.instance.sohbetGizlendi(widget.chatId);
     _yaziyorTimer?.cancel();
     // ⚠️ Zamanlayıcı iptal edildiği için "yazmayı bıraktım" sinyali artık
     // ondan gelmeyecek → yazarken ekrandan çıkılırsa karşı tarafta
@@ -351,9 +488,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // (oynatıcı paylaşılan TEK örnektir; dispose edilmez, yalnız durdurulur).
     SesOynaticiServisi.instance.durdur(chatId: widget.chatId);
     _kayitci.dispose();
+    _taslakKaydet();
     _mesajCtrl.dispose();
     _odak.dispose();
     _kayitYapiliyorVN.dispose();
+    _kilitliVN.dispose();
+    _onizlemeVN.dispose();
     _kayitSaniyeVN.dispose();
     _dalgaVN.dispose();
     _iptalBolgesindeVN.dispose();
@@ -362,14 +502,31 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _aramaCtrl.dispose();
     _vurguTimer?.cancel();
     _vurguVN.dispose();
+    _kalpTimer?.cancel();
+    _kalpVN.dispose();
     super.dispose();
+  }
+
+  /// Yazma alanındaki metni TASLAK olarak saklar (boşsa siler). Düzenleme
+  /// sırasındaki metin taslak sayılmaz (o, gönderilmiş bir mesajın metni).
+  void _taslakKaydet() {
+    if (_duzenleVN.value != null) return;
+    TaslakServisi.instance.kaydet(widget.chatId, _mesajCtrl.text);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Uygulama arka plana atılıp öldürülürse dispose çalışmaz → taslak şimdi.
+    if (state == AppLifecycleState.paused) _taslakKaydet();
     _onPlanda = state == AppLifecycleState.resumed;
     // Uygulamaya dönüldü → bu arada gelen mesajlar ŞİMDİ görüldü sayılır.
     if (_onPlanda) _gorulduGuncelle();
+    if (_onPlanda && _rotaGorunur) {
+      BildirimServisi.instance.sohbetGorunur(widget.chatId);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      BildirimServisi.instance.sohbetGizlendi(widget.chatId);
+    }
   }
 
   // ---- GÖRÜLDÜ / OKUNDU ----
@@ -514,7 +671,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // ---- MEDYA ----
 
-  // Ek (ataç) menüsü: foto / video seç
+  // Ek (ataç) menüsü: kamera / galeri (çoklu) / GIF / belge
   void _ekMenu() {
     showModalBottomSheet<void>(
       context: context,
@@ -525,19 +682,29 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(Icons.photo, color: Renkler.neon),
-              title: const Text('Fotoğraf'),
+              leading: Icon(Icons.photo_library_outlined, color: Renkler.neon),
+              title: const Text('Galeri'),
+              subtitle: Text('Fotoğraf ve video — birden çok seçebilirsin',
+                  style: Yazi.kucuk),
               onTap: () {
                 Navigator.pop(context);
-                _fotoSec();
+                _galeridenSec();
               },
             ),
             ListTile(
-              leading: Icon(Icons.videocam, color: Renkler.neon),
-              title: const Text('Video'),
+              leading: Icon(Icons.photo_camera_outlined, color: Renkler.neon),
+              title: const Text('Fotoğraf çek'),
               onTap: () {
                 Navigator.pop(context);
-                _videoSec();
+                _kameraFoto();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.videocam_outlined, color: Renkler.neon),
+              title: const Text('Video çek'),
+              onTap: () {
+                Navigator.pop(context);
+                _kameraVideo();
               },
             ),
             ListTile(
@@ -546,6 +713,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               onTap: () {
                 Navigator.pop(context);
                 _gifSec();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.description_outlined, color: Renkler.neon),
+              title: const Text('Belge / Dosya'),
+              subtitle: Text('PDF, Word, Excel… (en fazla 10 MB)',
+                  style: Yazi.kucuk),
+              onTap: () {
+                Navigator.pop(context);
+                _dosyaSec();
               },
             ),
           ],
@@ -568,18 +745,155 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
   }
 
-  Future<void> _fotoSec() async {
-    // ⚠️ imageQuality VERİLMEZ → fotoğraf ORİJİNAL/SAF haliyle gider.
-    // Eskiden `imageQuality: 70` vardı; image_picker fotoğrafı %70 kalitede
-    // YENİDEN KODLUYORDU (görünür kalite kaybı). maxWidth/maxHeight de
-    // verilmez, yoksa yeniden boyutlandırılır.
-    final x = await _resimSecici.pickImage(source: ImageSource.gallery);
-    if (x != null) await _medyaGonder(File(x.path), MesajTipi.resim);
+  // ⚠️ imageQuality / maxWidth VERİLMEZ → fotoğraf ORİJİNAL/SAF haliyle
+  // gider. Eskiden `imageQuality: 70` vardı; image_picker fotoğrafı %70
+  // kalitede YENİDEN KODLUYORDU (görünür kalite kaybı).
+
+  /// Galeriden BİRDEN ÇOK fotoğraf/video seç → önizleme → gönder.
+  Future<void> _galeridenSec() async {
+    try {
+      final secilen = await _resimSecici.pickMultipleMedia(limit: 30);
+      if (secilen.isEmpty) return;
+      await _onizleVeGonder([for (final x in secilen) File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('galeri secilemedi: $e');
+    }
   }
 
-  Future<void> _videoSec() async {
-    final x = await _resimSecici.pickVideo(source: ImageSource.gallery);
-    if (x != null) await _medyaGonder(File(x.path), MesajTipi.video);
+  Future<void> _kameraFoto() async {
+    try {
+      final x = await _resimSecici.pickImage(source: ImageSource.camera);
+      if (x != null) await _onizleVeGonder([File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('kamera acilamadi: $e');
+      _kameraHatasi();
+    }
+  }
+
+  Future<void> _kameraVideo() async {
+    try {
+      final x = await _resimSecici.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(minutes: 5),
+      );
+      if (x != null) await _onizleVeGonder([File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('kamera acilamadi: $e');
+      _kameraHatasi();
+    }
+  }
+
+  void _kameraHatasi() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Kamera açılamadı. Kamera iznini kontrol et.')),
+    );
+  }
+
+  /// Önizleme/açıklama ekranını açar; "Gönder" denirse hepsini SIRAYLA
+  /// gönderir (üstte "2/5 gönderiliyor…").
+  Future<void> _onizleVeGonder(List<File> dosyalar) async {
+    if (!mounted) return;
+    final liste = await Navigator.of(context).push<List<GonderilecekMedya>>(
+      MaterialPageRoute(
+        builder: (_) =>
+            MedyaGonderEkrani(dosyalar: dosyalar, kime: widget.karsi.ad),
+      ),
+    );
+    if (liste == null || liste.isEmpty || !mounted) return;
+    setState(() => _yukleniyor = true);
+    var basarisiz = 0;
+    for (var i = 0; i < liste.length; i++) {
+      if (mounted && liste.length > 1) {
+        setState(() => _yuklemeMetni = '${i + 1}/${liste.length} gönderiliyor…');
+      }
+      final m = liste[i];
+      // Ekrandan çıkılsa da gönderim SÜRER (servis widget'a bağlı değil).
+      final ok = await _servis.medyaGonder(
+        widget.chatId,
+        widget.karsi.uid,
+        m.dosya,
+        m.tip,
+        aciklama: m.aciklama,
+      );
+      if (!ok) basarisiz++;
+    }
+    if (!mounted) return;
+    setState(() {
+      _yukleniyor = false;
+      _yuklemeMetni = null;
+    });
+    if (basarisiz > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            liste.length == 1
+                ? 'Gönderilemedi. İnternet bağlantını kontrol et.'
+                : '$basarisiz öğe gönderilemedi. İnternet bağlantını kontrol et.',
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Telefondan belge seçip gönderir (Cloudinary ücretsiz: en fazla 10 MB).
+  Future<void> _dosyaSec() async {
+    final messenger = ScaffoldMessenger.of(context);
+    SecilenDosya? d;
+    try {
+      d = await DosyaServisi.instance.sec();
+    } on DosyaCokBuyuk catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '"${e.ad}" çok büyük (${boyutMetni(e.boyut)}). '
+            'Belgeler en fazla 10 MB olabilir.',
+          ),
+        ),
+      );
+      return;
+    } catch (e) {
+      HataServisi.instance.iz('dosya secilemedi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Dosya seçilemedi.')),
+      );
+      return;
+    }
+    if (d == null || !mounted) return;
+    final secilen = d;
+    await _yukleVeGonder(
+      () => _servis.dosyaGonder(
+        widget.chatId,
+        widget.karsi.uid,
+        File(secilen.yol),
+        ad: secilen.ad,
+        boyut: secilen.boyut,
+      ),
+      hata: 'Dosya gönderilemedi. İnternet bağlantını kontrol et.',
+    );
+    // Önbelleğe alınan kopya artık gereksiz.
+    try {
+      await File(secilen.yol).delete();
+    } catch (_) {}
+  }
+
+  /// Yükleme çubuğunu göstererek [gorev]'i çalıştırır; başarısızsa [hata].
+  Future<void> _yukleVeGonder(
+    Future<bool> Function() gorev, {
+    required String hata,
+  }) async {
+    setState(() => _yukleniyor = true);
+    var ok = false;
+    try {
+      ok = await gorev();
+    } catch (e) {
+      HataServisi.instance.iz('gonderim hatasi: $e');
+    }
+    if (!mounted) return;
+    setState(() => _yukleniyor = false);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hata)));
+    }
   }
 
   // ---- SESLİ MESAJ: BASILI TUT → KAYDET, BIRAK → GÖNDER, SOLA KAYDIR → İPTAL
@@ -629,16 +943,25 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _kayitYapiliyorVN.value = true;
   }
 
-  /// Parmak sola kaydıkça iptal bölgesine girildi mi (çöp kutusu).
-  void _kayitSurukle(double dx) {
-    if (!_kayitYapiliyorVN.value) return;
-    final iptal = dx < -70;
+  /// Parmak sola kaydıkça iptal bölgesine girildi mi (çöp kutusu);
+  /// YUKARI kaydırılınca kayıt KİLİTLENİR (eller serbest).
+  void _kayitSurukle(Offset o) {
+    if (!_kayitYapiliyorVN.value || _kilitliVN.value) return;
+    if (o.dy < -80 && o.dx > -50) {
+      _iptalBolgesindeVN.value = false;
+      _kilitliVN.value = true;
+      HapticFeedback.mediumImpact();
+      return;
+    }
+    final iptal = o.dx < -70;
     if (_iptalBolgesindeVN.value != iptal) _iptalBolgesindeVN.value = iptal;
   }
 
   /// Parmak kalktı → iptal bölgesindeyse çöpe at, değilse gönder.
+  /// Kilitliyse HİÇBİR ŞEY yapma: kayıt sürer, düğmelerle bitirilir.
   Future<void> _kayitBitir() async {
     if (!_kayitYapiliyorVN.value) return;
+    if (_kilitliVN.value) return;
     if (_iptalBolgesindeVN.value) {
       await _kayitIptal();
       return;
@@ -665,7 +988,42 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
     if (yol != null) await _medyaGonder(File(yol), MesajTipi.ses);
+  }
+
+  /// Kilitli kayıtta "durdur": kayıt biter, GÖNDERİLMEZ — önce dinlenir.
+  Future<void> _kayitDurdurOnizle() async {
+    final sn = _kayitSaniyeVN.value;
+    final yol = await _kayitci.stop();
+    await _kayitTemizle();
+    _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
+    if (yol == null) return;
+    if (sn < 1) {
+      try {
+        await File(yol).delete();
+      } catch (_) {}
+      return;
+    }
+    _onizlemeSaniye = sn;
+    _onizlemeVN.value = yol;
+  }
+
+  /// Önizlenen kaydı gönder / sil.
+  Future<void> _onizlemeGonder() async {
+    final yol = _onizlemeVN.value;
+    _onizlemeVN.value = null;
+    if (yol != null) await _medyaGonder(File(yol), MesajTipi.ses);
+  }
+
+  Future<void> _onizlemeSil() async {
+    final yol = _onizlemeVN.value;
+    _onizlemeVN.value = null;
+    if (yol == null) return;
+    try {
+      await File(yol).delete();
+    } catch (_) {}
   }
 
   // İptal: kaydı sil, gönderme
@@ -674,6 +1032,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
     _iptalBolgesindeVN.value = false;
     if (yol != null) {
       try {
@@ -683,24 +1042,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 
   Future<void> _medyaGonder(File dosya, MesajTipi tip) async {
-    setState(() => _yukleniyor = true);
-    final ok = await _servis.medyaGonder(
-      widget.chatId,
-      widget.karsi.uid,
-      dosya,
-      tip,
+    await _yukleVeGonder(
+      () => _servis.medyaGonder(widget.chatId, widget.karsi.uid, dosya, tip),
+      hata: 'Gönderilemedi. İnternet bağlantını kontrol et.',
     );
-    if (!mounted) return;
-    setState(() => _yukleniyor = false);
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Medya gönderilemedi. Cloudinary ayarı yapılmamış olabilir.',
-          ),
-        ),
-      );
-    }
     // ⚠️ Eskiden burada (gönderim BİTTİKTEN sonra) `_zorlaKaydir = true`
     // kuruluyordu; mesaj ise yerel yazımla çok önce akışa düşmüş oluyordu →
     // bayrak askıda kalıp dakikalar sonra karşının ilgisiz mesajında listeyi
@@ -713,6 +1058,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // ModalRoute'a bağımlılık: üstteki ekran kapanıp bu sohbet tekrar en üste
     // gelince build yeniden çalışır → bekleyen mesajlar o an "görüldü" olur.
     _rotaGorunur = ModalRoute.of(context)?.isCurrent ?? true;
+    // Bu sohbet gözünün önündeyken mesajları bir de bildirim olarak çalmasın.
+    if (_rotaGorunur && _onPlanda) {
+      BildirimServisi.instance.sohbetGorunur(widget.chatId);
+    }
     return PopScope(
       // Geri tuşu önce aramayı kapatır.
       canPop: !_aramaAcik,
@@ -765,21 +1114,32 @@ class _SohbetEkraniState extends State<SohbetEkrani>
               onPressed:
                   _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.video),
             ),
-            // ⚠️ Menü (tek seçeneği "Sessize al") YALNIZ aktarıcılı derlemede:
-            // gizlilik gereği sessiz sohbet listesi artık yalnız SAHİBİNİN
-            // okuyabildiği gizli belgede (users/{uid}/ozel/bildirim). Sessizi
-            // bildirim GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
-            // aktarıcıdır; aktarıcısız (eski yol) derlemede gönderen karşının
-            // listesini okuyamaz → seçenek hiçbir şey yapmazken "sessize
-            // alındı" demek yanıltıcı olurdu.
-            if (AktariciServisi.etkin)
-              PopupMenuButton<String>(
-                tooltip: 'Diğer',
-                color: Renkler.yuzey,
-                onSelected: (secim) {
-                  if (secim == 'sessiz') _sessizDegistir();
-                },
-                itemBuilder: (_) => [
+            PopupMenuButton<String>(
+              tooltip: 'Diğer',
+              color: Renkler.yuzey,
+              onSelected: (secim) {
+                if (secim == 'sessiz') _sessizDegistir();
+                if (secim == 'galeri') _galeriyiAc();
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem<String>(
+                  value: 'galeri',
+                  child: Row(
+                    children: [
+                      Icon(Icons.perm_media_outlined,
+                          color: Renkler.neon, size: 20),
+                      const SizedBox(width: 12),
+                      const Text('Medya, belgeler ve linkler'),
+                    ],
+                  ),
+                ),
+                // ⚠️ "Sessize al" YALNIZ aktarıcılı derlemede: gizlilik
+                // gereği sessiz sohbet listesi yalnız SAHİBİNİN okuyabildiği
+                // gizli belgede (users/{uid}/ozel/bildirim). Sessizi bildirim
+                // GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
+                // aktarıcıdır; aktarıcısız derlemede seçenek hiçbir şey
+                // yapmazken "sessize alındı" demek yanıltıcı olurdu.
+                if (AktariciServisi.etkin)
                   PopupMenuItem<String>(
                     value: 'sessiz',
                     child: Row(
@@ -796,8 +1156,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       ],
                     ),
                   ),
-                ],
-              ),
+              ],
+            ),
           ],
         ),
         body: Zemin(
@@ -808,6 +1168,34 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 LinearProgressIndicator(
                   color: Renkler.neon,
                   backgroundColor: Renkler.yuzey,
+                ),
+              if (_yukleniyor && _yuklemeMetni != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(_yuklemeMetni!, style: Yazi.kucuk),
+                ),
+              if (_dogumGunu)
+                GestureDetector(
+                  onTap: () => konfetiPatlat(context),
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Renkler.neonSis,
+                      borderRadius: Kose.kartKose,
+                      border: Border.all(color: Renkler.neon),
+                    ),
+                    child: Text(
+                      '🎂 Bugün ${widget.karsi.ad} doğum gününde! '
+                      'Bir mesajla kutla 🎉',
+                      textAlign: TextAlign.center,
+                      style: Yazi.stil(14, FontWeight.w700, Renkler.metin),
+                    ),
+                  ),
                 ),
               Expanded(
                 child: StreamBuilder<List<Mesaj>>(
@@ -864,33 +1252,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                     // kendi mesajında alta inme, sayfalama) MesajListesi'nde.
                     // Öğeler mesaj kimliğiyle anahtarlanır → oynayan video /
                     // ses dalgası index'te değil MESAJDA kalır.
+                    // Her günün ilk mesajının üstüne "Bugün / Dün / 12 Eylül".
+                    final ayraclar = tarihAyraclari(mesajlar);
                     return MesajListesi(
                       key: _listeAnahtari,
                       mesajlar: mesajlar,
                       benimUid: _uid,
                       eskiYukle: _hepsiYuklendi ? null : _eskiYukle,
-                      // Aramada bulunan mesaj kısa süre parlar.
-                      ogeKurucu: (context, m) => ValueListenableBuilder<String?>(
-                        valueListenable: _vurguVN,
-                        builder: (_, vurgu, cocuk) => AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          decoration: BoxDecoration(
-                            color: vurgu == m.id
-                                ? Renkler.neon.withValues(alpha: 0.16)
-                                : Renkler.neon.withValues(alpha: 0),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: cocuk,
-                        ),
-                        child: _MesajBalonu(
-                          mesaj: m,
-                          benimMi: m.gonderen == _uid,
-                          chatId: widget.chatId,
-                          benimUid: _uid,
-                          karsiAd: widget.karsi.ad,
-                          onUzunBas: () => _tepkiSec(m),
-                        ),
-                      ),
+                      ogeKurucu: (context, m) => _ogeKur(m, ayraclar[m.id]),
                     );
                   },
                 ),
@@ -943,17 +1312,45 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       onKayitBitir: _kayitBitir,
                     ),
                     Positioned.fill(
-                      child: ValueListenableBuilder<bool>(
-                        valueListenable: _kayitYapiliyorVN,
-                        builder: (_, kayitta, _) => kayitta
-                            ? IgnorePointer(
-                                child: _KayitKaplamasi(
-                                  saniye: _kayitSaniyeVN,
-                                  dalga: _dalgaVN,
-                                  iptalBolgesinde: _iptalBolgesindeVN,
-                                ),
-                              )
-                            : const SizedBox.shrink(),
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([
+                          _kayitYapiliyorVN,
+                          _kilitliVN,
+                          _onizlemeVN,
+                        ]),
+                        builder: (_, _) {
+                          final onizleme = _onizlemeVN.value;
+                          if (onizleme != null) {
+                            // Durdurulmuş kayıt: dinle / sil / gönder.
+                            return _SesOnizleme(
+                              yol: onizleme,
+                              sureSn: _onizlemeSaniye,
+                              onSil: _onizlemeSil,
+                              onGonder: _onizlemeGonder,
+                            );
+                          }
+                          if (!_kayitYapiliyorVN.value) {
+                            return const SizedBox.shrink();
+                          }
+                          if (_kilitliVN.value) {
+                            // Kilitli kayıt: düğmeler DOKUNULABİLİR.
+                            return _KilitliKayit(
+                              saniye: _kayitSaniyeVN,
+                              dalga: _dalgaVN,
+                              onSil: _kayitIptal,
+                              onDurdur: _kayitDurdurOnizle,
+                              onGonder: _kayitGonder,
+                            );
+                          }
+                          // Basılı tutarken: yalnız GÖSTERGE (jest mikrofonda).
+                          return IgnorePointer(
+                            child: _KayitKaplamasi(
+                              saniye: _kayitSaniyeVN,
+                              dalga: _dalgaVN,
+                              iptalBolgesinde: _iptalBolgesindeVN,
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -972,13 +1369,93 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
   }
 
+  /// Listedeki tek öğe: (gerekirse) tarih ayracı + mesaj balonu.
+  /// Balon: sağa kaydırınca yanıt, çift dokununca ❤️, uzun basınca menü;
+  /// aramada bulunan mesaj kısa süre parlar.
+  Widget _ogeKur(Mesaj m, String? ayrac) {
+    // Çift dokunma yalnız metin/foto/GIF'te: oynatma düğmeli balonlarda
+    // (ses, video) tek dokunuşu ~300 ms geciktirmesin.
+    final ciftDokunabilir = m.tip == MesajTipi.metin ||
+        m.tip == MesajTipi.resim ||
+        m.tip == MesajTipi.gif;
+    Widget balon = ValueListenableBuilder<String?>(
+      valueListenable: _kalpVN,
+      builder: (_, kalpId, _) => _MesajBalonu(
+        mesaj: m,
+        benimMi: m.gonderen == _uid,
+        chatId: widget.chatId,
+        benimUid: _uid,
+        karsiAd: widget.karsi.ad,
+        onUzunBas: () => _tepkiSec(m),
+        onCiftDokun: ciftDokunabilir ? () => _kalpAt(m) : null,
+        kalp: kalpId == m.id,
+        onAra: (video) =>
+            _aramaBaslat(video ? AramaTipi.video : AramaTipi.ses),
+      ),
+    );
+    balon = ValueListenableBuilder<String?>(
+      valueListenable: _vurguVN,
+      builder: (_, vurgu, cocuk) => AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        decoration: BoxDecoration(
+          color: vurgu == m.id
+              ? Renkler.neon.withValues(alpha: 0.16)
+              : Renkler.neon.withValues(alpha: 0),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: cocuk,
+      ),
+      child: balon,
+    );
+    // Engelliyken yazma alanı yok → kaydırarak yanıt da yok.
+    if (_engelleyen == null) {
+      balon = KaydirarakYanit(onYanit: () => _yanitla(m), child: balon);
+    }
+    if (ayrac == null) return balon;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [_TarihAyraci(ayrac), balon],
+    );
+  }
+
+  /// Çift dokunma: mesaja ❤️ (zaten ❤️ ise yalnız animasyon — yanlışlıkla
+  /// iki kez dokununca tepki kaybolmasın).
+  void _kalpAt(Mesaj m) {
+    HapticFeedback.lightImpact();
+    if (m.tepkiler[_uid] != '❤️') {
+      _tepkiYaz(_servis.tepkiAyarla(widget.chatId, m.id, '❤️'));
+    }
+    _kalpTimer?.cancel();
+    _kalpVN.value = m.id;
+    _kalpTimer = Timer(const Duration(milliseconds: 850), () {
+      if (_kalpVN.value == m.id) _kalpVN.value = null;
+    });
+  }
+
+  /// Tepki yazımını BEKLEMEDEN başlatır (çevrimdışıyken sunucu onayı
+  /// gecikir); reddedilirse kullanıcıya söyler.
+  void _tepkiYaz(Future<void> yazim) {
+    final messenger = ScaffoldMessenger.of(context);
+    yazim.catchError((Object e) {
+      HataServisi.instance.iz('tepki yazilamadi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Tepki kaydedilemedi. Tekrar dene.')),
+      );
+    });
+  }
+
   /// Mesaja uzun basınca açılan menü: tepkiler + (medyada) İndir +
   /// (kendi mesajın, ilk 1 dk) Sil.
   void _tepkiSec(Mesaj mesaj) {
     const emojiler = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-    final medyaMi = mesaj.tip != MesajTipi.metin && mesaj.medyaUrl != null;
-    // Sesli mesaj galeriye kaydedilmez (galeri foto/video içindir).
-    final indirilebilir = medyaMi && mesaj.tip != MesajTipi.ses;
+    final benimTepkim = mesaj.tepkiler[_uid];
+    // Galeriye yalnız foto/video/GIF (sesli mesaj ve dosya galeriye girmez).
+    final indirilebilir = mesaj.medyaUrl != null &&
+        const {MesajTipi.resim, MesajTipi.video, MesajTipi.gif}
+            .contains(mesaj.tip);
+    // Dosya (PDF…) → telefonun İndirilenler klasörüne.
+    final dosyaMi = mesaj.tip == MesajTipi.dosya && mesaj.medyaUrl != null;
     final silinebilir = _servis.silinebilirMi(mesaj);
     final duzenlenebilir =
         _engelleyen == null && _servis.duzenlenebilirMi(mesaj);
@@ -1003,10 +1480,21 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       borderRadius: BorderRadius.circular(30),
                       onTap: () {
                         Navigator.pop(context);
-                        _servis.tepkiDegistir(widget.chatId, mesaj.id, e);
+                        // Aynı emojiye yeniden basmak tepkiyi kaldırır.
+                        _tepkiYaz(
+                          _servis.tepkiDegistir(widget.chatId, mesaj, e),
+                        );
                       },
-                      child: Padding(
+                      child: Container(
                         padding: const EdgeInsets.all(8),
+                        // Seçili tepkim neon halkayla belli olur.
+                        decoration: e == benimTepkim
+                            ? BoxDecoration(
+                                color: Renkler.neonSis,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Renkler.neon),
+                              )
+                            : null,
                         child: Text(e, style: const TextStyle(fontSize: 30)),
                       ),
                     ),
@@ -1034,6 +1522,14 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   _duzenle(mesaj);
                 },
               ),
+            ListTile(
+              leading: Icon(Icons.alarm_add_rounded, color: Renkler.neon),
+              title: Text('Bunu bana hatırlat', style: Yazi.isim),
+              onTap: () {
+                Navigator.pop(context);
+                _hatirlatmaSec(mesaj);
+              },
+            ),
             if (kopyalanabilir)
               ListTile(
                 leading: Icon(Icons.copy_rounded, color: Renkler.neon),
@@ -1054,6 +1550,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 onTap: () {
                   Navigator.pop(context);
                   _medyaIndir(mesaj);
+                },
+              ),
+            if (dosyaMi)
+              ListTile(
+                leading: Icon(Icons.download_rounded, color: Renkler.neon),
+                title: Text('Telefona kaydet', style: Yazi.isim),
+                subtitle: Text(
+                  'İndirilenler › ROY MESSANGER klasörüne',
+                  style: Yazi.kucuk,
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _dosyaKaydet(mesaj);
                 },
               ),
             if (silinebilir)
@@ -1294,6 +1803,18 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
   }
 
+  void _galeriyiAc() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MedyaGalerisiEkrani(
+          chatId: widget.chatId,
+          karsi: widget.karsi,
+          benimUid: _uid,
+        ),
+      ),
+    );
+  }
+
   /// Sohbeti sessize al / sessizi kapat. Ekrandaki durum canlı akıştan
   /// (sessizMi) güncellenir; hata olursa kullanıcıya söylenir.
   Future<void> _sessizDegistir() async {
@@ -1331,6 +1852,124 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     messenger.showSnackBar(
       SnackBar(
         content: Text(ok ? 'Galeriye kaydedildi ✓' : 'İndirilemedi'),
+      ),
+    );
+  }
+
+  /// "Bunu bana hatırlat": hazır süreler ya da tarih/saat seç → o an
+  /// bildirim gelir, dokununca bu sohbet açılır.
+  Future<void> _hatirlatmaSec(Mesaj mesaj) async {
+    final simdi = DateTime.now();
+    final secim = await showModalBottomSheet<DateTime>(
+      context: context,
+      backgroundColor: Renkler.yuzey,
+      shape: const RoundedRectangleBorder(borderRadius: Kose.panel),
+      builder: (bc) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Row(
+                children: [
+                  Icon(Icons.alarm_rounded, color: Renkler.neon),
+                  const SizedBox(width: 10),
+                  Text('Ne zaman hatırlatayım?', style: Yazi.baslikOrta),
+                ],
+              ),
+            ),
+            for (final s in hatirlatmaSecenekleri(simdi))
+              ListTile(
+                title: Text(s.etiket, style: Yazi.isim),
+                trailing: Text(
+                  hatirlatmaMetni(s.zaman, simdi),
+                  style: Yazi.kucuk,
+                ),
+                onTap: () => Navigator.pop(bc, s.zaman),
+              ),
+            ListTile(
+              leading: Icon(Icons.edit_calendar_rounded, color: Renkler.neon),
+              title: Text('Tarih ve saat seç…', style: Yazi.isim),
+              onTap: () async {
+                final gun = await showDatePicker(
+                  context: bc,
+                  initialDate: simdi,
+                  firstDate: DateTime(simdi.year, simdi.month, simdi.day),
+                  lastDate: simdi.add(const Duration(days: 365)),
+                );
+                if (gun == null || !bc.mounted) return;
+                final saat = await showTimePicker(
+                  context: bc,
+                  initialTime: TimeOfDay.fromDateTime(
+                    simdi.add(const Duration(hours: 1)),
+                  ),
+                );
+                if (saat == null || !bc.mounted) return;
+                Navigator.pop(
+                  bc,
+                  DateTime(gun.year, gun.month, gun.day, saat.hour, saat.minute),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    if (secim == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!secim.isAfter(DateTime.now())) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Geçmiş bir zaman seçilemez.')),
+      );
+      return;
+    }
+    final kimden = mesaj.gonderen == _uid ? 'Sen' : widget.karsi.ad;
+    try {
+      final id = await HatirlaticiServisi.instance.mesajHatirlat(
+        chatId: widget.chatId,
+        karsiUid: widget.karsi.uid,
+        baslik: '⏰ Hatırlatma · ${widget.karsi.ad}',
+        ozet: '$kimden: ${mesaj.yanitIcinOnizleme}',
+        mesajId: mesaj.id,
+        zaman: secim,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '⏰ ${hatirlatmaMetni(secim, DateTime.now())} hatırlatılacak',
+          ),
+          action: SnackBarAction(
+            label: 'Geri al',
+            onPressed: () =>
+                HatirlaticiServisi.instance.mesajHatirlatmaIptal(id),
+          ),
+        ),
+      );
+    } catch (e) {
+      HataServisi.instance.iz('hatirlatma kurulamadi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Hatırlatma kurulamadı.')),
+      );
+    }
+  }
+
+  /// Dosyayı telefonun İndirilenler klasörüne kaydeder.
+  Future<void> _dosyaKaydet(Mesaj mesaj) async {
+    final url = mesaj.medyaUrl;
+    if (url == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('İndiriliyor…'), duration: Duration(seconds: 2)),
+    );
+    final ok = await DosyaServisi.instance
+        .telefonaKaydet(url, mesaj.dosyaAdi ?? 'dosya');
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? 'İndirilenler klasörüne kaydedildi ✓' : 'Kaydedilemedi',
+        ),
       ),
     );
   }
@@ -1519,6 +2158,16 @@ class _MesajBalonu extends StatelessWidget {
   final String karsiAd;
   final VoidCallback onUzunBas;
 
+  /// Çift dokunma (❤️). null → çift dokunma tanınmaz (ses/video: tek
+  /// dokunuş gecikmesin).
+  final VoidCallback? onCiftDokun;
+
+  /// Az önce çift dokunuldu → balonun üstünde kalp patlaması.
+  final bool kalp;
+
+  /// Cevapsız arama kaydındaki "geri ara / tekrar ara" (video mu?).
+  final void Function(bool video)? onAra;
+
   const _MesajBalonu({
     required this.mesaj,
     required this.benimMi,
@@ -1526,9 +2175,15 @@ class _MesajBalonu extends StatelessWidget {
     required this.benimUid,
     required this.karsiAd,
     required this.onUzunBas,
+    this.onCiftDokun,
+    this.kalp = false,
+    this.onAra,
   });
 
   String _saat(DateTime? t) => t == null ? '' : saatMetni(t);
+
+  /// Tam ekran görüntüleyicinin başlığı: kimin gönderdiği.
+  String get _kimden => benimMi ? 'Sen' : karsiAd;
 
   /// Yanıt balonunun üstündeki alıntı kutusu (kimden + önizleme).
   /// Neon balonda koyu, karşı tarafın koyu balonunda neon tonlarla çizilir.
@@ -1579,22 +2234,30 @@ class _MesajBalonu extends StatelessWidget {
 
   // Mesaj türüne göre içerik
   Widget _icerik(BuildContext context) {
-    // ⚠️ BELLEK: fotoğraflar artık ORİJİNAL kalitede (ör. 4000×3000) gidiyor.
-    // cacheWidth verilmezse 220 px'lik balon için görüntü TAM boyutta
-    // çözülür (~48 MB RGBA / foto) → foto dolu sohbette takılma ve OOM.
-    // Balon genişliğine göre çözülür; tam boyut yalnız büyütünce yüklenir.
+    // ⚠️ VERİ + BELLEK: fotoğraflar ORİJİNAL kalitede (ör. 4000×3000, birkaç
+    // MB) gidiyor. Balonda artık Cloudinary'nin KÜÇÜK hâli (kucukResimUrl,
+    // ~100 KB) iner ve telefonda saklanır (OnbellekliResim) — eskiden her
+    // açılışta orijinal yeniden iniyordu. Balon genişliğinde çözülür;
+    // ORİJİNAL yalnız dokununca, tam ekranda yüklenir.
     final dpr = MediaQuery.devicePixelRatioOf(context);
     switch (mesaj.tip) {
       case MesajTipi.resim:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return GestureDetector(
-          onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
+          onTap: () => FotoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
           child: ClipRRect(
             borderRadius: _medyaKose,
-            child: Image.network(
-              mesaj.medyaUrl!,
+            child: Image(
+              image: ResizeImage(
+                OnbellekliResim(kucukResimUrl(mesaj.medyaUrl!)),
+                width: (220 * dpr).round(),
+              ),
               width: 220,
-              cacheWidth: (220 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1617,7 +2280,16 @@ class _MesajBalonu extends StatelessWidget {
         );
       case MesajTipi.video:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
-        return _VideoOynatici(url: mesaj.medyaUrl!, kose: _medyaKose);
+        return _VideoKapagi(
+          url: mesaj.medyaUrl!,
+          kose: _medyaKose,
+          onTap: () => VideoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
+        );
       case MesajTipi.ses:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return _SesOynatici(
@@ -1630,13 +2302,23 @@ class _MesajBalonu extends StatelessWidget {
       case MesajTipi.gif:
         if (mesaj.medyaUrl == null) return const SizedBox.shrink();
         return GestureDetector(
-          onTap: () => _resmiBuyut(context, mesaj.medyaUrl!),
+          onTap: () => FotoGoruntuleyici.ac(
+            context,
+            url: mesaj.medyaUrl!,
+            tip: MesajTipi.gif,
+            baslik: _kimden,
+            zaman: mesaj.zaman,
+          ),
           child: ClipRRect(
             borderRadius: _medyaKose,
-            child: Image.network(
-              mesaj.medyaUrl!,
+            child: Image(
+              // GIPHY adresi (Cloudinary değil) → küçültülmez, yalnız
+              // telefonda saklanır.
+              image: ResizeImage(
+                OnbellekliResim(mesaj.medyaUrl!),
+                width: (170 * dpr).round(),
+              ),
               width: 170,
-              cacheWidth: (170 * dpr).round(),
               fit: BoxFit.cover,
               loadingBuilder: (c, w, p) => p == null
                   ? w
@@ -1657,6 +2339,10 @@ class _MesajBalonu extends StatelessWidget {
             ),
           ),
         );
+      case MesajTipi.arama:
+        return _AramaKaydiIcerik(mesaj: mesaj, benimMi: benimMi, onAra: onAra);
+      case MesajTipi.dosya:
+        return _DosyaIcerik(mesaj: mesaj, benimMi: benimMi);
       case MesajTipi.metin:
         // Neon balon üstünde koyu, karşı tarafın koyu balonunda açık metin
         // Bağlantılar altı çizili ve tıklanınca tarayıcıda açılır.
@@ -1668,29 +2354,21 @@ class _MesajBalonu extends StatelessWidget {
     }
   }
 
-  void _resmiBuyut(BuildContext context, String url) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(12),
-        child: InteractiveViewer(
-          child: ClipRRect(
-            borderRadius: Kose.kartKose,
-            child: Image.network(url),
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final medyaMi = mesaj.tip != MesajTipi.metin;
+    // Medya balonu içi dar boşluklu (foto kenara yakın); metin, arama kaydı
+    // ve dosya normal boşluklu.
+    final medyaMi = const {
+      MesajTipi.resim,
+      MesajTipi.video,
+      MesajTipi.ses,
+      MesajTipi.gif,
+    }.contains(mesaj.tip);
     return Align(
       alignment: benimMi ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: onUzunBas,
+        onDoubleTap: onCiftDokun,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1700,7 +2378,7 @@ class _MesajBalonu extends StatelessWidget {
               ),
               margin: EdgeInsets.only(
                 top: 4,
-                bottom: mesaj.tepki != null ? 16 : 4,
+                bottom: mesaj.tepkiVar ? 16 : 4,
               ),
               // Kendi balonun: neon gradient + ÇOK HAFİF glow (göz yormasın).
               // Karşı taraf: zeminden net ayrışan koyu yüzey, GLOW YOK.
@@ -1734,6 +2412,22 @@ class _MesajBalonu extends StatelessWidget {
                       children: [
                         if (mesaj.yanitMi) _alintiKutusu(),
                         _icerik(context),
+                        // Fotoğraf/video AÇIKLAMASI (linkler tıklanabilir).
+                        if ((mesaj.tip == MesajTipi.resim ||
+                                mesaj.tip == MesajTipi.video) &&
+                            mesaj.metin.trim().isNotEmpty)
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 220),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+                              child: LinkliMetin(
+                                metin: mesaj.metin.trim(),
+                                stil: benimMi ? Yazi.govdeAccent : Yazi.govde,
+                                linkRengi:
+                                    benimMi ? Renkler.metinKoyu : Renkler.neon,
+                              ),
+                            ),
+                          ),
                         Padding(
                           padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
                           child: Row(
@@ -1793,27 +2487,44 @@ class _MesajBalonu extends StatelessWidget {
                 ],
               ),
             ),
-            if (mesaj.tepki != null)
+            if (mesaj.tepkiVar)
               Positioned(
                 bottom: 0,
                 right: benimMi ? 8 : null,
                 left: benimMi ? null : 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 1,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Renkler.yuzeyYuksek,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Renkler.kenarGuclu, width: 1.5),
-                    boxShadow: Golgeler.balon,
-                  ),
-                  child: Text(
-                    mesaj.tepki!,
-                    style: const TextStyle(fontSize: 13),
+                // Rozete dokununca tepki menüsü açılır (değiştir/kaldır).
+                child: GestureDetector(
+                  onTap: onUzunBas,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Renkler.yuzeyYuksek,
+                      borderRadius: BorderRadius.circular(12),
+                      // Benim de tepkim varsa kenar neon.
+                      border: Border.all(
+                        color: mesaj.tepkiler.containsKey(benimUid)
+                            ? Renkler.neon
+                            : Renkler.kenarGuclu,
+                        width: 1.5,
+                      ),
+                      boxShadow: Golgeler.balon,
+                    ),
+                    child: Text(
+                      [
+                        for (final t in mesaj.tepkiOzeti)
+                          t.sayi > 1 ? '${t.emoji} ${t.sayi}' : t.emoji,
+                      ].join(' '),
+                      style: Yazi.stil(13, FontWeight.w700, Renkler.metin),
+                    ),
                   ),
                 ),
+              ),
+            if (kalp)
+              const Positioned.fill(
+                child: IgnorePointer(child: Center(child: KalpPatlamasi())),
               ),
           ],
         ),
@@ -1822,169 +2533,65 @@ class _MesajBalonu extends StatelessWidget {
   }
 }
 
-/// İnline video oynatıcı: önce KAPAK, dokununca yükle + oynat/duraklat.
-class _VideoOynatici extends StatefulWidget {
+/// Video balonu: hafif KAPAK (Cloudinary'nin videodan çıkardığı küçük JPEG,
+/// telefonda saklanır) + oynat rozeti. Dokununca TAM EKRAN oynatıcı açılır
+/// (orada ileri-geri sarma ve "Galeriye indir" var).
+///
+/// ⚠️ Balonda oynatıcı KURULMAZ: eskiden her video balonu kendi
+/// VideoPlayerController'ını kuruyordu; video dolu bir sohbeti açmak ekrana
+/// giren her video için ağdan dosya başı indirip ExoPlayer açıyordu
+/// (mobil veri, bellek, takılma).
+class _VideoKapagi extends StatelessWidget {
   final String url;
 
   /// Balonun organik köşesiyle uyumlu medya köşesi
   final BorderRadius kose;
-  const _VideoOynatici({required this.url, required this.kose});
-
-  @override
-  State<_VideoOynatici> createState() => _VideoOynaticiState();
-}
-
-class _VideoOynaticiState extends State<_VideoOynatici> {
-  // ⚠️ TEMBEL BAŞLATMA: eskiden her video balonu initState'te
-  // VideoPlayerController oluşturup initialize ediyordu → video dolu bir
-  // sohbeti açmak, ekrana giren HER video için ağdan dosya başı indirip yerel
-  // bir ExoPlayer örneği açıyordu (mobil veri, bellek, takılma; donanım
-  // çözücü sayısı sınırlı cihazlarda videolar açılamayabilir).
-  // Artık başta yalnız Cloudinary'nin ürettiği hafif JPEG kapak çizilir;
-  // oynatıcı kullanıcı dokununca kurulur.
-  VideoPlayerController? _ctrl;
-  bool _yukleniyor = false;
-  bool _hazir = false;
-  bool _hata = false;
-
-  @override
-  void didUpdateWidget(_VideoOynatici old) {
-    super.didUpdateWidget(old);
-    // ⚠️ Liste öğeleri artık mesaj kimliğiyle anahtarlı (MesajListesi), yani
-    // State normalde mesajıyla kalır. Yine de URL değişirse (aynı yere başka
-    // video düşerse) ESKİ videonun denetleyicisi yeni balonda oynamasın:
-    // eskiden yeni videonun balonunda bir önceki video oynuyordu.
-    if (old.url != widget.url) {
-      final c = _ctrl;
-      _ctrl = null;
-      _hazir = false;
-      _hata = false;
-      _yukleniyor = false;
-      c?.dispose();
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _baslat() async {
-    if (_yukleniyor || _ctrl != null) return;
-    setState(() {
-      _yukleniyor = true;
-      _hata = false;
-    });
-    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-    _ctrl = c;
-    // ⚠️ Hata yakalanmıyordu: bozuk/silinmiş videoda spinner SONSUZA KADAR
-    // dönüyor, yakalanmayan hata da global işleyiciden rapor yağdırıyordu.
-    // `_ctrl != c`: bekleme sırasında URL değişti (didUpdateWidget bu
-    // denetleyiciyi zaten serbest bıraktı) → bu deneme artık geçersiz.
-    try {
-      await c.initialize();
-      if (!mounted || !identical(_ctrl, c)) return;
-      await c.play();
-      if (!mounted || !identical(_ctrl, c)) return;
-      setState(() {
-        _hazir = true;
-        _yukleniyor = false;
-      });
-    } catch (e) {
-      HataServisi.instance.iz('VIDEO acilamadi: $e');
-      // dispose()/didUpdateWidget denetleyiciyi zaten serbest bıraktı
-      if (!mounted || !identical(_ctrl, c)) return;
-      _ctrl = null; // dokununca yeniden denenebilsin
-      setState(() {
-        _hata = true;
-        _yukleniyor = false;
-      });
-      await c.dispose();
-    }
-  }
-
-  /// Neon 3D oynat rozeti
-  Widget get _oynatRozeti => Container(
-    decoration: BoxDecoration(
-      gradient: Gradyanlar.accent,
-      shape: BoxShape.circle,
-      boxShadow: Golgeler.neonGlow,
-    ),
-    padding: const EdgeInsets.all(10),
-    child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
-  );
+  final VoidCallback onTap;
+  const _VideoKapagi({
+    required this.url,
+    required this.kose,
+    required this.onTap,
+  });
 
   Widget _koyuKutu() =>
       Container(width: 220, height: 160, color: Renkler.zeminDerin);
 
-  /// Oynatıcı kurulmadan önceki görünüm: kapak + rozet (yükleniyorsa spinner,
-  /// hatadaysa eski "video açılamadı" ikonu — dokununca yeniden denenir).
-  Widget _kapak(BuildContext context) {
-    final kapakUrl = videoKapakUrl(widget.url);
+  @override
+  Widget build(BuildContext context) {
+    final kapakUrl = videoKapakUrl(url);
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return GestureDetector(
-      onTap: _baslat,
+      onTap: onTap,
       child: ClipRRect(
-        borderRadius: widget.kose,
+        borderRadius: kose,
         child: Stack(
           alignment: Alignment.center,
           children: [
             if (kapakUrl == null)
               _koyuKutu()
             else
-              Image.network(
-                kapakUrl,
+              Image(
+                image: ResizeImage(
+                  OnbellekliResim(kucukResimUrl(kapakUrl)),
+                  width: (220 * dpr).round(),
+                ),
                 width: 220,
                 height: 160,
-                // Balon boyutunda çöz (bkz. fotoğraflardaki cacheWidth notu).
-                cacheWidth: (220 * dpr).round(),
                 fit: BoxFit.cover,
                 // Kapak üretilemezse (eski/harici URL, ağ hatası) düz koyu
-                // kutu: video yine dokununca açılabilir.
+                // kutu: video yine dokununca açılır.
                 errorBuilder: (c, e, s) => _koyuKutu(),
               ),
-            if (_hata)
-              Container(
-                width: 220,
-                height: 160,
-                color: Renkler.zeminDerin.withValues(alpha: 0.7),
-                alignment: Alignment.center,
-                child: Icon(
-                  Icons.videocam_off_outlined,
-                  color: Renkler.metinSoluk,
-                  size: 36,
-                ),
-              )
-            else if (_yukleniyor)
-              CircularProgressIndicator(color: Renkler.neon)
-            else
-              _oynatRozeti,
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = _ctrl;
-    if (!_hazir || c == null) return _kapak(context);
-    return GestureDetector(
-      onTap: () => setState(() {
-        c.value.isPlaying ? c.pause() : c.play();
-      }),
-      child: ClipRRect(
-        borderRadius: widget.kose,
-        child: SizedBox(
-          width: 220,
-          child: AspectRatio(
-            aspectRatio: c.value.aspectRatio,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [VideoPlayer(c), if (!c.value.isPlaying) _oynatRozeti],
+            Container(
+              decoration: BoxDecoration(
+                gradient: Gradyanlar.accent,
+                shape: BoxShape.circle,
+                boxShadow: Golgeler.neonGlow,
+              ),
+              padding: const EdgeInsets.all(10),
+              child: Icon(Icons.play_arrow, color: Renkler.metinKoyu, size: 32),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2181,10 +2788,220 @@ class _SesOynaticiState extends State<_SesOynatici> {
   }
 }
 
-/// Yazma alanının üstündeki yanıt çubuğu: kime yanıt verildiği + alıntı
-/// önizlemesi + kapat (X). Kapatınca mesaj normal (yanıtsız) gider.
-/// Yazma alanının üstündeki çubuk: yanıtlanan mesaj (alıntı) ya da
-/// düzenlenen mesaj ([ikon] = kalem).
+/// Cevapsız arama kaydı balonu. Aranan: "Cevapsız sesli arama — geri
+/// aramak için dokun"; arayan: "Sesli arama — Cevap verilmedi / Reddedildi
+/// / Meşgul". Dokununca aynı türde arama başlar.
+class _AramaKaydiIcerik extends StatelessWidget {
+  final Mesaj mesaj;
+  final bool benimMi;
+  final void Function(bool video)? onAra;
+  const _AramaKaydiIcerik({
+    required this.mesaj,
+    required this.benimMi,
+    this.onAra,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final video = mesaj.videoAramaMi;
+    final renk = benimMi ? Renkler.metinKoyu : Renkler.metin;
+    final soluk = benimMi ? Renkler.metinKoyuYumusak : Renkler.metinSoluk;
+    final vurgu = benimMi ? Renkler.metinKoyu : Renkler.tehlike;
+    final baslik = benimMi
+        ? (video ? 'Görüntülü arama' : 'Sesli arama')
+        : (video ? 'Cevapsız görüntülü arama' : 'Cevapsız sesli arama');
+    final alt = benimMi
+        ? switch (mesaj.aramaSonucu) {
+            'red' => 'Reddedildi',
+            'mesgul' => 'Meşguldü',
+            'iptal' => 'Cevap beklenmeden kapatıldı',
+            _ => 'Cevap verilmedi',
+          }
+        : 'Geri aramak için dokun';
+    final ara = onAra;
+    return GestureDetector(
+      onTap: ara == null ? null : () => ara(video),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: vurgu.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              benimMi ? Icons.call_made_rounded : Icons.call_missed_rounded,
+              size: 20,
+              color: vurgu,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(baslik, style: Yazi.stil(15, FontWeight.w700, renk)),
+                const SizedBox(height: 2),
+                Text(alt, style: Yazi.stil(12, FontWeight.w500, soluk)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Icon(
+            video ? Icons.videocam_rounded : Icons.call_rounded,
+            size: 22,
+            color: benimMi ? Renkler.metinKoyu : Renkler.neon,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Dosya (PDF, Word…) balonu: renkli uzantı rozeti + ad + boyut. Dokununca
+/// indirilir (ilerlemeyle) ve telefondaki uygun uygulamayla açılır.
+class _DosyaIcerik extends StatefulWidget {
+  final Mesaj mesaj;
+  final bool benimMi;
+  const _DosyaIcerik({required this.mesaj, required this.benimMi});
+
+  @override
+  State<_DosyaIcerik> createState() => _DosyaIcerikState();
+}
+
+class _DosyaIcerikState extends State<_DosyaIcerik> {
+  double? _ilerleme;
+  bool _aciliyor = false;
+
+  Color _rozetRengi(String etiket) => switch (etiket) {
+        'PDF' => const Color(0xFFE5484D),
+        'DOC' || 'DOCX' => const Color(0xFF3E7BFA),
+        'XLS' || 'XLSX' || 'CSV' => const Color(0xFF2EA043),
+        'PPT' || 'PPTX' => const Color(0xFFF07B3F),
+        'ZIP' || 'RAR' => const Color(0xFF9B6BDF),
+        _ => const Color(0xFF6B7A8F),
+      };
+
+  Future<void> _ac() async {
+    final url = widget.mesaj.medyaUrl;
+    if (url == null || _aciliyor) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _aciliyor = true;
+      _ilerleme = null;
+    });
+    final hata = await DosyaServisi.instance.ac(
+      url,
+      widget.mesaj.dosyaAdi ?? 'dosya',
+      ilerleme: (p) {
+        if (mounted) setState(() => _ilerleme = p);
+      },
+    );
+    if (!mounted) return;
+    setState(() => _aciliyor = false);
+    if (hata != null) messenger.showSnackBar(SnackBar(content: Text(hata)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.mesaj;
+    final ad = m.dosyaAdi ?? 'Dosya';
+    final etiket = uzantiEtiketi(ad);
+    final renk = widget.benimMi ? Renkler.metinKoyu : Renkler.metin;
+    final soluk =
+        widget.benimMi ? Renkler.metinKoyuYumusak : Renkler.metinSoluk;
+    final boyut = m.dosyaBoyutu;
+    return GestureDetector(
+      onTap: _ac,
+      child: SizedBox(
+        width: 230,
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _rozetRengi(etiket),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _aciliyor
+                  ? SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        value: _ilerleme,
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      etiket.length > 4 ? etiket.substring(0, 4) : etiket,
+                      style: Yazi.stil(12, FontWeight.w800, Colors.white),
+                    ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    ad,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Yazi.stil(14, FontWeight.w700, renk),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (boyut != null) boyutMetni(boyut),
+                      _aciliyor ? 'İndiriliyor…' : 'Açmak için dokun',
+                    ].join(' · '),
+                    style: Yazi.stil(12, FontWeight.w500, soluk),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Sohbetteki tarih ayracı: ortada küçük, yarı saydam "Bugün" etiketi.
+class _TarihAyraci extends StatelessWidget {
+  final String metin;
+  const _TarihAyraci(this.metin);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: Renkler.yuzey.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Renkler.kenar),
+          ),
+          child: Text(
+            metin,
+            style: Yazi.stil(12, FontWeight.w700, Renkler.metinSoluk),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Yazma alanının üstündeki çubuk: yanıtlanan mesaj (kime + alıntı
+/// önizlemesi) ya da düzenlenen mesaj ([ikon] = kalem) + kapat (X).
+/// Kapatınca mesaj normal (yanıtsız) gider / düzenleme iptal olur.
 class _YanitCubugu extends StatelessWidget {
   final String kimden;
   final String onizleme;
@@ -2274,8 +3091,8 @@ class _YazmaAlani extends StatelessWidget {
   /// Basılı tutma başladı → kayda başla
   final VoidCallback onKayitBasla;
 
-  /// Basılıyken yatay kayma (sola kaydırınca iptal bölgesi)
-  final void Function(double dx) onKayitSurukle;
+  /// Basılıyken kayma (sola → iptal bölgesi, yukarı → kilit)
+  final void Function(Offset kayma) onKayitSurukle;
 
   /// Parmak kalktı → gönder veya iptal
   final VoidCallback onKayitBitir;
@@ -2374,7 +3191,7 @@ class _YazmaAlani extends StatelessWidget {
                         GestureDetector(
                           onLongPressStart: (_) => onKayitBasla(),
                           onLongPressMoveUpdate: (d) =>
-                              onKayitSurukle(d.localOffsetFromOrigin.dx),
+                              onKayitSurukle(d.localOffsetFromOrigin),
                           onLongPressEnd: (_) => onKayitBitir(),
                           onLongPressCancel: onKayitBitir,
                           child: Uc3DDugme(
@@ -2534,6 +3351,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                         ),
                         const SizedBox(width: 8),
                         if (!iptal)
+                          // ◀ sola: iptal · ▲ yukarı: kilit (eller serbest)
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -2542,7 +3360,18 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                                 size: 16,
                                 color: Renkler.metinSoluk,
                               ),
-                              Text('kaydır', style: Yazi.zaman),
+                              Text('sil', style: Yazi.zaman),
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.lock_outline_rounded,
+                                size: 13,
+                                color: Renkler.metinSoluk,
+                              ),
+                              Icon(
+                                Icons.keyboard_arrow_up,
+                                size: 16,
+                                color: Renkler.metinSoluk,
+                              ),
                             ],
                           ),
                       ],
@@ -2570,6 +3399,247 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
           ),
         );
       },
+    );
+  }
+}
+
+/// KİLİTLİ KAYIT (eller serbest): süre + canlı dalga; 🗑 sil, ■ durdur
+/// (dinlemek için), ➤ gönder. Düğmeler dokunulabilir (IgnorePointer YOK).
+class _KilitliKayit extends StatelessWidget {
+  final ValueNotifier<int> saniye;
+  final ValueNotifier<List<double>> dalga;
+  final VoidCallback onSil;
+  final VoidCallback onDurdur;
+  final VoidCallback onGonder;
+  const _KilitliKayit({
+    required this.saniye,
+    required this.dalga,
+    required this.onSil,
+    required this.onDurdur,
+    required this.onGonder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
+        color: Renkler.zemin,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Kaydı sil',
+              icon: Icon(Icons.delete_outline, color: Renkler.tehlike),
+              onPressed: onSil,
+            ),
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_rounded, size: 14, color: Renkler.neon),
+                    const SizedBox(width: 6),
+                    ValueListenableBuilder<int>(
+                      valueListenable: saniye,
+                      builder: (_, sn, _) => Text(
+                        '${(sn ~/ 60).toString().padLeft(2, '0')}:'
+                        '${(sn % 60).toString().padLeft(2, '0')}',
+                        style: Yazi.stil(13, FontWeight.w700, Renkler.metin)
+                            .copyWith(
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ValueListenableBuilder<List<double>>(
+                        valueListenable: dalga,
+                        builder: (_, d, _) => SizedBox(
+                          height: 24,
+                          child: CustomPaint(
+                            painter: _DalgaPainter(d, Renkler.neon, canli: true),
+                            size: Size.infinite,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Durdur ve dinle',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.stop_circle_outlined,
+                          color: Renkler.tehlike),
+                      onPressed: onDurdur,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Uc3DDugme(
+              kose: Kose.dugme,
+              padding: const EdgeInsets.all(13),
+              onTap: onGonder,
+              cocuk: Icon(Icons.send_rounded,
+                  color: Renkler.metinKoyu, size: 22),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// GÖNDERMEDEN DİNLE: durdurulmuş kaydı çal/duraklat, ilerleme, 🗑 sil, ➤ gönder.
+/// Kendi oynatıcısı vardır (kapanınca serbest bırakılır).
+class _SesOnizleme extends StatefulWidget {
+  final String yol;
+  final int sureSn;
+  final VoidCallback onSil;
+  final VoidCallback onGonder;
+  const _SesOnizleme({
+    required this.yol,
+    required this.sureSn,
+    required this.onSil,
+    required this.onGonder,
+  });
+
+  @override
+  State<_SesOnizleme> createState() => _SesOnizlemeState();
+}
+
+class _SesOnizlemeState extends State<_SesOnizleme> {
+  final _oynatici = AudioPlayer();
+  final List<StreamSubscription<Object?>> _abonelikler = [];
+  bool _caliyor = false;
+  Duration _konum = Duration.zero;
+  Duration? _sure;
+
+  @override
+  void initState() {
+    super.initState();
+    _abonelikler
+      ..add(_oynatici.onPositionChanged.listen((p) {
+        if (mounted) setState(() => _konum = p);
+      }))
+      ..add(_oynatici.onDurationChanged.listen((d) {
+        if (mounted) setState(() => _sure = d);
+      }))
+      ..add(_oynatici.onPlayerComplete.listen((_) {
+        if (mounted) {
+          setState(() {
+            _caliyor = false;
+            _konum = Duration.zero;
+          });
+        }
+      }));
+  }
+
+  @override
+  void dispose() {
+    for (final a in _abonelikler) {
+      a.cancel();
+    }
+    _oynatici.dispose();
+    super.dispose();
+  }
+
+  Future<void> _calDuraklat() async {
+    try {
+      if (_caliyor) {
+        await _oynatici.pause();
+      } else {
+        // Çalan sesli mesaj varsa sustur (aynı anda iki ses olmasın).
+        await SesOynaticiServisi.instance.durdur();
+        await _oynatici.play(DeviceFileSource(widget.yol));
+      }
+      if (mounted) setState(() => _caliyor = !_caliyor);
+    } catch (e) {
+      HataServisi.instance.iz('onizleme calinamadi: $e');
+    }
+  }
+
+  String _mmss(int sn) =>
+      '${(sn ~/ 60).toString().padLeft(2, '0')}:${(sn % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final toplam = _sure ?? Duration(seconds: widget.sureSn);
+    final oran = toplam.inMilliseconds == 0
+        ? 0.0
+        : (_konum.inMilliseconds / toplam.inMilliseconds).clamp(0.0, 1.0);
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
+        color: Renkler.zemin,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Kaydı sil',
+              icon: Icon(Icons.delete_outline, color: Renkler.tehlike),
+              onPressed: () {
+                _oynatici.stop();
+                widget.onSil();
+              },
+            ),
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.only(left: 4, right: 12),
+                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                child: Row(
+                  children: [
+                    IconButton(
+                      tooltip: _caliyor ? 'Duraklat' : 'Dinle',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        _caliyor
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_fill,
+                        color: Renkler.neon,
+                        size: 30,
+                      ),
+                      onPressed: _calDuraklat,
+                    ),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: oran,
+                          minHeight: 4,
+                          color: Renkler.neon,
+                          backgroundColor: Renkler.kenar,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      _caliyor || _konum > Duration.zero
+                          ? _mmss(_konum.inSeconds)
+                          : _mmss(toplam.inSeconds),
+                      style: Yazi.stil(12, FontWeight.w700, Renkler.metin),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Uc3DDugme(
+              kose: Kose.dugme,
+              padding: const EdgeInsets.all(13),
+              onTap: () {
+                _oynatici.stop();
+                widget.onGonder();
+              },
+              cocuk: Icon(Icons.send_rounded,
+                  color: Renkler.metinKoyu, size: 22),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

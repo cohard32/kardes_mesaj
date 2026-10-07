@@ -66,6 +66,24 @@ service cloud.firestore {
               (d.yanitGonderen is string &&
                d.yanitGonderen in get(/databases/$(database)/documents/chats/$(chatId)).data.katilimcilar));
     }
+    // Yeni mesaj türlerinin alanları (hepsi OPSİYONEL):
+    //  - cevapsız arama kaydı (tip 'arama'): aramaTipi + aramaSonucu
+    //  - dosya (tip 'dosya'): dosyaAdi (≤200) + dosyaBoyutu (0..100 MB)
+    //  - link: metinde bağlantı var (medya galerisinin "Linkler" sekmesi)
+    // Tür/boyut sunucuda denetlenir: karşı tarafın ekranında gösterildikleri
+    // için sınırsız/bozuk değer yazılamasın.
+    function ekAlanlarGecerli(d) {
+      return (!('aramaTipi' in d) || d.aramaTipi in ['ses', 'video'])
+        && (!('aramaSonucu' in d) ||
+              d.aramaSonucu in ['cevapsiz', 'red', 'mesgul', 'iptal'])
+        && (!('dosyaAdi' in d) ||
+              (d.dosyaAdi is string && d.dosyaAdi.size() > 0 &&
+               d.dosyaAdi.size() <= 200))
+        && (!('dosyaBoyutu' in d) ||
+              (d.dosyaBoyutu is int && d.dosyaBoyutu >= 0 &&
+               d.dosyaBoyutu <= 104857600))
+        && (!('link' in d) || d.link == true);
+    }
     // MESAJ DÜZENLEME: yalnız KENDİ METİN mesajın, yalnız İLK 15 DAKİKA,
     // yalnız `metin` + `duzenlendi` değişir. `duzenlendi == request.time`:
     // istemci serverTimestamp yazar → "düzenlendi" etiketi sahte olamaz.
@@ -78,13 +96,29 @@ service cloud.firestore {
         && resource.data.zaman is timestamp
         && request.time < resource.data.zaman + duration.value(900, 's')
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['metin', 'duzenlendi'])
+             .hasOnly(['metin', 'duzenlendi', 'link'])
+        && (!('link' in request.resource.data) ||
+              request.resource.data.link == true)
         && request.resource.data.metin is string
         && request.resource.data.metin.size() > 0
         && request.resource.data.metin.size() <= 4096
         && request.resource.data.duzenlendi == request.time
         && arkadasMi(chatId)
         && !engelli(chatId);
+    }
+    // TEPKİLER: `tepkiler.{uid} = emoji` — herkesin AYRI tepkisi. Herkes
+    // YALNIZ kendi anahtarını ekleyip değiştirip silebilir. ⚠️ Eskiden tek
+    // `tepki` alanı vardı: aynı mesaja iki kişi tepki verince biri
+    // diğerininkini siliyordu. (Eski alan geçiş için hâlâ yazılabilir.)
+    function tepkilerGecerli() {
+      let yeni = request.resource.data.get('tepkiler', {});
+      let eski = resource.data.get('tepkiler', {});
+      return yeni is map
+        && yeni.diff(eski).affectedKeys().hasOnly([request.auth.uid])
+        && (!(request.auth.uid in yeni) ||
+            (yeni[request.auth.uid] is string &&
+             yeni[request.auth.uid].size() > 0 &&
+             yeni[request.auth.uid].size() <= 16));
     }
     // İki uid'den SIRALI çift kimliği — istemcideki `ciftKimligi()` ile aynı.
     // ⚠️ friendships/chats/engellenenler/aramalar dokümanlarının kimliği
@@ -273,11 +307,14 @@ service cloud.firestore {
           && request.resource.data.zaman == request.time
           && request.resource.data.keys().hasOnly([
                'gonderen', 'metin', 'tip', 'medyaUrl', 'zaman', 'goruldu',
-               'yanitId', 'yanitOnizleme', 'yanitGonderen'])
-          && yanitAlanlariGecerli(chatId, request.resource.data);
+               'yanitId', 'yanitOnizleme', 'yanitGonderen',
+               'aramaTipi', 'aramaSonucu', 'dosyaAdi', 'dosyaBoyutu', 'link'])
+          && yanitAlanlariGecerli(chatId, request.resource.data)
+          && ekAlanlarGecerli(request.resource.data);
         allow update: if chatKatilimcisi(chatId)
-          && (request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['goruldu', 'tepki', 'sesDinlendi'])
+          && ((request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['goruldu', 'tepki', 'sesDinlendi', 'tepkiler'])
+               && tepkilerGecerli())
               || mesajDuzenlemeGecerli(chatId));
         // SİLME: yalnızca KENDİ mesajını ve yalnızca ilk 60 SANİYE içinde.
         // ⚠️ Süre SUNUCUDA doğrulanır — istemcideki gizleme yeterli değildir

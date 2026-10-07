@@ -632,6 +632,40 @@ test('bilinmeyen mesaj alanları (token/topic/apns, android.direct_boot_ok) atı
   assert.deepEqual(Object.keys(m.android.notification).sort(), ['channel_id', 'tag', 'visibility']);
 });
 
+test('bildirim resmi: yalnız uygulamanın Cloudinary bulutu geçer', async () => {
+  const token = await idToken(ALICE);
+  const vakalar = [
+    ['https://res.cloudinary.com/diifisaog/image/upload/c_limit,w_720,q_auto,f_jpg/v1/abc.png', true],
+    ['https://res.cloudinary.com/diifisaog/video/upload/c_limit,w_720,q_auto,f_jpg/v1/abc.jpg', true],
+    ['https://res.cloudinary.com/baskasi/image/upload/v1/abc.png', false],
+    ['http://res.cloudinary.com/diifisaog/image/upload/v1/abc.png', false],
+    ['https://res.cloudinary.com/diifisaog/raw/upload/v1/belge.pdf', false],
+    ['https://res.cloudinary.com/diifisaog/image/upload/v1/a.png?u=https://kotu.example', false],
+    ['https://res.cloudinary.com.kotu.example/diifisaog/image/upload/v1/a.png', false],
+    ['https://res.cloudinary.com/diifisaog/image/upload/' + 'a'.repeat(401), false],
+  ];
+  for (const [resim, gecer] of vakalar) {
+    cagrilar.fcm = [];
+    const mesaj = mesajBildirimi();
+    mesaj.notification.image = resim;
+    const r = await istek('/bildirim', { hedefUid: BOB, mesaj }, { token });
+    assert.equal(r.status, 200, resim);
+    const n = cagrilar.fcm[0].govde.message.notification;
+    assert.deepEqual(n, gecer
+      ? { title: 'Alice', body: 'merhaba', image: resim }
+      : { title: 'Alice', body: 'merhaba' }, resim);
+  }
+});
+
+test('bildirim resmi string değilse 400', async () => {
+  const token = await idToken(ALICE);
+  const mesaj = mesajBildirimi();
+  mesaj.notification.image = { url: 'https://res.cloudinary.com/diifisaog/image/upload/v1/a.png' };
+  const r = await istek('/bildirim', { hedefUid: BOB, mesaj }, { token });
+  assert.equal(r.status, 400);
+  assert.equal(cagrilar.fcm.length, 0);
+});
+
 test('data değeri string değilse 400', async () => {
   const token = await idToken(ALICE);
   const r = await istek('/bildirim', {

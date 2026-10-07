@@ -476,6 +476,11 @@ function duzNesneMi(v) {
 /// biriyle süren/çalan aramasını da kesiyordu (d11).
 const CHATID_ZORUNLU_TURLER = new Set(['arama', 'arama_iptal']);
 
+/// Bildirimde gösterilebilecek resim: YALNIZ uygulamanın Cloudinary bulutu
+/// (lib/servisler/medya_servisi.dart `_cloudName` ile AYNI olmalı).
+const BILDIRIM_RESIM_DESENI =
+  /^https:\/\/res\.cloudinary\.com\/diifisaog\/(?:image|video)\/upload\/[A-Za-z0-9_\-.,/%]{1,400}$/;
+
 /// İstemcinin gönderdiği FCM `message` parçalarını SÜZER. Yalnız
 /// notification{title,body}, data (tüm değerler string) ve bilinen android
 /// alanları geçer; bilinmeyen alanlar SESSİZCE atılır, tipi yanlış olan
@@ -496,6 +501,13 @@ function mesajiSuz(mesaj, uid, cift) {
       if (n[alan] === undefined) continue;
       if (typeof n[alan] !== 'string') throw new IstekHatasi(400, 'mesaj');
       t[alan] = n[alan];
+    }
+    if (n.image !== undefined) {
+      if (typeof n.image !== 'string') throw new IstekHatasi(400, 'mesaj');
+      // Yalnız uygulamanın kendi Cloudinary bulutu (fotoğraf mesajının küçük
+      // hâli); başka adres SESSİZCE atılır → bildirim, alıcının telefonuna
+      // keyfî bir sunucudan resim indirtemez (IP/izleme pikseli).
+      if (BILDIRIM_RESIM_DESENI.test(n.image)) t.image = n.image;
     }
     if (Object.keys(t).length) cikti.notification = t;
   }

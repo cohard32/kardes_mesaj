@@ -84,10 +84,14 @@ uygulama ──ID token──▶ aktarıcı ──(KULLANICININ token'ı)──�
 ### `/bildirim` kuralları
 
 1. `hedefUid` geçerli bir uid olmalı ve sen olmamalısın.
-2. `mesaj` **süzülür**: yalnız `notification{title,body}`, `data` (tüm değerler
-   string) ve bilinen `android` alanları (`priority`, `ttl`, `collapse_key`,
-   `notification{channel_id, tag, visibility, notification_priority, sound,
-   click_action}`) geçer; bilinmeyenler atılır. Böylece kimse `token`/`topic`
+2. `mesaj` **süzülür**: yalnız `notification{title,body,image}`, `data` (tüm
+   değerler string) ve bilinen `android` alanları (`priority`, `ttl`,
+   `collapse_key`, `notification{channel_id, tag, visibility,
+   notification_priority, sound, click_action}`) geçer; bilinmeyenler atılır.
+   `notification.image` (fotoğraf mesajının bildirimdeki küçük hâli) YALNIZ
+   uygulamanın Cloudinary bulutundan (`https://res.cloudinary.com/diifisaog/…`)
+   olabilir; başka adres sessizce atılır (alıcının telefonuna keyfî sunucudan
+   resim indirtilemez). Böylece kimse `token`/`topic`
    koyup mesajı başka birine ya da bir konuya yönlendiremez. `data.chatId`
    varsa çiftin kimliği olmalı; `data.tur` `arama` ya da `arama_iptal` ise
    `chatId` **zorunlu** (yoksa `400`).

@@ -4,6 +4,7 @@ import '../modeller/arkadaslik.dart';
 import '../modeller/kullanici.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arkadas_servisi.dart';
+import '../servisler/davet_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
 import 'kullanici_ara_ekrani.dart';
@@ -40,6 +41,14 @@ class _ArkadaslarEkraniState extends State<ArkadaslarEkrani> {
         appBar: AppBar(
           title: const Text('Arkadaşlar'),
           actions: [
+            IconButton(
+              tooltip: 'Davet et',
+              icon: const Icon(Icons.share_outlined),
+              onPressed: () async {
+                final me = await KullaniciServisi.instance.benimProfilim()?.first;
+                await DavetServisi.davetEt(me?.kullaniciAdi);
+              },
+            ),
             IconButton(
               tooltip: 'Kişi bul',
               icon: const Icon(Icons.person_search_outlined),

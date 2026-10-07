@@ -5,8 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../servisler/arama_servisi.dart';
+import '../servisler/baglanti_kalitesi.dart';
 import '../servisler/hata_servisi.dart';
+import '../servisler/mesaj_servisi.dart';
+import '../servisler/kucuk_pencere.dart';
 import '../servisler/ringback_servisi.dart';
+import '../servisler/yerel_olaylar.dart';
 import '../tema.dart';
 
 /// Karşı tarafın kanaldaki varlığına göre arama aşaması.
@@ -107,12 +111,17 @@ class AramaEkrani extends StatefulWidget {
   /// ARANAN tarafta zaten CallKit zili çaldı; burada ton çalmamalı.
   final bool benArayanim;
 
+  /// ARAYANDA aranan kişinin uid'i: arama hiç bağlanmadan biterse sohbete
+  /// "cevapsız arama" kaydı yazılır (bkz. [_AramaEkraniState._cevapsizKaydet]).
+  final String? karsiUid;
+
   const AramaEkrani({
     super.key,
     required this.chatId,
     required this.tip,
     required this.baslik,
     this.benArayanim = false,
+    this.karsiUid,
   });
 
   @override
@@ -137,6 +146,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
   bool _kameraKapali = false;
   bool _hoparlor = true;
   bool _kapandi = false;
+
+  // Cevapsız arama kaydı: ekranın açıldığı an (çok kısa vazgeçişler
+  // kaydedilmez) ve kaydın yalnız BİR KEZ yazılması için bayrak.
+  final DateTime _acilis = DateTime.now();
+  bool _kayitYazildi = false;
 
   bool get _video => widget.tip == AramaTipi.video;
 
@@ -168,11 +182,12 @@ class _AramaEkraniState extends State<AramaEkrani> {
     // zamanlayıcı hep çalışır kalıyordu.
     _zamanAsimi = Timer(const Duration(seconds: 45), () {
       if (!_kapandi && _takip.cevapsizKapatilmali) {
-        _kapat(mesaj: 'Cevap verilmedi');
+        _kapat(mesaj: 'Cevap verilmedi', sonuc: 'cevapsiz');
       }
     });
     _arama.karsiUid.addListener(_baglantiKontrol);
     _arama.oturumVN.addListener(_oturumKontrol);
+    YerelOlaylar.kucukPencerede.addListener(_pencereDegisti);
     // ARAYAN "çalıyor" tonu: SADECE arayanda ve karşı taraf henüz katılmadıysa.
     if (widget.benArayanim && _arama.karsiUid.value == null) {
       RingbackServisi.instance.baslat();
@@ -190,12 +205,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
           // sayaçları yeni aramayı düşürmeden ÖNCE sessizce çekil.
           _cekil(yerelTemizlik: true, neden: 'belgede yeni kanal');
         case BelgeOlayi.reddedildi:
-          _kapat(mesaj: 'Arama reddedildi');
+          _kapat(mesaj: 'Arama reddedildi', sonuc: 'red');
         case BelgeOlayi.mesgul:
           // Karşı taraf başka bir aramada → boşuna çalmaya devam etme.
-          _kapat(mesaj: 'Meşgul');
+          _kapat(mesaj: 'Meşgul', sonuc: 'mesgul');
         case BelgeOlayi.bitti:
-          _kapat();
+          // Bağlanmadan karşı taraf kapattıysa (ör. zili zaman aşımına
+          // uğradı) bu bir cevapsız aramadır; bağlıysa kayıt yazılmaz.
+          _kapat(sonuc: 'cevapsiz');
         case BelgeOlayi.yok:
           break;
       }
@@ -232,7 +249,15 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (mounted) _rotayiKapat();
   }
 
+  // Küçük pencereye girildi/çıkıldı → düzen değişir.
+  void _pencereDegisti() {
+    if (mounted) setState(() {});
+  }
+
   void _zamanlayicilariBirak() {
+    YerelOlaylar.kucukPencerede.removeListener(_pencereDegisti);
+    // Görüşme bitti → ana ekrana dönmek artık küçük pencere açmasın.
+    if (_video) KucukPencere.izinVer(false);
     RingbackServisi.instance.durdur();
     _sayac?.cancel();
     _zamanAsimi?.cancel();
@@ -261,6 +286,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
         // Karşı taraf kanala katıldı → konuşma başlıyor, ton DERHAL sussun.
         RingbackServisi.instance.durdur();
         _zamanAsimi?.cancel();
+        // Görüntülü görüşme bağlandı: ana ekrana dönünce küçük pencere.
+        if (_video) KucukPencere.izinVer(true);
         // Süre sayacı kopmada DURMAZ: gösterilen süre görüşmenin toplam
         // süresidir (telefon uygulamalarındaki gibi). Kopukken rozet süre
         // yerine "Yeniden bağlanıyor…" gösterdiği için akan sayaç görünmez;
@@ -293,14 +320,41 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _zamanlayicilariBirak();
     _sub?.cancel();
     // Kendi oturumu geçirilir: görüşme devralındıysa bitir hiçbir şeye dokunmaz.
-    if (!_kapandi) _arama.bitir(widget.chatId, oturum: _oturum);
+    if (!_kapandi) {
+      _cevapsizKaydet('iptal');
+      _arama.bitir(widget.chatId, oturum: _oturum);
+    }
     super.dispose();
   }
 
-  Future<void> _kapat({String? mesaj}) async {
+  /// ARAYANDA: karşı taraf HİÇ bağlanmadan biten arama sohbete "cevapsız
+  /// arama" olarak düşer (karşı tarafa bildirim de gider). Bağlanmış
+  /// görüşme, devralınan görüşme ([_cekil] buraya uğramaz) ve ilk 2 sn
+  /// içinde vazgeçilen (büyük olasılıkla yanlışlıkla) arama kaydedilmez.
+  /// Beklenmez: çevrimdışıyken Firestore kuyruğa alır, ekran hemen kapanır.
+  void _cevapsizKaydet(String sonuc) {
+    final karsi = widget.karsiUid;
+    if (!widget.benArayanim || karsi == null || _kayitYazildi) return;
+    if (_takip.asama != AramaAsamasi.bekleniyor) return; // bağlanmıştı
+    if (sonuc == 'iptal' &&
+        DateTime.now().difference(_acilis) < const Duration(seconds: 2)) {
+      return;
+    }
+    _kayitYazildi = true;
+    MesajServisi.instance
+        .aramaKaydiYaz(widget.chatId, karsi, video: _video, sonuc: sonuc)
+        .catchError((Object e) {
+      HataServisi.instance.iz('cevapsiz arama kaydi yazilamadi: $e');
+    });
+  }
+
+  /// [sonuc]: bağlanmadan bittiyse nedeni ('cevapsiz' | 'red' | 'mesgul');
+  /// verilmezse kullanıcı kapatmıştır ('iptal').
+  Future<void> _kapat({String? mesaj, String? sonuc}) async {
     if (_kapandi) return;
     _kapandi = true;
     HataServisi.instance.iz('ARAMA EKRANI kapaniyor mesaj=${mesaj ?? "-"}');
+    _cevapsizKaydet(sonuc ?? 'iptal');
     _zamanlayicilariBirak();
     await _sub?.cancel();
     // bitir() artık yalnız YEREL işleri bekler (ağ yok) → çevrimdışıyken de
@@ -322,6 +376,9 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   @override
   Widget build(BuildContext context) {
+    // KÜÇÜK PENCERE (PiP): yalnız karşı tarafın görüntüsü; düğme/yazı yok
+    // (minik pencerede taşar, zaten dokunulamaz).
+    final kucukPencere = _video && YerelOlaylar.kucukPencerede.value;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -331,7 +388,9 @@ class _AramaEkraniState extends State<AramaEkrani> {
         backgroundColor: Renkler.zeminDerin,
         // Sesli aramada video yok → dengeli dikey düzen.
         // Görüntülü aramada video tam ekran → üstü/altı bindirmeli.
-        body: _video ? _videoDuzeni() : _sesliDuzen(),
+        body: kucukPencere
+            ? _uzakGorunum()
+            : (_video ? _videoDuzeni() : _sesliDuzen()),
       ),
     );
   }
@@ -361,6 +420,26 @@ class _AramaEkraniState extends State<AramaEkrani> {
             ),
           ),
         Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
+        // Küçük pencereye geç (görüşme bağlıyken): başka uygulamaya bakarken
+        // görüntü köşede sürer.
+        Positioned(
+          top: 40,
+          left: 8,
+          child: ValueListenableBuilder<int?>(
+            valueListenable: _arama.karsiUid,
+            builder: (_, uid, _) => uid == null
+                ? const SizedBox.shrink()
+                : IconButton(
+                    tooltip: 'Küçük pencere',
+                    onPressed: KucukPencere.gir,
+                    icon: Icon(
+                      Icons.picture_in_picture_alt_rounded,
+                      color: VideoSahne.metin,
+                      size: 26,
+                    ),
+                  ),
+          ),
+        ),
         Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
       ],
     );
@@ -531,6 +610,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
                     const SizedBox(width: 8),
                     Text(_sure,
                         style: Yazi.stil(14, FontWeight.w700, Renkler.neon)),
+                    const SizedBox(width: 10),
+                    const _KaliteCubuklari(),
                   ] else ...[
                     SizedBox(
                       width: 12,
@@ -547,6 +628,22 @@ class _AramaEkraniState extends State<AramaEkrani> {
                 ],
               ),
             ),
+            // Bağlantı zayıfsa açıkça söyle (sinyal çubuklarının altında).
+            if (bagli)
+              ValueListenableBuilder<int>(
+                valueListenable: _arama.baglantiKalitesi,
+                builder: (_, deger, _) {
+                  final uyari = kaliteUyarisi(kaliteCoz(deger));
+                  if (uyari == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      uyari,
+                      style: Yazi.stil(12, FontWeight.w700, Renkler.tehlike),
+                    ),
+                  );
+                },
+              ),
             // Agora bağlantı/token hatası (tanı için)
             ValueListenableBuilder<String?>(
               valueListenable: _arama.sonHata,
@@ -637,6 +734,51 @@ class _AramaEkraniState extends State<AramaEkrani> {
           size: 24,
         ),
       ),
+    );
+  }
+}
+
+/// Görüşme sinyal çubukları (4 çubuk): iyi → 4, orta → 2, zayıf → 1, yok → 0.
+class _KaliteCubuklari extends StatelessWidget {
+  const _KaliteCubuklari();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: AramaServisi.instance.baglantiKalitesi,
+      builder: (_, deger, _) {
+        final k = kaliteCoz(deger);
+        final dolu = kaliteCubuk(k);
+        final renk = switch (k) {
+          BaglantiKalitesi.zayif || BaglantiKalitesi.kopuk => Renkler.tehlike,
+          _ => Renkler.neon,
+        };
+        return Semantics(
+          label: 'Bağlantı kalitesi: ${switch (k) {
+            BaglantiKalitesi.iyi => 'iyi',
+            BaglantiKalitesi.orta => 'orta',
+            BaglantiKalitesi.zayif => 'zayıf',
+            BaglantiKalitesi.kopuk => 'yok',
+            BaglantiKalitesi.bilinmiyor => 'ölçülüyor',
+          }}',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (var i = 0; i < 4; i++)
+                Container(
+                  width: 3,
+                  height: 5.0 + i * 3,
+                  margin: const EdgeInsets.only(left: 2),
+                  decoration: BoxDecoration(
+                    color: i < dolu ? renk : renk.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

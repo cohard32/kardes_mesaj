@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../modeller/kullanici.dart';
+import '../yardimcilar/bildirim_yuku.dart';
+import '../yardimcilar/hatirlatma_zamani.dart';
 import '../yardimcilar/onemli_gun.dart';
 import 'arkadas_servisi.dart';
 import 'hata_servisi.dart';
@@ -130,7 +132,9 @@ class HatirlaticiServisi {
     }, onError: (Object e) => HataServisi.instance.iz('hatirlatici ozel: $e'));
   }
 
-  /// Çıkışta: dinleyicileri kapat, bu hesabın hatırlatıcılarını sil.
+  /// Çıkışta: dinleyicileri kapat, bu hesabın TÜM yerel bildirimlerini
+  /// (doğum günü, mesaj hatırlatmaları, ekrandakiler) sil — başka hesapla
+  /// girilen telefonda eski hesabın hatırlatması çalmasın.
   Future<void> durdur() async {
     _gecikme?.cancel();
     await _arkadasAbone?.cancel();
@@ -140,7 +144,64 @@ class HatirlaticiServisi {
     _arkadaslar = const [];
     _ozel = const [];
     await _hepsiniIptal();
+    try {
+      await _plugin.cancelAll();
+    } catch (_) {}
   }
+
+  // ---- "BUNU BANA HATIRLAT" (mesaj hatırlatması) ----
+
+  static const String mesajKanalId = 'mesaj_hatirlatma_v1';
+
+  /// [zaman]'da TEK SEFERLİK bildirim kurar; dokununca sohbet açılır.
+  /// Kesin alarm izni varsa dakikası dakikasına, yoksa birkaç dakika
+  /// sapmayla (pil tasarrufu modunda) çalar. Kimliği döner (geri almak için).
+  Future<int> mesajHatirlat({
+    required String chatId,
+    required String karsiUid,
+    required String baslik,
+    required String ozet,
+    required String mesajId,
+    required DateTime zaman,
+  }) async {
+    final a = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    await a?.createNotificationChannel(const AndroidNotificationChannel(
+      mesajKanalId,
+      'Mesaj hatırlatmaları',
+      description: '"Bunu bana hatırlat" ile kurduğun hatırlatmalar',
+      importance: Importance.high,
+    ));
+    var kesin = false;
+    try {
+      kesin = await a?.canScheduleExactNotifications() ?? false;
+    } catch (_) {}
+    final id = mesajHatirlatmaKimligi(mesajId, zaman);
+    await _plugin.zonedSchedule(
+      id: id,
+      title: baslik,
+      body: ozet,
+      scheduledDate: tz.TZDateTime.from(zaman, tz.UTC),
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          mesajKanalId,
+          'Mesaj hatırlatmaları',
+          importance: Importance.high,
+          priority: Priority.high,
+          styleInformation: BigTextStyleInformation(ozet),
+          category: AndroidNotificationCategory.reminder,
+        ),
+      ),
+      androidScheduleMode: kesin
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: sohbetYuku(chatId, karsiUid),
+    );
+    HataServisi.instance.iz('MESAJ HATIRLATMA kuruldu kesin=$kesin');
+    return id;
+  }
+
+  Future<void> mesajHatirlatmaIptal(int id) => _plugin.cancel(id: id);
 
   Future<void> acikAyarla(bool v) async {
     acik.value = v;

@@ -6,4 +6,7 @@
 <resources>
     <color name="km_zemin">#071A10</color>
     <color name="km_zemin_derin">#050F0A</color>
+    <!-- Bildirim ikonu/vurgusu: neon yeşilin koyu tonu (açık bildirim
+         panelinde de okunur). -->
+    <color name="km_bildirim">#4E9A12</color>
 </resources>

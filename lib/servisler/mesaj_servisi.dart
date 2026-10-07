@@ -6,6 +6,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/mesaj.dart';
+import '../yardimcilar/link_metni.dart';
+import '../yardimcilar/mesaj_metni.dart';
 import 'bildirim_servisi.dart';
 import 'kullanici_servisi.dart';
 import 'medya_servisi.dart';
@@ -68,6 +70,39 @@ class MesajServisi {
         .map((s) => s.docs.map(Mesaj.firestoreDan).toList());
   }
 
+  // ---- MEDYA GALERİSİ (bkz. firestore.indexes.json: tip+zaman, link+zaman)
+
+  /// Sohbetteki foto/videolar, yeniden eskiye.
+  Future<List<Mesaj>> medyalar(String chatId, {int limit = 90}) async {
+    final s = await _mesajlar(chatId)
+        .where('tip', whereIn: [MesajTipi.resim.name, MesajTipi.video.name])
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
+  /// Sohbetteki belgeler (PDF, Word…), yeniden eskiye.
+  Future<List<Mesaj>> belgeler(String chatId, {int limit = 60}) async {
+    final s = await _mesajlar(chatId)
+        .where('tip', isEqualTo: MesajTipi.dosya.name)
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
+  /// Link içeren mesajlar (yalnız `link: true` işaretli — bu sürümden sonra
+  /// gönderilenler), yeniden eskiye.
+  Future<List<Mesaj>> linkler(String chatId, {int limit = 60}) async {
+    final s = await _mesajlar(chatId)
+        .where('link', isEqualTo: true)
+        .orderBy('zaman', descending: true)
+        .limit(limit)
+        .get();
+    return s.docs.map(Mesaj.firestoreDan).toList();
+  }
+
   /// Metin mesajı gönderir + sohbet meta güncelle + karşı tarafa bildirim.
   /// [yanit] verilirse mesaj o mesaja yanıt (alıntı) olarak gider.
   Future<void> gonder(
@@ -90,8 +125,14 @@ class MesajServisi {
   }
 
   /// Medya (resim/video/ses) gönderir (Cloudinary'ye yükler).
-  Future<bool> medyaGonder(String chatId, String alanUid, File dosya,
-      MesajTipi tip) async {
+  /// [aciklama]: fotoğraf/videonun altına yazılan açıklama (boş olabilir).
+  Future<bool> medyaGonder(
+    String chatId,
+    String alanUid,
+    File dosya,
+    MesajTipi tip, {
+    String aciklama = '',
+  }) async {
     final uid = _uid;
     if (uid == null) return false;
     HataServisi.instance.iz('MEDYA yukleniyor tip=${tip.name}');
@@ -102,13 +143,81 @@ class MesajServisi {
     }
     HataServisi.instance.iz('MEDYA yuklendi');
 
+    final metin = aciklama.trim();
     await _mesajlar(chatId).add(
-      Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),
+      Mesaj.yeniMedyaVerisi(
+        gonderen: uid,
+        tip: tip,
+        medyaUrl: url,
+        metin: metin,
+      ),
     );
-    final etiket = Mesaj.medyaEtiketi(tip);
+    // Açıklama varsa önizleme "📷 açıklama", yoksa "📷 Fotoğraf".
+    final etiket = Mesaj(id: '', gonderen: uid, metin: metin, tip: tip).onizleme;
+    await _metaGuncelle(chatId, alanUid, etiket);
+    // Bildirimde fotoğrafın (videoda kapağın) küçük hâli görünsün.
+    final kapak = tip == MesajTipi.video ? videoKapakUrl(url) : null;
+    final resim = switch (tip) {
+      MesajTipi.resim => kucukResimUrl(url),
+      MesajTipi.video when kapak != null => kucukResimUrl(kapak),
+      _ => null,
+    };
+    unawaited(_bildir(alanUid, chatId, etiket, resimUrl: resim));
+    return true;
+  }
+
+  /// Dosya (PDF, Word…) gönderir: Cloudinary'ye "raw" olarak yüklenir.
+  /// `metin` = "📎 ad" → eski sürümler bunu yazı olarak gösterir.
+  Future<bool> dosyaGonder(
+    String chatId,
+    String alanUid,
+    File dosya, {
+    required String ad,
+    required int boyut,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return false;
+    HataServisi.instance.iz('DOSYA yukleniyor boyut=$boyut');
+    final url = await MedyaServisi.instance.yukle(dosya, MesajTipi.dosya);
+    if (url == null) {
+      HataServisi.instance.iz('DOSYA YUKLENEMEDI (Cloudinary null)');
+      return false;
+    }
+    final etiket = '📎 $ad';
+    await _mesajlar(chatId).add({
+      'gonderen': uid,
+      'metin': etiket,
+      'tip': MesajTipi.dosya.name,
+      'medyaUrl': url,
+      'dosyaAdi': ad,
+      'dosyaBoyutu': boyut,
+      'zaman': FieldValue.serverTimestamp(),
+      'goruldu': false,
+    });
     await _metaGuncelle(chatId, alanUid, etiket);
     unawaited(_bildir(alanUid, chatId, etiket));
     return true;
+  }
+
+  /// ARAYAN: karşı taraf HİÇ bağlanmadan biten aramayı sohbete "cevapsız
+  /// arama" olarak yazar; karşı tarafın okunmamışı artar ve bildirim gider
+  /// (CallKit'in kendi İngilizce "Missed call" bildirimi kapalı, bkz.
+  /// gelenAramayiGoster). Çevrimdışıyken Firestore kuyruğa alır.
+  Future<void> aramaKaydiYaz(
+    String chatId,
+    String alanUid, {
+    required bool video,
+    required String sonuc,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return;
+    HataServisi.instance.iz('CEVAPSIZ ARAMA kaydi sonuc=$sonuc chat=$chatId');
+    final metin = Mesaj.aramaKaydiMetni(video: video);
+    await _mesajlar(chatId).add(
+      Mesaj.aramaKaydiVerisi(gonderen: uid, video: video, sonuc: sonuc),
+    );
+    await _metaGuncelle(chatId, alanUid, metin);
+    unawaited(_bildir(alanUid, chatId, metin));
   }
 
   /// GIF gönderir (GIPHY URL doğrudan yazılır).
@@ -177,6 +286,8 @@ class MesajServisi {
     await _mesajlar(chatId).doc(mesajId).update({
       'metin': temiz,
       'duzenlendi': FieldValue.serverTimestamp(),
+      // Düzenlenen metne link eklendiyse/çıktıysa galeri işareti de değişir.
+      'link': linkIceriyor(temiz) ? true : FieldValue.delete(),
     });
     await _sonMesajTazele(chatId);
   }
@@ -208,13 +319,27 @@ class MesajServisi {
     }
   }
 
-  /// Bir mesaja emoji tepkisi ekler/kaldırır (toggle).
-  Future<void> tepkiDegistir(
-      String chatId, String mesajId, String emoji) async {
-    final doc = _mesajlar(chatId).doc(mesajId);
-    final mevcut = await doc.get();
-    final eskiTepki = mevcut.data()?['tepki'] as String?;
-    await doc.update({'tepki': eskiTepki == emoji ? null : emoji});
+  /// KENDİ tepkimi ekler / değiştirir / (aynı emojiyse) kaldırır.
+  ///
+  /// ⚠️ Eskiden tek bir `tepki` alanı vardı: aynı mesaja iki kişi tepki
+  /// verince biri diğerininkinin YERİNE geçiyor, aynı emojiye basan da
+  /// karşının tepkisini SİLİYORDU. Artık `tepkiler.{uid}` — herkesin ayrı
+  /// anahtarı (kural yalnız kendi anahtarına izin verir). Mevcut durum
+  /// ekrandaki mesajdan okunur → ek bir Firestore okuması yapılmaz.
+  Future<void> tepkiDegistir(String chatId, Mesaj mesaj, String emoji) =>
+      tepkiAyarla(
+        chatId,
+        mesaj.id,
+        mesaj.tepkiler[_uid] == emoji ? null : emoji,
+      );
+
+  /// KENDİ tepkimi [emoji] yapar; null ise kaldırır.
+  Future<void> tepkiAyarla(String chatId, String mesajId, String? emoji) async {
+    final uid = _uid;
+    if (uid == null) return;
+    await _mesajlar(chatId).doc(mesajId).update({
+      FieldPath(['tepkiler', uid]): emoji ?? FieldValue.delete(),
+    });
   }
 
   /// Karşı taraftan gelen görülmemiş mesajları "görüldü" işaretler + okundu.
@@ -258,13 +383,19 @@ class MesajServisi {
   /// verince bu, yakalanmamış async hata olarak global işleyiciye düşüp
   /// HER mesajda hata raporu yazdırıyordu. Mesaj zaten gönderildi; bildirim
   /// gitmezse yalnızca ize düşülür.
-  Future<void> _bildir(String alanUid, String chatId, String onizleme) async {
+  Future<void> _bildir(
+    String alanUid,
+    String chatId,
+    String onizleme, {
+    String? resimUrl,
+  }) async {
     try {
       final ad = await _benimAdim();
       await BildirimServisi.instance.hedefeBildirimGonder(
         hedefUid: alanUid,
         baslik: ad,
         govde: onizleme,
+        resimUrl: resimUrl,
         ekstraData: {
           'tur': 'mesaj',
           'chatId': chatId,

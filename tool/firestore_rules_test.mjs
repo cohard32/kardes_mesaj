@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (107 senaryo).
+// Firestore güvenlik kuralları birim testi (129 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 107 PASS / 0 FAIL (T6 eski public fcmToken geçiş sınırı olarak PASS sayılır).
+// Beklenen: 129 PASS / 0 FAIL (T6 eski public fcmToken geçiş sınırı olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -416,6 +416,65 @@ log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'engelde', d
 await env.withSecurityRulesDisabled(async (ctx) => {
   await deleteDoc(doc(ctx.firestore(), `engellenenler/${AB}`));
 });
+
+// ---- TK: HER KİŞİNİN AYRI TEPKİSİ (tepkiler.{uid}) ----
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), `chats/${AB}/messages/tk1`),
+    { gonderen:'alice', metin:'tepki testi', tip:'metin', zaman: TS.now(), goruldu:false });
+});
+const TK = `chats/${AB}/messages/tk1`;
+log(await ok(assertSucceeds(updateDoc(doc(A(), TK), { 'tepkiler.alice': '❤️' }))),
+  'TK1 kendi tepkisini ekleyebilir (pozitif)');
+log(await ok(assertSucceeds(updateDoc(doc(B(), TK), { 'tepkiler.bob': '👍' }))),
+  'TK2 karsi taraf AYRI tepki ekler, digerini silmez (pozitif)');
+log(await ok(assertSucceeds(updateDoc(doc(A(), TK), { 'tepkiler.alice': '😂' }))),
+  'TK3 kendi tepkisini degistirebilir (pozitif)');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { 'tepkiler.bob': '😡' }))),
+  'TK4 BASKASININ tepkisi degistirilemez');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { 'tepkiler.bob': deleteField() }))),
+  'TK5 BASKASININ tepkisi silinemez');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { tepkiler: { alice: '❤️' } }))),
+  'TK6 tum harita ezilerek digerinin tepkisi silinemez');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { 'tepkiler.alice': 5 }))),
+  'TK7 metin olmayan tepki reddedilir');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { 'tepkiler.alice': 'x'.repeat(17) }))),
+  'TK8 cok uzun tepki reddedilir');
+log(await ok(assertFails(updateDoc(doc(C(), TK), { 'tepkiler.carol': '❤️' }))),
+  'TK9 yabanci tepki veremez');
+log(await ok(assertSucceeds(updateDoc(doc(A(), TK), { 'tepkiler.alice': deleteField() }))),
+  'TK10 kendi tepkisini kaldirabilir (pozitif)');
+log(await ok(assertSucceeds(updateDoc(doc(B(), TK), { tepki: '🙏' }))),
+  'TK11 eski tek tepki alani hala yazilabilir (gecis, pozitif)');
+log(await ok(assertFails(updateDoc(doc(A(), TK), { 'tepkiler.alice': '❤️', metin: 'sahte' }))),
+  'TK12 tepkiyle birlikte metin degistirilemez');
+
+// ---- YM: YENİ MESAJ TÜRLERİ (cevapsız arama, dosya, link) ----
+const YM = (id) => doc(A(), `chats/${AB}/messages/${id}`);
+const temel = { gonderen:'alice', zaman: serverTimestamp(), goruldu:false };
+log(await ok(assertSucceeds(setDoc(YM('ym1'), { ...temel, metin:'📞 Cevapsız sesli arama', tip:'arama', aramaTipi:'ses', aramaSonucu:'cevapsiz' }))),
+  'YM1 cevapsiz arama kaydi yazilabilir (pozitif)');
+log(await ok(assertFails(setDoc(YM('ym2'), { ...temel, metin:'x', tip:'arama', aramaTipi:'faks', aramaSonucu:'cevapsiz' }))),
+  'YM2 gecersiz arama tipi reddedilir');
+log(await ok(assertFails(setDoc(YM('ym3'), { ...temel, metin:'x', tip:'arama', aramaTipi:'ses', aramaSonucu:'kazandin' }))),
+  'YM3 gecersiz arama sonucu reddedilir');
+log(await ok(assertSucceeds(setDoc(YM('ym4'), { ...temel, metin:'📎 rapor.pdf', tip:'dosya', medyaUrl:'https://res.cloudinary.com/x/raw/upload/v1/r.pdf', dosyaAdi:'rapor.pdf', dosyaBoyutu: 123456 }))),
+  'YM4 dosya mesaji yazilabilir (pozitif)');
+log(await ok(assertFails(setDoc(YM('ym5'), { ...temel, metin:'x', tip:'dosya', dosyaAdi:'a'.repeat(201), dosyaBoyutu: 1 }))),
+  'YM5 cok uzun dosya adi reddedilir');
+log(await ok(assertFails(setDoc(YM('ym6'), { ...temel, metin:'x', tip:'dosya', dosyaAdi:'a.pdf', dosyaBoyutu: 200 * 1024 * 1024 }))),
+  'YM6 100 MB ustu dosya boyutu reddedilir');
+log(await ok(assertFails(setDoc(YM('ym7'), { ...temel, metin:'x', tip:'dosya', dosyaAdi:'a.pdf', dosyaBoyutu: 'cok' }))),
+  'YM7 sayi olmayan dosya boyutu reddedilir');
+log(await ok(assertSucceeds(setDoc(YM('ym8'), { ...temel, metin:'bak https://x.com', tip:'metin', link: true }))),
+  'YM8 linkli metin isaretlenebilir (pozitif)');
+log(await ok(assertFails(setDoc(YM('ym9'), { ...temel, metin:'x', tip:'metin', link: 'evet' }))),
+  'YM9 link alani yalniz true olabilir');
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), `chats/${AB}/messages/ym10`),
+    { gonderen:'alice', metin:'linksiz', tip:'metin', zaman: TS.now(), goruldu:false });
+});
+log(await ok(assertSucceeds(updateDoc(YM('ym10'), { metin:'artik https://y.org', link: true, duzenlendi: serverTimestamp() }))),
+  'YM10 duzenlemede link isareti eklenebilir (pozitif)');
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

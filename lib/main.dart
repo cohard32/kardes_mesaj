@@ -18,6 +18,7 @@ import 'servisler/ayar_servisi.dart';
 import 'servisler/bildirim_servisi.dart';
 import 'servisler/hata_servisi.dart';
 import 'servisler/kullanici_servisi.dart';
+import 'servisler/yerel_olaylar.dart';
 import 'tema.dart';
 
 /// Uygulama dışından (CallKit olayları) gezinmek için global navigator anahtarı.
@@ -25,6 +26,8 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Android → Dart olayları (paylaşım geldi, küçük pencere) — erkenden.
+  YerelOlaylar.baslat();
   // ⚠️ Bayat "görüşmedeyim" kaydını sil — runApp'ten ve FCM dinleyicilerinden
   // ÖNCE. Yeni süreçte Dart tarafında süren bir görüşme OLAMAZ (Agora motoru
   // süreçle birlikte ölür). Görüşme ortasında süreç ölünce (kaydırıp kapatma,
@@ -49,6 +52,8 @@ void main() async {
   FirebaseMessaging.onBackgroundMessage(arkaplanMesajHandler);
   // Bildirim servisi: izin, kanal, foreground dinleyici
   await BildirimServisi.instance.baslat();
+  // Yerel bildirime (hatırlatma, ön planda gösterilen mesaj) dokununca sohbet.
+  BildirimServisi.instance.sohbetAc = sohbetAcIstegi;
   // CallKit (gelen arama ekranı) olaylarını dinle
   _callkitDinle();
   // Mesaj bildirimine tıklama → doğru sohbeti aç.
@@ -192,6 +197,13 @@ void _mesajBildirimineTiklandi(RemoteMessage message) {
 
 /// Bekleyen sohbet varsa VE navigator hazırsa açar. Soğuk başlangıçta
 /// AnaKabuk kurulunca (postFrame) tekrar çağrılır.
+/// Yerel bildirimden (hatırlatma vb.) gelen "şu sohbeti aç" isteği.
+void sohbetAcIstegi(String chatId, String karsiUid) {
+  _bekleyenSohbetChatId = chatId;
+  _bekleyenSohbetKarsiUid = karsiUid;
+  bekleyenSohbetiAc();
+}
+
 Future<void> bekleyenSohbetiAc() async {
   final chatId = _bekleyenSohbetChatId;
   final karsiUid = _bekleyenSohbetKarsiUid;

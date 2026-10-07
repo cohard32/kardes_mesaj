@@ -11,7 +11,7 @@
 
 [![Sürüm](https://img.shields.io/github/v/release/cohard32/kardes_mesaj?style=flat-square&color=B4FF3C&labelColor=0D2818&label=s%C3%BCr%C3%BCm)](https://github.com/cohard32/kardes_mesaj/releases/latest)
 [![İndirme](https://img.shields.io/github/downloads/cohard32/kardes_mesaj/total?style=flat-square&color=B4FF3C&labelColor=0D2818&label=indirme)](https://github.com/cohard32/kardes_mesaj/releases)
-![Kural testi](https://img.shields.io/badge/kural%20testi-107%2F107-B4FF3C?style=flat-square&labelColor=0D2818)
+![Kural testi](https://img.shields.io/badge/kural%20testi-129%2F129-B4FF3C?style=flat-square&labelColor=0D2818)
 
 **Aile içi kullanım için yazılmış, reklamsız ve takipsiz bir Android mesajlaşma uygulaması.**
 
@@ -26,19 +26,19 @@
 <td width="33%" valign="top">
 
 ### Mesajlaşma
-Anlık metin · mesaja yanıt (alıntı) · ✓✓ görüldü · yazıyor göstergesi · emoji tepkileri · GIF & sticker · ilk 60 saniye içinde mesaj silme
+Anlık metin · kaydırarak yanıt (alıntı) · çift dokununca ❤️, herkesin tepkisi ayrı · mesaj düzenleme (15 dk) · sohbet içi arama · tıklanabilir linkler · tarih ayraçları · taslak · "Bunu bana hatırlat" · ✓✓ görüldü · yazıyor göstergesi · GIF & sticker · ilk 60 saniye içinde mesaj silme
 
 </td>
 <td width="33%" valign="top">
 
 ### Arama
-Sesli ve görüntülü arama · kilit ekranında tam ekran gelen arama · özelleştirilebilir zil sesi · meşgul bildirimi (uygulama arka plandayken de) · kopan bağlantıda otomatik kapanma
+Sesli ve görüntülü arama · kilit ekranında tam ekran gelen arama · 7 zil melodisi · cevapsız arama kaydı · bağlantı kalitesi göstergesi · görüntülüde küçük pencere (PiP) · meşgul bildirimi (uygulama arka plandayken de) · kopan bağlantıda otomatik kapanma
 
 </td>
 <td width="33%" valign="top">
 
 ### Medya
-Fotoğraf ve video **orijinal kalitede** · sesli mesaj (dalga formu, hız, seek) · galeriye indirme · videolar dokununca yüklenir
+Fotoğraf ve video **orijinal kalitede** saklanır, balonda hızlı küçük hâli · kameradan çekme, çoklu seçim, açıklama · dosya/PDF · başka uygulamadan paylaşma · galeriye indirme · medya galerisi (medya / belgeler / linkler) · sesli mesaj (kilitleme, göndermeden dinleme, hız, seek)
 
 </td>
 </tr>
@@ -46,19 +46,19 @@ Fotoğraf ve video **orijinal kalitede** · sesli mesaj (dalga formu, hız, seek
 <td valign="top">
 
 ### Sosyal
-`@kullanıcı adı` ile arama · QR kod ile ekleme · arkadaşlık istekleri · profil & durum · engelleme
+`@kullanıcı adı` ile arama · QR kod ile ekleme · arkadaşlık istekleri · davet et · doğum günleri ve önemli günler (hatırlatıcı, konfeti 🎂) · profil & durum · engelleme
 
 </td>
 <td valign="top">
 
 ### Bildirim
-Uygulama kapalıyken bile anlık push · özelleştirilebilir bildirim sesi · titreşim ayarı · sohbet sessize alma¹ · pil optimizasyonu rehberi
+Uygulama kapalıyken bile anlık push · gönderenin fotoğrafı ve fotoğraf önizlemesi · sohbet başına ayrı bildirim · 13 özgün bildirim sesi · "Bildirimi dene" · titreşim ayarı · sohbet sessize alma¹ · pil optimizasyonu rehberi
 
 </td>
 <td valign="top">
 
 ### Bakım
-Onaylı uygulama içi güncelleme (sürüm notlarıyla) · uzaktan teşhis raporlama · 5 tema
+Onaylı uygulama içi güncelleme (sürüm notlarıyla) · uzaktan teşhis raporlama · 5 tema · 3B uyarlanabilir + temalı uygulama ikonu
 
 </td>
 </tr>
@@ -115,11 +115,11 @@ Veriye erişim tamamen [`firestore.rules`](firestore.rules) tarafından belirlen
 - Belge kimlikleri (arkadaşlık, sohbet, engel, istek) içindeki kullanıcılardan türetilmiş olmak zorunda — kimlik sahteciliğiyle onaysız arkadaşlık / sahte engel kurulamaz
 - Bildirim token'ı ve sessize alınan sohbetler yalnız sahibinin okuyabildiği `users/{uid}/ozel` belgesinde
 
-Kurallar `@firebase/rules-unit-testing` ile emülatörde **107 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
+Kurallar `@firebase/rules-unit-testing` ile emülatörde **129 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
 
 ```bash
 firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-# → 107 PASS / 0 FAIL
+# → 129 PASS / 0 FAIL
 ```
 
 ---
@@ -160,7 +160,7 @@ Derleme için gerekli ama depoda **bulunmayan** dosyalar (hepsi `.gitignore`'da)
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **1.9.0** | Güvenlik kuralları sertleştirmesi (7 açık) · mesaja yanıt · sohbet sessize alma · 5 tema · kaymayan sohbet listesi · arka planda meşgul tespiti · onaylı güncelleme · aktarıcı · CI |
+| **1.9.0** | Güvenlik kuralları sertleştirmesi (7 açık) · mesaja yanıt, düzenleme, tepkiler · fotoğraf önbelleği + orijinal görüntüleme · dosya/PDF · paylaşım hedefi · cevapsız arama · PiP · medya galerisi · doğum günleri · yeni bildirimler, sesler ve 3B ikon · 5 tema · onaylı güncelleme · aktarıcı · CI |
 | 1.8.0 | Engelleme · e-posta doğrulama · şifre gücü · App Check · gizlilik sıkılaştırması |
 | 1.7.0 | Mesaj silme (60 sn) · orijinal kalitede medya · galeriye indirme |
 | 1.6.x | Görüntülü arama kararlılığı · zil sesi kök neden düzeltmesi · uzaktan teşhis |

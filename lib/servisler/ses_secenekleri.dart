@@ -32,6 +32,9 @@ class SesSecenegi {
   /// Android kanal açıklaması (sistem bildirim ayarlarında görünür).
   final String? aciklama;
 
+  /// Ayarlar'da altında listelendiği başlık ("Melodik", "Doğa"…).
+  final String kategori;
+
   const SesSecenegi({
     required this.anahtar,
     required this.ad,
@@ -39,6 +42,7 @@ class SesSecenegi {
     this.rawKaynak,
     this.sesCalar = true,
     this.aciklama,
+    this.kategori = 'Temel',
   });
 
   /// Arama zili olarak da sunulabilir mi? CallKit yalnız res/raw adını
@@ -50,50 +54,77 @@ class SesSecenegi {
 /// kurulur (bkz. `BildirimKanali.ozelKanal`) → bu listede DEĞİL.
 const String ozelSesAnahtari = 'ozel';
 
-/// Hazır (uygulamayla gelen) bildirim sesleri — Ayarlar'daki sırayla.
-const List<SesSecenegi> sesSecenekleri = [
-  SesSecenegi(
+/// Uygulamayla gelen sesin seçeneği (önizleme = `assets/sesler/{ad}.{uzantı}`,
+/// zil/kanal sesi = `res/raw/{ad}`). Yeni sesler tool/ses_sentez.py ile
+/// ÜRETİLDİ (tamamen sentez → telif/lisans sorunu yok).
+SesSecenegi _hazir(
+  String anahtar,
+  String ad,
+  String kategori, {
+  String uzanti = 'ogg',
+}) =>
+    SesSecenegi(
+      anahtar: anahtar,
+      ad: ad,
+      onizlemeAsset: 'sesler/$anahtar.$uzanti',
+      rawKaynak: anahtar,
+      kategori: kategori,
+    );
+
+/// Hazır (uygulamayla gelen) BİLDİRİM sesleri — Ayarlar'daki sırayla,
+/// kategorilere göre gruplu. ⚠️ Eski anahtarlar (kedi…, cingirak) KORUNDU:
+/// seçmiş olanların ayarı ve kanalı çalışmaya devam eder.
+final List<SesSecenegi> sesSecenekleri = List.unmodifiable([
+  const SesSecenegi(
     anahtar: 'varsayilan',
     ad: 'Varsayılan',
     aciklama: 'Yeni mesaj bildirimleri',
   ),
-  SesSecenegi(anahtar: 'sessiz', ad: 'Sessiz', sesCalar: false),
-  SesSecenegi(
-    anahtar: 'kedi',
-    ad: 'Yavru Kedi 1 🐱',
-    onizlemeAsset: 'sesler/kedi.mp3',
-    rawKaynak: 'kedi',
-  ),
-  SesSecenegi(
-    anahtar: 'kedi2',
-    ad: 'Yavru Kedi 2 😻',
-    onizlemeAsset: 'sesler/kedi2.mp3',
-    rawKaynak: 'kedi2',
-  ),
-  SesSecenegi(
-    anahtar: 'kedi3',
-    ad: 'Yavru Kedi 3 🐈',
-    onizlemeAsset: 'sesler/kedi3.mp3',
-    rawKaynak: 'kedi3',
-  ),
-  SesSecenegi(
-    anahtar: 'kedi4',
-    ad: 'Yavru Kedi 4 🐾',
-    onizlemeAsset: 'sesler/kedi4.mp3',
-    rawKaynak: 'kedi4',
-  ),
-  SesSecenegi(
-    anahtar: 'cingirak',
-    ad: 'Çıngırak 🔔',
-    onizlemeAsset: 'sesler/cingirak.wav',
-    rawKaynak: 'cingirak',
-  ),
-];
+  const SesSecenegi(anahtar: 'sessiz', ad: 'Sessiz', sesCalar: false),
+  // Kısa ve sade
+  _hazir('tik', 'Tık 👆', 'Kısa ve sade'),
+  _hazir('pit', 'Pıt 🫧', 'Kısa ve sade'),
+  _hazir('damla', 'Damla 💧', 'Kısa ve sade'),
+  // Melodik
+  _hazir('marimba', 'Marimba 🎵', 'Melodik'),
+  _hazir('kalimba', 'Kalimba 🎶', 'Melodik'),
+  _hazir('arp', 'Arp 🎼', 'Melodik'),
+  _hazir('gitar', 'Gitar 🎸', 'Melodik'),
+  // Zarif
+  _hazir('kristal', 'Kristal ✨', 'Zarif'),
+  _hazir('kampana', 'Kampana 🛎️', 'Zarif'),
+  _hazir('yumusak', 'Yumuşak 🌙', 'Zarif'),
+  // Eğlenceli
+  _hazir('neon', 'Neon ⚡', 'Eğlenceli'),
+  _hazir('kus', 'Kuş Cıvıltısı 🐦', 'Eğlenceli'),
+  _hazir('dingdong', 'Ding Dong 🏠', 'Eğlenceli'),
+  _hazir('cingirak', 'Çıngırak 🔔', 'Eğlenceli', uzanti: 'wav'),
+  // Sevimli
+  _hazir('kedi', 'Yavru Kedi 1 🐱', 'Sevimli', uzanti: 'mp3'),
+  _hazir('kedi2', 'Yavru Kedi 2 😻', 'Sevimli', uzanti: 'mp3'),
+  _hazir('kedi3', 'Yavru Kedi 3 🐈', 'Sevimli', uzanti: 'mp3'),
+  _hazir('kedi4', 'Yavru Kedi 4 🐾', 'Sevimli', uzanti: 'mp3'),
+]);
 
-/// Arama zili olarak da sunulan hazır sesler (Ayarlar > Arama Zil Sesi'nde
-/// telefon/uygulama zilinden SONRA, aynı sırayla).
-final List<SesSecenegi> zilSecenekleri =
-    List.unmodifiable(sesSecenekleri.where((s) => s.zilOlabilir));
+/// YALNIZ ZİL olarak sunulan uzun melodiler (4–6 sn, gelen aramada döngüyle
+/// çalar). Bildirim kanalı KURULMAZ.
+final List<SesSecenegi> zilMelodileri = List.unmodifiable([
+  _hazir('zil_marimba', 'Marimba Neşesi 🎵', 'Zil melodileri'),
+  _hazir('zil_kalimba', 'Kalimba Ninnisi 🎶', 'Zil melodileri'),
+  _hazir('zil_kristal', 'Kristal Zil ✨', 'Zil melodileri'),
+  _hazir('zil_sakin', 'Sakin Sabah 🌅', 'Zil melodileri'),
+  _hazir('zil_klasik', 'Klasik Telefon ☎️', 'Zil melodileri'),
+  _hazir('zil_retro', 'Retro Oyun 👾', 'Zil melodileri'),
+  _hazir('zil_neon', 'Neon Nabız ⚡', 'Zil melodileri'),
+]);
+
+/// Arama zili olarak sunulan hazır sesler (Ayarlar > Arama Zil Sesi'nde
+/// telefon/uygulama zilinden SONRA): önce zil melodileri, sonra bildirim
+/// sesleri (kısa olanlar zil olarak döngüyle tekrarlanır).
+final List<SesSecenegi> zilSecenekleri = List.unmodifiable([
+  ...zilMelodileri,
+  ...sesSecenekleri.where((s) => s.zilOlabilir),
+]);
 
 /// [anahtar]ın hazır ses seçeneği; bilinmeyen / 'ozel' → null.
 SesSecenegi? sesSecenegiBul(String anahtar) {
@@ -101,4 +132,19 @@ SesSecenegi? sesSecenegiBul(String anahtar) {
     if (s.anahtar == anahtar) return s;
   }
   return null;
+}
+
+/// Listeyi sırayı bozmadan kategorilere böler (Ayarlar'daki başlıklar).
+List<({String kategori, List<SesSecenegi> sesler})> kategorilereAyir(
+  Iterable<SesSecenegi> liste,
+) {
+  final sonuc = <({String kategori, List<SesSecenegi> sesler})>[];
+  for (final s in liste) {
+    if (sonuc.isEmpty || sonuc.last.kategori != s.kategori) {
+      sonuc.add((kategori: s.kategori, sesler: [s]));
+    } else {
+      sonuc.last.sesler.add(s);
+    }
+  }
+  return sonuc;
 }

@@ -29,11 +29,16 @@
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD"/>
     <!-- Cihaz yeniden baslatildiktan sonra da cagri altyapisi hazir olsun -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- "Bunu bana hatırlat": izin verilmişse hatırlatma dakikası dakikasına
+         çalar (Android 12-13'te çoğunlukla hazır gelir). Verilmemişse
+         hatırlatma yine çalışır, yalnız birkaç dakika sapabilir. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
 
     <application
         android:label="ROY MESSANGER"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -44,7 +49,9 @@
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize"
             android:showWhenLocked="true"
-            android:turnScreenOn="true">
+            android:turnScreenOn="true"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true">
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
@@ -58,6 +65,43 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- "Paylaş → ROY MESSANGER": başka uygulamalardan metin, link,
+             fotoğraf, video ve belge alır (görünmez, kısa ömürlü; içeriği
+             kopyalayıp asıl ekranı açar — bkz. Paylasim.kt). -->
+        <activity
+            android:name=".PaylasimAktivitesi"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
+                <data android:mimeType="application/*"/>
+                <data android:mimeType="text/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
+        </activity>
+        <!-- FCM bildirimlerinin küçük ikonu (tek renk) ve vurgu rengi -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_bildirim" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/km_bildirim" />
         <!-- FCM varsayilan bildirim kanali (bildirim_servisi.dart ile ayni id) -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"

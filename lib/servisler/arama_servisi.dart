@@ -13,6 +13,7 @@ import '../gizli.dart'; // agoraSertifika (.gitignore'da)
 import 'aktarici_servisi.dart';
 import 'aktif_arama_kaydi.dart';
 import 'arama_durumu.dart';
+import 'baglanti_kalitesi.dart';
 import 'bildirim_servisi.dart';
 import 'hata_servisi.dart';
 import 'kullanici_servisi.dart';
@@ -136,6 +137,18 @@ class AramaServisi {
   final ValueNotifier<bool> katildi = ValueNotifier<bool>(false);
   final ValueNotifier<String?> sonHata = ValueNotifier<String?>(null);
 
+  /// Görüşmenin bağlantı kalitesi: kendi ve karşı tarafın ölçümünün
+  /// KÖTÜSÜ (Agora değeri; bkz. baglanti_kalitesi.dart). 0 = bilinmiyor.
+  final ValueNotifier<int> baglantiKalitesi = ValueNotifier<int>(0);
+  int _yerelKalite = 0;
+  int _karsiKalite = 0;
+
+  void _kaliteSifirla() {
+    _yerelKalite = 0;
+    _karsiKalite = 0;
+    baglantiKalitesi.value = 0;
+  }
+
   // CallKit ile (kapalıyken) kabul edilip henüz ekranı açılmamış arama.
   String? bekleyenChatId;
   AramaTipi? bekleyenTip;
@@ -224,6 +237,7 @@ class AramaServisi {
       karsiUid.value = null;
       katildi.value = false;
     }
+    _kaliteSifirla();
     final e = createAgoraRtcEngine();
     await e.initialize(const RtcEngineContext(
       appId: appId,
@@ -249,6 +263,16 @@ class AramaServisi {
         HataServisi.instance.iz('AGORA HATA $err — $msg');
         debugPrint('Agora HATA: $err — $msg');
         sonHata.value = '$err: $msg';
+      },
+      // ~2 sn'de bir: uid 0 = kendi bağlantım, diğeri karşı taraf.
+      onNetworkQuality: (connection, remoteUid, tx, rx) {
+        final k = kaliteBirlestir(tx.value(), rx.value());
+        if (remoteUid == 0) {
+          _yerelKalite = k;
+        } else {
+          _karsiKalite = k;
+        }
+        baglantiKalitesi.value = kaliteBirlestir(_yerelKalite, _karsiKalite);
       },
       onConnectionStateChanged: (connection, state, reason) {
         HataServisi.instance.iz('AGORA baglanti durumu=$state ($reason)');
@@ -645,6 +669,7 @@ class AramaServisi {
     aktifAramaChatId = null;
     karsiUid.value = null;
     katildi.value = false;
+    _kaliteSifirla();
     bekleyenChatId = null;
     bekleyenTip = null;
     bekleyenBaslik = null;

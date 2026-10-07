@@ -61,3 +61,51 @@ String sonGorulmeMetni(DateTime t, {DateTime? simdi}) {
       ? 'son görülme $gun'
       : 'son görülme $gun ${y.year}';
 }
+
+const List<String> _uzunAylar = [
+  'Ocak',
+  'Şubat',
+  'Mart',
+  'Nisan',
+  'Mayıs',
+  'Haziran',
+  'Temmuz',
+  'Ağustos',
+  'Eylül',
+  'Ekim',
+  'Kasım',
+  'Aralık',
+];
+
+// DateTime.weekday: 1 = Pazartesi … 7 = Pazar.
+const List<String> _gunAdlari = [
+  'Pazartesi',
+  'Salı',
+  'Çarşamba',
+  'Perşembe',
+  'Cuma',
+  'Cumartesi',
+  'Pazar',
+];
+
+/// İki an aynı YEREL takvim gününde mi?
+bool ayniGun(DateTime a, DateTime b) {
+  final x = a.toLocal();
+  final y = b.toLocal();
+  return x.year == y.year && x.month == y.month && x.day == y.day;
+}
+
+/// Sohbetteki TARİH AYRACI metni (WhatsApp gibi):
+///   bugün → "Bugün", dün → "Dün", son bir hafta → gün adı ("Salı"),
+///   bu yıl → "12 Eylül", başka yıl → "12 Eylül 2025".
+/// Gelecekteki zaman (cihaz saati kaymış) bugün sayılır.
+String gunAyraciMetni(DateTime t, {DateTime? simdi}) {
+  final su = simdi ?? DateTime.now();
+  final fark = _gunFarki(t, su);
+  if (fark <= 0) return 'Bugün';
+  if (fark == 1) return 'Dün';
+  final y = t.toLocal();
+  if (fark < 7) return _gunAdlari[y.weekday - 1];
+  final gun = '${y.day} ${_uzunAylar[y.month - 1]}';
+  return y.year == su.toLocal().year ? gun : '$gun ${y.year}';
+}
