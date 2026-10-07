@@ -86,6 +86,20 @@ service cloud.firestore {
         && arkadasMi(chatId)
         && !engelli(chatId);
     }
+    // TEPKİLER: `tepkiler.{uid} = emoji` — herkesin AYRI tepkisi. Herkes
+    // YALNIZ kendi anahtarını ekleyip değiştirip silebilir. ⚠️ Eskiden tek
+    // `tepki` alanı vardı: aynı mesaja iki kişi tepki verince biri
+    // diğerininkini siliyordu. (Eski alan geçiş için hâlâ yazılabilir.)
+    function tepkilerGecerli() {
+      let yeni = request.resource.data.get('tepkiler', {});
+      let eski = resource.data.get('tepkiler', {});
+      return yeni is map
+        && yeni.diff(eski).affectedKeys().hasOnly([request.auth.uid])
+        && (!(request.auth.uid in yeni) ||
+            (yeni[request.auth.uid] is string &&
+             yeni[request.auth.uid].size() > 0 &&
+             yeni[request.auth.uid].size() <= 16));
+    }
     // İki uid'den SIRALI çift kimliği — istemcideki `ciftKimligi()` ile aynı.
     // ⚠️ friendships/chats/engellenenler/aramalar dokümanlarının kimliği
     // HER ZAMAN içindeki uid'lerden türetilmiş olmalı. Doğrulanmazsa biri
@@ -276,8 +290,9 @@ service cloud.firestore {
                'yanitId', 'yanitOnizleme', 'yanitGonderen'])
           && yanitAlanlariGecerli(chatId, request.resource.data);
         allow update: if chatKatilimcisi(chatId)
-          && (request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['goruldu', 'tepki', 'sesDinlendi'])
+          && ((request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['goruldu', 'tepki', 'sesDinlendi', 'tepkiler'])
+               && tepkilerGecerli())
               || mesajDuzenlemeGecerli(chatId));
         // SİLME: yalnızca KENDİ mesajını ve yalnızca ilk 60 SANİYE içinde.
         // ⚠️ Süre SUNUCUDA doğrulanır — istemcideki gizleme yeterli değildir

@@ -13,6 +13,7 @@ import 'package:record/record.dart';
 import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
+import '../parcalar/balon_hareketleri.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../parcalar/linkli_metin.dart';
 import '../parcalar/mesaj_listesi.dart';
@@ -151,6 +152,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // Bulunan mesajın kısa süre parlaması.
   final _vurguVN = ValueNotifier<String?>(null);
   Timer? _vurguTimer;
+
+  // Çift dokunulup ❤️ verilen mesajın kalp animasyonu (mesaj kimliği).
+  final _kalpVN = ValueNotifier<String?>(null);
+  Timer? _kalpTimer;
 
   // SESSİZE ALMA (canlı; başlıktaki ikon + menü metni için).
   bool _sessiz = false;
@@ -364,6 +369,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _aramaCtrl.dispose();
     _vurguTimer?.cancel();
     _vurguVN.dispose();
+    _kalpTimer?.cancel();
+    _kalpVN.dispose();
     super.dispose();
   }
 
@@ -956,9 +963,28 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 
   /// Listedeki tek öğe: (gerekirse) tarih ayracı + mesaj balonu.
-  /// Aramada bulunan mesaj kısa süre parlar.
+  /// Balon: sağa kaydırınca yanıt, çift dokununca ❤️, uzun basınca menü;
+  /// aramada bulunan mesaj kısa süre parlar.
   Widget _ogeKur(Mesaj m, String? ayrac) {
-    final balon = ValueListenableBuilder<String?>(
+    // Çift dokunma yalnız metin/foto/GIF'te: oynatma düğmeli balonlarda
+    // (ses, video) tek dokunuşu ~300 ms geciktirmesin.
+    final ciftDokunabilir = m.tip == MesajTipi.metin ||
+        m.tip == MesajTipi.resim ||
+        m.tip == MesajTipi.gif;
+    Widget balon = ValueListenableBuilder<String?>(
+      valueListenable: _kalpVN,
+      builder: (_, kalpId, _) => _MesajBalonu(
+        mesaj: m,
+        benimMi: m.gonderen == _uid,
+        chatId: widget.chatId,
+        benimUid: _uid,
+        karsiAd: widget.karsi.ad,
+        onUzunBas: () => _tepkiSec(m),
+        onCiftDokun: ciftDokunabilir ? () => _kalpAt(m) : null,
+        kalp: kalpId == m.id,
+      ),
+    );
+    balon = ValueListenableBuilder<String?>(
       valueListenable: _vurguVN,
       builder: (_, vurgu, cocuk) => AnimatedContainer(
         duration: const Duration(milliseconds: 300),
@@ -970,15 +996,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         ),
         child: cocuk,
       ),
-      child: _MesajBalonu(
-        mesaj: m,
-        benimMi: m.gonderen == _uid,
-        chatId: widget.chatId,
-        benimUid: _uid,
-        karsiAd: widget.karsi.ad,
-        onUzunBas: () => _tepkiSec(m),
-      ),
+      child: balon,
     );
+    // Engelliyken yazma alanı yok → kaydırarak yanıt da yok.
+    if (_engelleyen == null) {
+      balon = KaydirarakYanit(onYanit: () => _yanitla(m), child: balon);
+    }
     if (ayrac == null) return balon;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -987,10 +1010,37 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
   }
 
+  /// Çift dokunma: mesaja ❤️ (zaten ❤️ ise yalnız animasyon — yanlışlıkla
+  /// iki kez dokununca tepki kaybolmasın).
+  void _kalpAt(Mesaj m) {
+    HapticFeedback.lightImpact();
+    if (m.tepkiler[_uid] != '❤️') {
+      _tepkiYaz(_servis.tepkiAyarla(widget.chatId, m.id, '❤️'));
+    }
+    _kalpTimer?.cancel();
+    _kalpVN.value = m.id;
+    _kalpTimer = Timer(const Duration(milliseconds: 850), () {
+      if (_kalpVN.value == m.id) _kalpVN.value = null;
+    });
+  }
+
+  /// Tepki yazımını BEKLEMEDEN başlatır (çevrimdışıyken sunucu onayı
+  /// gecikir); reddedilirse kullanıcıya söyler.
+  void _tepkiYaz(Future<void> yazim) {
+    final messenger = ScaffoldMessenger.of(context);
+    yazim.catchError((Object e) {
+      HataServisi.instance.iz('tepki yazilamadi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Tepki kaydedilemedi. Tekrar dene.')),
+      );
+    });
+  }
+
   /// Mesaja uzun basınca açılan menü: tepkiler + (medyada) İndir +
   /// (kendi mesajın, ilk 1 dk) Sil.
   void _tepkiSec(Mesaj mesaj) {
     const emojiler = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+    final benimTepkim = mesaj.tepkiler[_uid];
     final medyaMi = mesaj.tip != MesajTipi.metin && mesaj.medyaUrl != null;
     // Sesli mesaj galeriye kaydedilmez (galeri foto/video içindir).
     final indirilebilir = medyaMi && mesaj.tip != MesajTipi.ses;
@@ -1018,10 +1068,21 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       borderRadius: BorderRadius.circular(30),
                       onTap: () {
                         Navigator.pop(context);
-                        _servis.tepkiDegistir(widget.chatId, mesaj.id, e);
+                        // Aynı emojiye yeniden basmak tepkiyi kaldırır.
+                        _tepkiYaz(
+                          _servis.tepkiDegistir(widget.chatId, mesaj, e),
+                        );
                       },
-                      child: Padding(
+                      child: Container(
                         padding: const EdgeInsets.all(8),
+                        // Seçili tepkim neon halkayla belli olur.
+                        decoration: e == benimTepkim
+                            ? BoxDecoration(
+                                color: Renkler.neonSis,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Renkler.neon),
+                              )
+                            : null,
                         child: Text(e, style: const TextStyle(fontSize: 30)),
                       ),
                     ),
@@ -1534,6 +1595,13 @@ class _MesajBalonu extends StatelessWidget {
   final String karsiAd;
   final VoidCallback onUzunBas;
 
+  /// Çift dokunma (❤️). null → çift dokunma tanınmaz (ses/video: tek
+  /// dokunuş gecikmesin).
+  final VoidCallback? onCiftDokun;
+
+  /// Az önce çift dokunuldu → balonun üstünde kalp patlaması.
+  final bool kalp;
+
   const _MesajBalonu({
     required this.mesaj,
     required this.benimMi,
@@ -1541,6 +1609,8 @@ class _MesajBalonu extends StatelessWidget {
     required this.benimUid,
     required this.karsiAd,
     required this.onUzunBas,
+    this.onCiftDokun,
+    this.kalp = false,
   });
 
   String _saat(DateTime? t) => t == null ? '' : saatMetni(t);
@@ -1720,6 +1790,7 @@ class _MesajBalonu extends StatelessWidget {
       alignment: benimMi ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: onUzunBas,
+        onDoubleTap: onCiftDokun,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1729,7 +1800,7 @@ class _MesajBalonu extends StatelessWidget {
               ),
               margin: EdgeInsets.only(
                 top: 4,
-                bottom: mesaj.tepki != null ? 16 : 4,
+                bottom: mesaj.tepkiVar ? 16 : 4,
               ),
               // Kendi balonun: neon gradient + ÇOK HAFİF glow (göz yormasın).
               // Karşı taraf: zeminden net ayrışan koyu yüzey, GLOW YOK.
@@ -1822,27 +1893,44 @@ class _MesajBalonu extends StatelessWidget {
                 ],
               ),
             ),
-            if (mesaj.tepki != null)
+            if (mesaj.tepkiVar)
               Positioned(
                 bottom: 0,
                 right: benimMi ? 8 : null,
                 left: benimMi ? null : 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 1,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Renkler.yuzeyYuksek,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Renkler.kenarGuclu, width: 1.5),
-                    boxShadow: Golgeler.balon,
-                  ),
-                  child: Text(
-                    mesaj.tepki!,
-                    style: const TextStyle(fontSize: 13),
+                // Rozete dokununca tepki menüsü açılır (değiştir/kaldır).
+                child: GestureDetector(
+                  onTap: onUzunBas,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Renkler.yuzeyYuksek,
+                      borderRadius: BorderRadius.circular(12),
+                      // Benim de tepkim varsa kenar neon.
+                      border: Border.all(
+                        color: mesaj.tepkiler.containsKey(benimUid)
+                            ? Renkler.neon
+                            : Renkler.kenarGuclu,
+                        width: 1.5,
+                      ),
+                      boxShadow: Golgeler.balon,
+                    ),
+                    child: Text(
+                      [
+                        for (final t in mesaj.tepkiOzeti)
+                          t.sayi > 1 ? '${t.emoji} ${t.sayi}' : t.emoji,
+                      ].join(' '),
+                      style: Yazi.stil(13, FontWeight.w700, Renkler.metin),
+                    ),
                   ),
                 ),
+              ),
+            if (kalp)
+              const Positioned.fill(
+                child: IgnorePointer(child: Center(child: KalpPatlamasi())),
               ),
           ],
         ),

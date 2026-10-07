@@ -19,7 +19,14 @@ class Mesaj {
   final String metin;
   final DateTime? zaman;
   final bool goruldu;
-  final String? tepki; // mesaja verilen emoji tepkisi (👍 ❤️ ...) veya null
+  /// ESKİ tek tepki alanı (1.9.0 öncesi sürümler yazar). Kimin verdiği
+  /// bilinmez; iki kişi tepki verince biri diğerinin yerine geçiyordu.
+  /// Yeni sürüm [tepkiler]'e yazar; bu alan yalnız GÖSTERİLİR.
+  final String? tepki;
+
+  /// HER KİŞİNİN AYRI tepkisi: uid → emoji. Herkes yalnız kendi anahtarını
+  /// değiştirebilir (firestore.rules → tepkilerGecerli).
+  final Map<String, String> tepkiler;
   final MesajTipi tip; // metin / resim / video / ses / gif
   final String? medyaUrl; // resim/video/ses Cloudinary URL'i veya GIPHY GIF URL'i
   final bool sesDinlendi; // sesli mesaj karşı tarafça dinlendi mi
@@ -42,6 +49,7 @@ class Mesaj {
     this.zaman,
     this.goruldu = false,
     this.tepki,
+    this.tepkiler = const {},
     this.tip = MesajTipi.metin,
     this.medyaUrl,
     this.sesDinlendi = false,
@@ -65,7 +73,8 @@ class Mesaj {
       metin: (d['metin'] ?? '') as String,
       zaman: (d['zaman'] as Timestamp?)?.toDate(),
       goruldu: (d['goruldu'] ?? false) as bool,
-      tepki: d['tepki'] as String?,
+      tepki: _metinMi(d['tepki']),
+      tepkiler: _tepkilerCoz(d['tepkiler']),
       tip: _tipCoz(d['tip'] as String?),
       medyaUrl: d['medyaUrl'] as String?,
       sesDinlendi: (d['sesDinlendi'] ?? false) as bool,
@@ -79,6 +88,30 @@ class Mesaj {
   }
 
   static String? _metinMi(Object? v) => v is String ? v : null;
+
+  // Bozuk/eski girdiler (metin olmayan değer) atlanır; akış düşmesin.
+  static Map<String, String> _tepkilerCoz(Object? v) {
+    if (v is! Map) return const {};
+    return {
+      for (final e in v.entries)
+        if (e.key is String && e.value is String && (e.value as String).isNotEmpty)
+          e.key as String: e.value as String,
+    };
+  }
+
+  /// Balonda tepki rozeti gösterilecek mi?
+  bool get tepkiVar => tepkiler.isNotEmpty || tepki != null;
+
+  /// Balonun altındaki rozet: her emoji ve kaç kişiden geldiği (ilk görülme
+  /// sırasıyla). Eski tek alan ([tepki]) de sayılır — eski sürümlerden gelen
+  /// tepkiler kaybolmasın.
+  List<({String emoji, int sayi})> get tepkiOzeti {
+    final sayac = <String, int>{};
+    for (final e in [...tepkiler.values, ?tepki]) {
+      sayac[e] = (sayac[e] ?? 0) + 1;
+    }
+    return [for (final e in sayac.entries) (emoji: e.key, sayi: e.value)];
+  }
 
   /// Medya türünün listede/bildirimde/alıntıda görünen etiketi.
   static String medyaEtiketi(MesajTipi tip) => switch (tip) {

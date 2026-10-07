@@ -194,4 +194,28 @@ void main() {
     expect(SesOynaticiServisi.sonrakiHiz(2.0), 1.0);
     expect(SesOynaticiServisi.sonrakiHiz(0.7), 1.0); // bilinmeyen → 1x
   });
+
+  group('tepkiler (her kişinin ayrı tepkisi)', () {
+    test('özet: aynı emoji sayılır, eski tek alan da dahil', () {
+      final m = Mesaj(
+        id: 'm',
+        gonderen: 'a',
+        metin: 'x',
+        tepkiler: const {'a': '❤️', 'b': '❤️', 'c': '👍'},
+        tepki: '👍',
+      );
+      expect(m.tepkiVar, isTrue);
+      expect(
+        m.tepkiOzeti.map((t) => '${t.emoji}${t.sayi}').toList(),
+        ['❤️2', '👍2'],
+      );
+    });
+
+    test('tepkisiz mesajda rozet yok', () {
+      final m = Mesaj(id: 'm', gonderen: 'a', metin: 'x');
+      expect(m.tepkiVar, isFalse);
+      expect(m.tepkiOzeti, isEmpty);
+    });
+  });
 }
+

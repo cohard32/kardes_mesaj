@@ -208,13 +208,27 @@ class MesajServisi {
     }
   }
 
-  /// Bir mesaja emoji tepkisi ekler/kaldırır (toggle).
-  Future<void> tepkiDegistir(
-      String chatId, String mesajId, String emoji) async {
-    final doc = _mesajlar(chatId).doc(mesajId);
-    final mevcut = await doc.get();
-    final eskiTepki = mevcut.data()?['tepki'] as String?;
-    await doc.update({'tepki': eskiTepki == emoji ? null : emoji});
+  /// KENDİ tepkimi ekler / değiştirir / (aynı emojiyse) kaldırır.
+  ///
+  /// ⚠️ Eskiden tek bir `tepki` alanı vardı: aynı mesaja iki kişi tepki
+  /// verince biri diğerininkinin YERİNE geçiyor, aynı emojiye basan da
+  /// karşının tepkisini SİLİYORDU. Artık `tepkiler.{uid}` — herkesin ayrı
+  /// anahtarı (kural yalnız kendi anahtarına izin verir). Mevcut durum
+  /// ekrandaki mesajdan okunur → ek bir Firestore okuması yapılmaz.
+  Future<void> tepkiDegistir(String chatId, Mesaj mesaj, String emoji) =>
+      tepkiAyarla(
+        chatId,
+        mesaj.id,
+        mesaj.tepkiler[_uid] == emoji ? null : emoji,
+      );
+
+  /// KENDİ tepkimi [emoji] yapar; null ise kaldırır.
+  Future<void> tepkiAyarla(String chatId, String mesajId, String? emoji) async {
+    final uid = _uid;
+    if (uid == null) return;
+    await _mesajlar(chatId).doc(mesajId).update({
+      FieldPath(['tepkiler', uid]): emoji ?? FieldValue.delete(),
+    });
   }
 
   /// Karşı taraftan gelen görülmemiş mesajları "görüldü" işaretler + okundu.
