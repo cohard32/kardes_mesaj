@@ -10,12 +10,14 @@ import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../parcalar/kullanici_avatar.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/hatirlatici_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../servisler/medya_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../tema.dart';
 import 'ayarlar_ekrani.dart';
+import 'hatirlaticilar_ekrani.dart';
 
 /// Kendi profilim (FAZ 4.3): avatar (foto yükle), ad + bio düzenle,
 /// @kullanıcı adı (kopyalanır) + QR kod (başkaları eklesin diye).
@@ -225,6 +227,8 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
       // Oturum kapanmadan ÖNCE (kural gereği kendi dokümanına yazabilmek
       // için): bu cihaz artık bu hesabın bildirim/aramalarını almasın.
       await BildirimServisi.instance.tokenSil();
+      // Bu hesabın arkadaşlarının doğum günü hatırlatıcıları silinir.
+      await HatirlaticiServisi.instance.durdur();
       MesajServisi.instance.adOnbelleginiSifirla();
       await FirebaseAuth.instance.signOut();
     }
@@ -360,6 +364,17 @@ class _ProfilGovdeState extends State<_ProfilGovde> {
           decoration: Kutular.duzYuzey(kose: Kose.kartKose, kenarli: true),
           child: Column(
             children: [
+              ListTile(
+                leading: const Icon(Icons.cake_outlined),
+                title: const Text('Doğum günleri ve önemli günler'),
+                trailing: Icon(Icons.chevron_right,
+                    color: Renkler.metinSoluk),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const HatirlaticilarEkrani()),
+                ),
+              ),
+              const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Ayarlar'),

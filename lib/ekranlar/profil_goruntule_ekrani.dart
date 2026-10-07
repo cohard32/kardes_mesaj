@@ -7,6 +7,7 @@ import '../parcalar/kullanici_avatar.dart';
 import '../servisler/arkadas_servisi.dart';
 import '../servisler/kullanici_servisi.dart';
 import '../tema.dart';
+import '../yardimcilar/onemli_gun.dart';
 import 'sohbet_ekrani.dart';
 
 /// Başka bir kullanıcının profilini görüntüleme (FAZ 4 cila).
@@ -202,6 +203,16 @@ class _ProfilGoruntuleEkraniState extends State<ProfilGoruntuleEkrani> {
                     padding: const EdgeInsets.all(14),
                     decoration: Kutular.yuzey(kose: Kose.kartKose),
                     child: Text(k.bio!, style: Yazi.govde),
+                  ),
+                ],
+                if (ayGunCoz(k.dogumGunu) case final dg?) ...[
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Text(
+                      '🎂 ${ayGunMetni(dg.ay, dg.gun)}'
+                      '${kalanGun(dg.ay, dg.gun, DateTime.now()) == 0 ? ' · Bugün doğum günü!' : ''}',
+                      style: Yazi.etiket,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 28),

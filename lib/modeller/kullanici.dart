@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../yardimcilar/onemli_gun.dart';
 import '../yardimcilar/tr_metin.dart';
 
 /// Bir kullanıcıyı temsil eder. Firestore'daki `users/{uid}` dokümanı.
@@ -18,6 +19,10 @@ class Kullanici {
   final String kullaniciAdi;
   final String? fotoUrl;
   final String? bio;
+
+  /// Doğum günü "AA-GG" (yıl yok — yaş gizli). Arkadaşların hatırlatıcısı
+  /// buradan kurulur. Ayarlanmamışsa null.
+  final String? dogumGunu;
 
   /// Firestore'daki ham `cevrimici` alanı — TEK BAŞINA GÜVENİLMEZ.
   /// ⚠️ Uygulama öldürülünce `detached` güvenilir gelmez, `cevrimdisiYap`
@@ -46,6 +51,7 @@ class Kullanici {
     required this.kullaniciAdi,
     this.fotoUrl,
     this.bio,
+    this.dogumGunu,
     bool cevrimici = false,
     this.sonGorulme,
   }) : cevrimiciHam = cevrimici;
@@ -99,6 +105,10 @@ class Kullanici {
       kullaniciAdi: (d['kullaniciAdi'] ?? '') as String,
       fotoUrl: d['fotoUrl'] as String?,
       bio: d['bio'] as String?,
+      // Geçersiz/bozuk değer yok sayılır (akış TypeError ile düşmesin).
+      dogumGunu: ayGunCoz(d['dogumGunu']) == null
+          ? null
+          : d['dogumGunu'] as String,
       cevrimici: (d['cevrimici'] ?? false) as bool,
       sonGorulme: (d['sonGorulme'] as Timestamp?)?.toDate(),
     );
@@ -125,6 +135,7 @@ class Kullanici {
         kullaniciAdi: kullaniciAdi,
         fotoUrl: fotoUrl ?? this.fotoUrl,
         bio: bio ?? this.bio,
+        dogumGunu: dogumGunu,
         // Ham değer taşınır; hesaplanan getter kopyada da güncel kalır.
         cevrimici: cevrimiciHam,
         sonGorulme: sonGorulme,
