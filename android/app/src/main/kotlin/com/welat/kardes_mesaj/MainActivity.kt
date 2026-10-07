@@ -22,6 +22,11 @@ class MainActivity : FlutterActivity() {
     private val sesSecKodu = 4671
     private var beklenenSonuc: MethodChannel.Result? = null
 
+    // Dosya (PDF, Word…) seçici
+    private val dosyaSecKodu = 4672
+    private var beklenenDosya: MethodChannel.Result? = null
+    private var dosyaAzami: Long = Long.MAX_VALUE
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, kanalAdi)
@@ -134,6 +139,28 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    // Sistem dosya seçicisini açar (PDF, Word, Excel…). Seçilen
+                    // dosya uygulamanın önbelleğine KOPYALANIR (content:// URI
+                    // kalıcı değil) ve {yol, ad, boyut, mime} döner. Boyut
+                    // `azami`yı aşıyorsa kopyalanmaz: {hata: "buyuk", ad, boyut}.
+                    // Vazgeçilirse null.
+                    "dosyaSec" -> {
+                        beklenenDosya?.success(null) // aynı anda tek seçici
+                        beklenenDosya = result
+                        dosyaAzami = (call.argument<Number>("azami"))?.toLong()
+                            ?: Long.MAX_VALUE
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                        }
+                        try {
+                            startActivityForResult(intent, dosyaSecKodu)
+                        } catch (e: Exception) {
+                            beklenenDosya = null
+                            result.error("SECICI_YOK", e.message, null)
+                        }
+                    }
+
                     // Mesajdaki bağlantıyı tarayıcıda (ya da adresi işleyen
                     // uygulamada) açar. ⚠️ Yalnız http/https: karşı tarafın
                     // gönderdiği "intent:" / "file:" / "content:" gibi bir
@@ -175,16 +202,21 @@ class MainActivity : FlutterActivity() {
         val kaynak = if (yol != null) java.io.File(yol) else null
         if (kaynak == null || !kaynak.exists()) return false
         val video = mime.startsWith("video")
-        val klasor = if (video)
-            android.os.Environment.DIRECTORY_MOVIES
-        else android.os.Environment.DIRECTORY_PICTURES
+        // Foto/video DEĞİLSE (PDF, Word…) → İndirilenler klasörü.
+        val belge = !video && !mime.startsWith("image")
+        val klasor = when {
+            video -> android.os.Environment.DIRECTORY_MOVIES
+            belge -> android.os.Environment.DIRECTORY_DOWNLOADS
+            else -> android.os.Environment.DIRECTORY_PICTURES
+        }
 
         if (Build.VERSION.SDK_INT >= 29) {
-            val koleksiyon = if (video)
-                android.provider.MediaStore.Video.Media
-                    .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            else android.provider.MediaStore.Images.Media
-                .getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val hacim = android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY
+            val koleksiyon = when {
+                video -> android.provider.MediaStore.Video.Media.getContentUri(hacim)
+                belge -> android.provider.MediaStore.Downloads.getContentUri(hacim)
+                else -> android.provider.MediaStore.Images.Media.getContentUri(hacim)
+            }
             val degerler = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, ad)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -238,9 +270,79 @@ class MainActivity : FlutterActivity() {
         return true
     }
 
+    /**
+     * content:// adresindeki dosyayı önbelleğe kopyalar. ARKA PLAN iş
+     * parçacığında çağrılmalı (büyük dosyada UI donmasın).
+     * Boyut [azami]'yı aşarsa KOPYALAMAZ, {hata: "buyuk"} döner.
+     */
+    private fun uriyiKopyala(uri: Uri, azami: Long): Map<String, Any?> {
+        var ad: String? = null
+        var boyut: Long = -1
+        try {
+            contentResolver.query(
+                uri,
+                arrayOf(
+                    android.provider.OpenableColumns.DISPLAY_NAME,
+                    android.provider.OpenableColumns.SIZE
+                ),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val adSutun = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val boyutSutun = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (adSutun >= 0) ad = c.getString(adSutun)
+                    if (boyutSutun >= 0 && !c.isNull(boyutSutun)) boyut = c.getLong(boyutSutun)
+                }
+            }
+        } catch (e: Exception) {
+            // Ad/boyut okunamazsa kopyadan hesaplanır.
+        }
+        val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+        val temizAd = (ad ?: "dosya").replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        if (boyut > azami) {
+            return mapOf("hata" to "buyuk", "ad" to temizAd, "boyut" to boyut)
+        }
+        val dizin = java.io.File(cacheDir, "gelen_dosyalar")
+        if (!dizin.exists()) dizin.mkdirs()
+        val hedef = java.io.File(dizin, "${System.currentTimeMillis()}_$temizAd")
+        val giris = contentResolver.openInputStream(uri)
+            ?: return mapOf("hata" to "okunamadi", "ad" to temizAd)
+        giris.use { g -> hedef.outputStream().use { c -> g.copyTo(c) } }
+        val gercekBoyut = hedef.length()
+        if (gercekBoyut > azami) {
+            hedef.delete()
+            return mapOf("hata" to "buyuk", "ad" to temizAd, "boyut" to gercekBoyut)
+        }
+        return mapOf(
+            "yol" to hedef.absolutePath,
+            "ad" to temizAd,
+            "boyut" to gercekBoyut,
+            "mime" to mime
+        )
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == dosyaSecKodu) {
+            val sonuc = beklenenDosya ?: return
+            beklenenDosya = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) {
+                sonuc.success(null)
+                return
+            }
+            val azami = dosyaAzami
+            Thread {
+                try {
+                    val bilgi = uriyiKopyala(uri, azami)
+                    runOnUiThread { sonuc.success(bilgi) }
+                } catch (e: Exception) {
+                    runOnUiThread { sonuc.error("KOPYALANAMADI", e.message, null) }
+                }
+            }.start()
+            return
+        }
         if (requestCode != sesSecKodu) return
         val sonuc = beklenenSonuc ?: return
         beklenenSonuc = null

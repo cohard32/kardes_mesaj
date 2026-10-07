@@ -22,6 +22,13 @@ class SecilenDosya {
   });
 }
 
+/// Seçilen dosya sınırı aşıyor (kopyalanmadı).
+class DosyaCokBuyuk implements Exception {
+  final String ad;
+  final int boyut;
+  const DosyaCokBuyuk(this.ad, this.boyut);
+}
+
 /// Dosya/PDF mesajları: telefondan dosya seçme, indirip uygun uygulamayla
 /// açma, telefonun "İndirilenler" klasörüne kaydetme.
 ///
@@ -38,9 +45,17 @@ class DosyaServisi {
   static const int azamiBoyut = 10 * 1024 * 1024;
 
   /// Telefondan dosya seçtirir (sistem dosya seçicisi). Vazgeçilirse null.
-  Future<SecilenDosya?> sec() async {
-    final r = await _native.invokeMethod<Map<Object?, Object?>>('dosyaSec');
+  /// [azami]'yı aşan dosya KOPYALANMADAN [DosyaCokBuyuk] fırlatılır.
+  Future<SecilenDosya?> sec({int azami = azamiBoyut}) async {
+    final r = await _native.invokeMethod<Map<Object?, Object?>>(
+      'dosyaSec',
+      {'azami': azami},
+    );
     if (r == null) return null;
+    if (r['hata'] == 'buyuk') {
+      final b = r['boyut'];
+      throw DosyaCokBuyuk('${r['ad'] ?? 'dosya'}', b is int ? b : 0);
+    }
     final yol = r['yol'];
     if (yol is! String) return null;
     final ad = r['ad'];

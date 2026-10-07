@@ -112,6 +112,39 @@ class MesajServisi {
     return true;
   }
 
+  /// Dosya (PDF, Word…) gönderir: Cloudinary'ye "raw" olarak yüklenir.
+  /// `metin` = "📎 ad" → eski sürümler bunu yazı olarak gösterir.
+  Future<bool> dosyaGonder(
+    String chatId,
+    String alanUid,
+    File dosya, {
+    required String ad,
+    required int boyut,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return false;
+    HataServisi.instance.iz('DOSYA yukleniyor boyut=$boyut');
+    final url = await MedyaServisi.instance.yukle(dosya, MesajTipi.dosya);
+    if (url == null) {
+      HataServisi.instance.iz('DOSYA YUKLENEMEDI (Cloudinary null)');
+      return false;
+    }
+    final etiket = '📎 $ad';
+    await _mesajlar(chatId).add({
+      'gonderen': uid,
+      'metin': etiket,
+      'tip': MesajTipi.dosya.name,
+      'medyaUrl': url,
+      'dosyaAdi': ad,
+      'dosyaBoyutu': boyut,
+      'zaman': FieldValue.serverTimestamp(),
+      'goruldu': false,
+    });
+    await _metaGuncelle(chatId, alanUid, etiket);
+    unawaited(_bildir(alanUid, chatId, etiket));
+    return true;
+  }
+
   /// ARAYAN: karşı taraf HİÇ bağlanmadan biten aramayı sohbete "cevapsız
   /// arama" olarak yazar; karşı tarafın okunmamışı artar ve bildirim gider
   /// (CallKit'in kendi İngilizce "Missed call" bildirimi kapalı, bkz.

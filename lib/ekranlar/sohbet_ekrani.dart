@@ -559,6 +559,16 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 _gifSec();
               },
             ),
+            ListTile(
+              leading: Icon(Icons.description_outlined, color: Renkler.neon),
+              title: const Text('Belge / Dosya'),
+              subtitle: Text('PDF, Word, Excel… (en fazla 10 MB)',
+                  style: Yazi.kucuk),
+              onTap: () {
+                Navigator.pop(context);
+                _dosyaSec();
+              },
+            ),
           ],
         ),
       ),
@@ -591,6 +601,66 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _videoSec() async {
     final x = await _resimSecici.pickVideo(source: ImageSource.gallery);
     if (x != null) await _medyaGonder(File(x.path), MesajTipi.video);
+  }
+
+  /// Telefondan belge seçip gönderir (Cloudinary ücretsiz: en fazla 10 MB).
+  Future<void> _dosyaSec() async {
+    final messenger = ScaffoldMessenger.of(context);
+    SecilenDosya? d;
+    try {
+      d = await DosyaServisi.instance.sec();
+    } on DosyaCokBuyuk catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '"${e.ad}" çok büyük (${boyutMetni(e.boyut)}). '
+            'Belgeler en fazla 10 MB olabilir.',
+          ),
+        ),
+      );
+      return;
+    } catch (e) {
+      HataServisi.instance.iz('dosya secilemedi: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Dosya seçilemedi.')),
+      );
+      return;
+    }
+    if (d == null || !mounted) return;
+    final secilen = d;
+    await _yukleVeGonder(
+      () => _servis.dosyaGonder(
+        widget.chatId,
+        widget.karsi.uid,
+        File(secilen.yol),
+        ad: secilen.ad,
+        boyut: secilen.boyut,
+      ),
+      hata: 'Dosya gönderilemedi. İnternet bağlantını kontrol et.',
+    );
+    // Önbelleğe alınan kopya artık gereksiz.
+    try {
+      await File(secilen.yol).delete();
+    } catch (_) {}
+  }
+
+  /// Yükleme çubuğunu göstererek [gorev]'i çalıştırır; başarısızsa [hata].
+  Future<void> _yukleVeGonder(
+    Future<bool> Function() gorev, {
+    required String hata,
+  }) async {
+    setState(() => _yukleniyor = true);
+    var ok = false;
+    try {
+      ok = await gorev();
+    } catch (e) {
+      HataServisi.instance.iz('gonderim hatasi: $e');
+    }
+    if (!mounted) return;
+    setState(() => _yukleniyor = false);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hata)));
+    }
   }
 
   // ---- SESLİ MESAJ: BASILI TUT → KAYDET, BIRAK → GÖNDER, SOLA KAYDIR → İPTAL

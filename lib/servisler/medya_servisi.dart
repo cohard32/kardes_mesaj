@@ -25,15 +25,20 @@ class MedyaServisi {
   bool get ayarliMi => _cloudName != 'CLOUD_NAME';
 
   /// Dosyayı Cloudinary'ye yükler, başarılıysa erişilebilir URL döner.
-  /// [tip] resim/video/ses olabilir.
+  /// [tip] resim/video/ses/dosya olabilir.
   Future<String?> yukle(File dosya, MesajTipi tip) async {
     if (!ayarliMi) {
       debugPrint('Cloudinary ayarlanmadı (cloud name/preset).');
       return null;
     }
     try {
-      // Cloudinary kaynak türü: resim → image, video & ses → video
-      final kaynak = tip == MesajTipi.resim ? 'image' : 'video';
+      // Cloudinary kaynak türü: resim → image, dosya (PDF…) → raw,
+      // video & ses → video
+      final kaynak = switch (tip) {
+        MesajTipi.resim => 'image',
+        MesajTipi.dosya => 'raw',
+        _ => 'video',
+      };
       final url = Uri.parse(
         'https://api.cloudinary.com/v1_1/$_cloudName/$kaynak/upload',
       );
