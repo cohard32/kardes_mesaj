@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../servisler/arama_servisi.dart';
 import '../servisler/hata_servisi.dart';
+import '../servisler/mesaj_servisi.dart';
 import '../servisler/ringback_servisi.dart';
 import '../tema.dart';
 
@@ -107,12 +108,17 @@ class AramaEkrani extends StatefulWidget {
   /// ARANAN tarafta zaten CallKit zili çaldı; burada ton çalmamalı.
   final bool benArayanim;
 
+  /// ARAYANDA aranan kişinin uid'i: arama hiç bağlanmadan biterse sohbete
+  /// "cevapsız arama" kaydı yazılır (bkz. [_AramaEkraniState._cevapsizKaydet]).
+  final String? karsiUid;
+
   const AramaEkrani({
     super.key,
     required this.chatId,
     required this.tip,
     required this.baslik,
     this.benArayanim = false,
+    this.karsiUid,
   });
 
   @override
@@ -137,6 +143,11 @@ class _AramaEkraniState extends State<AramaEkrani> {
   bool _kameraKapali = false;
   bool _hoparlor = true;
   bool _kapandi = false;
+
+  // Cevapsız arama kaydı: ekranın açıldığı an (çok kısa vazgeçişler
+  // kaydedilmez) ve kaydın yalnız BİR KEZ yazılması için bayrak.
+  final DateTime _acilis = DateTime.now();
+  bool _kayitYazildi = false;
 
   bool get _video => widget.tip == AramaTipi.video;
 
@@ -168,7 +179,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     // zamanlayıcı hep çalışır kalıyordu.
     _zamanAsimi = Timer(const Duration(seconds: 45), () {
       if (!_kapandi && _takip.cevapsizKapatilmali) {
-        _kapat(mesaj: 'Cevap verilmedi');
+        _kapat(mesaj: 'Cevap verilmedi', sonuc: 'cevapsiz');
       }
     });
     _arama.karsiUid.addListener(_baglantiKontrol);
@@ -190,12 +201,14 @@ class _AramaEkraniState extends State<AramaEkrani> {
           // sayaçları yeni aramayı düşürmeden ÖNCE sessizce çekil.
           _cekil(yerelTemizlik: true, neden: 'belgede yeni kanal');
         case BelgeOlayi.reddedildi:
-          _kapat(mesaj: 'Arama reddedildi');
+          _kapat(mesaj: 'Arama reddedildi', sonuc: 'red');
         case BelgeOlayi.mesgul:
           // Karşı taraf başka bir aramada → boşuna çalmaya devam etme.
-          _kapat(mesaj: 'Meşgul');
+          _kapat(mesaj: 'Meşgul', sonuc: 'mesgul');
         case BelgeOlayi.bitti:
-          _kapat();
+          // Bağlanmadan karşı taraf kapattıysa (ör. zili zaman aşımına
+          // uğradı) bu bir cevapsız aramadır; bağlıysa kayıt yazılmaz.
+          _kapat(sonuc: 'cevapsiz');
         case BelgeOlayi.yok:
           break;
       }
@@ -293,14 +306,41 @@ class _AramaEkraniState extends State<AramaEkrani> {
     _zamanlayicilariBirak();
     _sub?.cancel();
     // Kendi oturumu geçirilir: görüşme devralındıysa bitir hiçbir şeye dokunmaz.
-    if (!_kapandi) _arama.bitir(widget.chatId, oturum: _oturum);
+    if (!_kapandi) {
+      _cevapsizKaydet('iptal');
+      _arama.bitir(widget.chatId, oturum: _oturum);
+    }
     super.dispose();
   }
 
-  Future<void> _kapat({String? mesaj}) async {
+  /// ARAYANDA: karşı taraf HİÇ bağlanmadan biten arama sohbete "cevapsız
+  /// arama" olarak düşer (karşı tarafa bildirim de gider). Bağlanmış
+  /// görüşme, devralınan görüşme ([_cekil] buraya uğramaz) ve ilk 2 sn
+  /// içinde vazgeçilen (büyük olasılıkla yanlışlıkla) arama kaydedilmez.
+  /// Beklenmez: çevrimdışıyken Firestore kuyruğa alır, ekran hemen kapanır.
+  void _cevapsizKaydet(String sonuc) {
+    final karsi = widget.karsiUid;
+    if (!widget.benArayanim || karsi == null || _kayitYazildi) return;
+    if (_takip.asama != AramaAsamasi.bekleniyor) return; // bağlanmıştı
+    if (sonuc == 'iptal' &&
+        DateTime.now().difference(_acilis) < const Duration(seconds: 2)) {
+      return;
+    }
+    _kayitYazildi = true;
+    MesajServisi.instance
+        .aramaKaydiYaz(widget.chatId, karsi, video: _video, sonuc: sonuc)
+        .catchError((Object e) {
+      HataServisi.instance.iz('cevapsiz arama kaydi yazilamadi: $e');
+    });
+  }
+
+  /// [sonuc]: bağlanmadan bittiyse nedeni ('cevapsiz' | 'red' | 'mesgul');
+  /// verilmezse kullanıcı kapatmıştır ('iptal').
+  Future<void> _kapat({String? mesaj, String? sonuc}) async {
     if (_kapandi) return;
     _kapandi = true;
     HataServisi.instance.iz('ARAMA EKRANI kapaniyor mesaj=${mesaj ?? "-"}');
+    _cevapsizKaydet(sonuc ?? 'iptal');
     _zamanlayicilariBirak();
     await _sub?.cancel();
     // bitir() artık yalnız YEREL işleri bekler (ağ yok) → çevrimdışıyken de

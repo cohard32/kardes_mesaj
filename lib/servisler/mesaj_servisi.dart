@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../modeller/mesaj.dart';
+import '../yardimcilar/link_metni.dart';
 import 'bildirim_servisi.dart';
 import 'kullanici_servisi.dart';
 import 'medya_servisi.dart';
@@ -111,6 +112,27 @@ class MesajServisi {
     return true;
   }
 
+  /// ARAYAN: karşı taraf HİÇ bağlanmadan biten aramayı sohbete "cevapsız
+  /// arama" olarak yazar; karşı tarafın okunmamışı artar ve bildirim gider
+  /// (CallKit'in kendi İngilizce "Missed call" bildirimi kapalı, bkz.
+  /// gelenAramayiGoster). Çevrimdışıyken Firestore kuyruğa alır.
+  Future<void> aramaKaydiYaz(
+    String chatId,
+    String alanUid, {
+    required bool video,
+    required String sonuc,
+  }) async {
+    final uid = _uid;
+    if (uid == null) return;
+    HataServisi.instance.iz('CEVAPSIZ ARAMA kaydi sonuc=$sonuc chat=$chatId');
+    final metin = Mesaj.aramaKaydiMetni(video: video);
+    await _mesajlar(chatId).add(
+      Mesaj.aramaKaydiVerisi(gonderen: uid, video: video, sonuc: sonuc),
+    );
+    await _metaGuncelle(chatId, alanUid, metin);
+    unawaited(_bildir(alanUid, chatId, metin));
+  }
+
   /// GIF gönderir (GIPHY URL doğrudan yazılır).
   Future<void> gifGonder(String chatId, String alanUid, String url) async {
     final uid = _uid;
@@ -177,6 +199,8 @@ class MesajServisi {
     await _mesajlar(chatId).doc(mesajId).update({
       'metin': temiz,
       'duzenlendi': FieldValue.serverTimestamp(),
+      // Düzenlenen metne link eklendiyse/çıktıysa galeri işareti de değişir.
+      'link': linkIceriyor(temiz) ? true : FieldValue.delete(),
     });
     await _sonMesajTazele(chatId);
   }

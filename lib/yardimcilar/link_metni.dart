@@ -83,3 +83,7 @@ bool acilabilirLinkMi(String url) {
       (u.scheme == 'http' || u.scheme == 'https') &&
       u.host.isNotEmpty;
 }
+
+/// Metinde en az bir tıklanabilir bağlantı var mı? (Mesaja `link: true`
+/// yazılır → medya galerisinin "Linkler" sekmesi sorgulayabilsin.)
+bool linkIceriyor(String metin) => linkleriAyir(metin).any((p) => p.linkMi);

@@ -399,6 +399,15 @@ Future<void> gelenAramayiGoster(Map<String, dynamic> data) async {
       'tip': data['tip'],
       'arayan': arayan,
     },
+    // Eklentinin kendi "Missed call" bildirimi KAPALI: İngilizce ve
+    // dokununca sohbeti açmıyor. Yerine ARAYAN, bağlanmayan aramayı
+    // sohbete "📞 Cevapsız sesli arama" olarak yazar ve normal mesaj
+    // bildirimi gelir (bkz. AramaEkrani._cevapsizKaydet) — arayan erken
+    // vazgeçtiğinde de (eklenti o durumda zaten göstermiyordu).
+    missedCallNotification: const NotificationParams(
+      showNotification: false,
+      isShowCallback: false,
+    ),
     android: AndroidParams(
       // ⚠️ FALSE — KASITLI (kullanıcı ekran görüntüsü: bildirim YARIM görünüyor,
       // arayan adı ve Kabul/Reddet düğmeleri kırpılıyordu).

@@ -22,6 +22,7 @@ import '../servisler/aktarici_servisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/arkadas_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/dosya_servisi.dart';
 import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
 import '../servisler/presence_servisi.dart';
@@ -325,6 +326,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
             tip: tip,
             baslik: widget.karsi.ad,
             benArayanim: true, // "çalıyor" tonu burada çalar
+            karsiUid: widget.karsi.uid, // bağlanmazsa "cevapsız arama" kaydı
           ),
         ),
       );
@@ -982,6 +984,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
         onUzunBas: () => _tepkiSec(m),
         onCiftDokun: ciftDokunabilir ? () => _kalpAt(m) : null,
         kalp: kalpId == m.id,
+        onAra: (video) =>
+            _aramaBaslat(video ? AramaTipi.video : AramaTipi.ses),
       ),
     );
     balon = ValueListenableBuilder<String?>(
@@ -1041,9 +1045,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   void _tepkiSec(Mesaj mesaj) {
     const emojiler = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
     final benimTepkim = mesaj.tepkiler[_uid];
-    final medyaMi = mesaj.tip != MesajTipi.metin && mesaj.medyaUrl != null;
-    // Sesli mesaj galeriye kaydedilmez (galeri foto/video içindir).
-    final indirilebilir = medyaMi && mesaj.tip != MesajTipi.ses;
+    // Galeriye yalnız foto/video/GIF (sesli mesaj ve dosya galeriye girmez).
+    final indirilebilir = mesaj.medyaUrl != null &&
+        const {MesajTipi.resim, MesajTipi.video, MesajTipi.gif}
+            .contains(mesaj.tip);
+    // Dosya (PDF…) → telefonun İndirilenler klasörüne.
+    final dosyaMi = mesaj.tip == MesajTipi.dosya && mesaj.medyaUrl != null;
     final silinebilir = _servis.silinebilirMi(mesaj);
     final duzenlenebilir =
         _engelleyen == null && _servis.duzenlenebilirMi(mesaj);
@@ -1130,6 +1137,19 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 onTap: () {
                   Navigator.pop(context);
                   _medyaIndir(mesaj);
+                },
+              ),
+            if (dosyaMi)
+              ListTile(
+                leading: Icon(Icons.download_rounded, color: Renkler.neon),
+                title: Text('Telefona kaydet', style: Yazi.isim),
+                subtitle: Text(
+                  'İndirilenler › ROY MESSANGER klasörüne',
+                  style: Yazi.kucuk,
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _dosyaKaydet(mesaj);
                 },
               ),
             if (silinebilir)
@@ -1411,6 +1431,26 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     );
   }
 
+  /// Dosyayı telefonun İndirilenler klasörüne kaydeder.
+  Future<void> _dosyaKaydet(Mesaj mesaj) async {
+    final url = mesaj.medyaUrl;
+    if (url == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('İndiriliyor…'), duration: Duration(seconds: 2)),
+    );
+    final ok = await DosyaServisi.instance
+        .telefonaKaydet(url, mesaj.dosyaAdi ?? 'dosya');
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? 'İndirilenler klasörüne kaydedildi ✓' : 'Kaydedilemedi',
+        ),
+      ),
+    );
+  }
+
   /// Mesajı siler (onay ister). Süre dolduysa sunucu da reddeder.
   Future<void> _mesajSil(Mesaj mesaj) async {
     final onay = await showDialog<bool>(
@@ -1602,6 +1642,9 @@ class _MesajBalonu extends StatelessWidget {
   /// Az önce çift dokunuldu → balonun üstünde kalp patlaması.
   final bool kalp;
 
+  /// Cevapsız arama kaydındaki "geri ara / tekrar ara" (video mu?).
+  final void Function(bool video)? onAra;
+
   const _MesajBalonu({
     required this.mesaj,
     required this.benimMi,
@@ -1611,6 +1654,7 @@ class _MesajBalonu extends StatelessWidget {
     required this.onUzunBas,
     this.onCiftDokun,
     this.kalp = false,
+    this.onAra,
   });
 
   String _saat(DateTime? t) => t == null ? '' : saatMetni(t);
@@ -1772,6 +1816,10 @@ class _MesajBalonu extends StatelessWidget {
             ),
           ),
         );
+      case MesajTipi.arama:
+        return _AramaKaydiIcerik(mesaj: mesaj, benimMi: benimMi, onAra: onAra);
+      case MesajTipi.dosya:
+        return _DosyaIcerik(mesaj: mesaj, benimMi: benimMi);
       case MesajTipi.metin:
         // Neon balon üstünde koyu, karşı tarafın koyu balonunda açık metin
         // Bağlantılar altı çizili ve tıklanınca tarayıcıda açılır.
@@ -1785,7 +1833,14 @@ class _MesajBalonu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final medyaMi = mesaj.tip != MesajTipi.metin;
+    // Medya balonu içi dar boşluklu (foto kenara yakın); metin, arama kaydı
+    // ve dosya normal boşluklu.
+    final medyaMi = const {
+      MesajTipi.resim,
+      MesajTipi.video,
+      MesajTipi.ses,
+      MesajTipi.gif,
+    }.contains(mesaj.tip);
     return Align(
       alignment: benimMi ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
@@ -2189,6 +2244,190 @@ class _SesOynaticiState extends State<_SesOynatici> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Cevapsız arama kaydı balonu. Aranan: "Cevapsız sesli arama — geri
+/// aramak için dokun"; arayan: "Sesli arama — Cevap verilmedi / Reddedildi
+/// / Meşgul". Dokununca aynı türde arama başlar.
+class _AramaKaydiIcerik extends StatelessWidget {
+  final Mesaj mesaj;
+  final bool benimMi;
+  final void Function(bool video)? onAra;
+  const _AramaKaydiIcerik({
+    required this.mesaj,
+    required this.benimMi,
+    this.onAra,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final video = mesaj.videoAramaMi;
+    final renk = benimMi ? Renkler.metinKoyu : Renkler.metin;
+    final soluk = benimMi ? Renkler.metinKoyuYumusak : Renkler.metinSoluk;
+    final vurgu = benimMi ? Renkler.metinKoyu : Renkler.tehlike;
+    final baslik = benimMi
+        ? (video ? 'Görüntülü arama' : 'Sesli arama')
+        : (video ? 'Cevapsız görüntülü arama' : 'Cevapsız sesli arama');
+    final alt = benimMi
+        ? switch (mesaj.aramaSonucu) {
+            'red' => 'Reddedildi',
+            'mesgul' => 'Meşguldü',
+            'iptal' => 'Cevap beklenmeden kapatıldı',
+            _ => 'Cevap verilmedi',
+          }
+        : 'Geri aramak için dokun';
+    final ara = onAra;
+    return GestureDetector(
+      onTap: ara == null ? null : () => ara(video),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: vurgu.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              benimMi ? Icons.call_made_rounded : Icons.call_missed_rounded,
+              size: 20,
+              color: vurgu,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(baslik, style: Yazi.stil(15, FontWeight.w700, renk)),
+                const SizedBox(height: 2),
+                Text(alt, style: Yazi.stil(12, FontWeight.w500, soluk)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Icon(
+            video ? Icons.videocam_rounded : Icons.call_rounded,
+            size: 22,
+            color: benimMi ? Renkler.metinKoyu : Renkler.neon,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Dosya (PDF, Word…) balonu: renkli uzantı rozeti + ad + boyut. Dokununca
+/// indirilir (ilerlemeyle) ve telefondaki uygun uygulamayla açılır.
+class _DosyaIcerik extends StatefulWidget {
+  final Mesaj mesaj;
+  final bool benimMi;
+  const _DosyaIcerik({required this.mesaj, required this.benimMi});
+
+  @override
+  State<_DosyaIcerik> createState() => _DosyaIcerikState();
+}
+
+class _DosyaIcerikState extends State<_DosyaIcerik> {
+  double? _ilerleme;
+  bool _aciliyor = false;
+
+  Color _rozetRengi(String etiket) => switch (etiket) {
+        'PDF' => const Color(0xFFE5484D),
+        'DOC' || 'DOCX' => const Color(0xFF3E7BFA),
+        'XLS' || 'XLSX' || 'CSV' => const Color(0xFF2EA043),
+        'PPT' || 'PPTX' => const Color(0xFFF07B3F),
+        'ZIP' || 'RAR' => const Color(0xFF9B6BDF),
+        _ => const Color(0xFF6B7A8F),
+      };
+
+  Future<void> _ac() async {
+    final url = widget.mesaj.medyaUrl;
+    if (url == null || _aciliyor) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _aciliyor = true;
+      _ilerleme = null;
+    });
+    final hata = await DosyaServisi.instance.ac(
+      url,
+      widget.mesaj.dosyaAdi ?? 'dosya',
+      ilerleme: (p) {
+        if (mounted) setState(() => _ilerleme = p);
+      },
+    );
+    if (!mounted) return;
+    setState(() => _aciliyor = false);
+    if (hata != null) messenger.showSnackBar(SnackBar(content: Text(hata)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.mesaj;
+    final ad = m.dosyaAdi ?? 'Dosya';
+    final etiket = uzantiEtiketi(ad);
+    final renk = widget.benimMi ? Renkler.metinKoyu : Renkler.metin;
+    final soluk =
+        widget.benimMi ? Renkler.metinKoyuYumusak : Renkler.metinSoluk;
+    final boyut = m.dosyaBoyutu;
+    return GestureDetector(
+      onTap: _ac,
+      child: SizedBox(
+        width: 230,
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _rozetRengi(etiket),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _aciliyor
+                  ? SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        value: _ilerleme,
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      etiket.length > 4 ? etiket.substring(0, 4) : etiket,
+                      style: Yazi.stil(12, FontWeight.w800, Colors.white),
+                    ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    ad,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Yazi.stil(14, FontWeight.w700, renk),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (boyut != null) boyutMetni(boyut),
+                      _aciliyor ? 'İndiriliyor…' : 'Açmak için dokun',
+                    ].join(' · '),
+                    style: Yazi.stil(12, FontWeight.w500, soluk),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

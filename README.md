@@ -11,7 +11,7 @@
 
 [![Sürüm](https://img.shields.io/github/v/release/cohard32/kardes_mesaj?style=flat-square&color=B4FF3C&labelColor=0D2818&label=s%C3%BCr%C3%BCm)](https://github.com/cohard32/kardes_mesaj/releases/latest)
 [![İndirme](https://img.shields.io/github/downloads/cohard32/kardes_mesaj/total?style=flat-square&color=B4FF3C&labelColor=0D2818&label=indirme)](https://github.com/cohard32/kardes_mesaj/releases)
-![Kural testi](https://img.shields.io/badge/kural%20testi-119%2F119-B4FF3C?style=flat-square&labelColor=0D2818)
+![Kural testi](https://img.shields.io/badge/kural%20testi-129%2F129-B4FF3C?style=flat-square&labelColor=0D2818)
 
 **Aile içi kullanım için yazılmış, reklamsız ve takipsiz bir Android mesajlaşma uygulaması.**
 
@@ -115,11 +115,11 @@ Veriye erişim tamamen [`firestore.rules`](firestore.rules) tarafından belirlen
 - Belge kimlikleri (arkadaşlık, sohbet, engel, istek) içindeki kullanıcılardan türetilmiş olmak zorunda — kimlik sahteciliğiyle onaysız arkadaşlık / sahte engel kurulamaz
 - Bildirim token'ı ve sessize alınan sohbetler yalnız sahibinin okuyabildiği `users/{uid}/ozel` belgesinde
 
-Kurallar `@firebase/rules-unit-testing` ile emülatörde **119 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
+Kurallar `@firebase/rules-unit-testing` ile emülatörde **129 senaryo** üzerinden sınanır: hem yetkisiz erişimin reddedildiği, hem de meşru kullanımın çalışmaya devam ettiği test edilir.
 
 ```bash
 firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-# → 119 PASS / 0 FAIL
+# → 129 PASS / 0 FAIL
 ```
 
 ---
