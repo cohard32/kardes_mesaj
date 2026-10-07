@@ -91,8 +91,14 @@ class MesajServisi {
   }
 
   /// Medya (resim/video/ses) gönderir (Cloudinary'ye yükler).
-  Future<bool> medyaGonder(String chatId, String alanUid, File dosya,
-      MesajTipi tip) async {
+  /// [aciklama]: fotoğraf/videonun altına yazılan açıklama (boş olabilir).
+  Future<bool> medyaGonder(
+    String chatId,
+    String alanUid,
+    File dosya,
+    MesajTipi tip, {
+    String aciklama = '',
+  }) async {
     final uid = _uid;
     if (uid == null) return false;
     HataServisi.instance.iz('MEDYA yukleniyor tip=${tip.name}');
@@ -103,10 +109,17 @@ class MesajServisi {
     }
     HataServisi.instance.iz('MEDYA yuklendi');
 
+    final metin = aciklama.trim();
     await _mesajlar(chatId).add(
-      Mesaj.yeniMedyaVerisi(gonderen: uid, tip: tip, medyaUrl: url),
+      Mesaj.yeniMedyaVerisi(
+        gonderen: uid,
+        tip: tip,
+        medyaUrl: url,
+        metin: metin,
+      ),
     );
-    final etiket = Mesaj.medyaEtiketi(tip);
+    // Açıklama varsa önizleme "📷 açıklama", yoksa "📷 Fotoğraf".
+    final etiket = Mesaj(id: '', gonderen: uid, metin: metin, tip: tip).onizleme;
     await _metaGuncelle(chatId, alanUid, etiket);
     unawaited(_bildir(alanUid, chatId, etiket));
     return true;

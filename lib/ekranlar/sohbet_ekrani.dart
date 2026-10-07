@@ -36,6 +36,7 @@ import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
 import 'medya_goruntuleyici.dart';
+import 'medya_gonder_ekrani.dart';
 import 'profil_goruntule_ekrani.dart';
 
 /// Bir arkadaşla sohbeti açar (yoksa oluşturur) ve ekranı push eder.
@@ -85,6 +86,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Timer? _yaziyorTimer;
   bool _yaziyorGonderildi = false;
   bool _yukleniyor = false;
+  // Birden çok medya gönderilirken "2/5 gönderiliyor…".
+  String? _yuklemeMetni;
 
   // Arama kurulurken (izin + token + kanala katılma birkaç saniye sürebilir)
   // ara düğmeleri pasif ve AppBar'da ilerleme göstergesi var.
@@ -525,7 +528,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
 
   // ---- MEDYA ----
 
-  // Ek (ataç) menüsü: foto / video seç
+  // Ek (ataç) menüsü: kamera / galeri (çoklu) / GIF / belge
   void _ekMenu() {
     showModalBottomSheet<void>(
       context: context,
@@ -536,19 +539,29 @@ class _SohbetEkraniState extends State<SohbetEkrani>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(Icons.photo, color: Renkler.neon),
-              title: const Text('Fotoğraf'),
+              leading: Icon(Icons.photo_library_outlined, color: Renkler.neon),
+              title: const Text('Galeri'),
+              subtitle: Text('Fotoğraf ve video — birden çok seçebilirsin',
+                  style: Yazi.kucuk),
               onTap: () {
                 Navigator.pop(context);
-                _fotoSec();
+                _galeridenSec();
               },
             ),
             ListTile(
-              leading: Icon(Icons.videocam, color: Renkler.neon),
-              title: const Text('Video'),
+              leading: Icon(Icons.photo_camera_outlined, color: Renkler.neon),
+              title: const Text('Fotoğraf çek'),
               onTap: () {
                 Navigator.pop(context);
-                _videoSec();
+                _kameraFoto();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.videocam_outlined, color: Renkler.neon),
+              title: const Text('Video çek'),
+              onTap: () {
+                Navigator.pop(context);
+                _kameraVideo();
               },
             ),
             ListTile(
@@ -589,18 +602,95 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
   }
 
-  Future<void> _fotoSec() async {
-    // ⚠️ imageQuality VERİLMEZ → fotoğraf ORİJİNAL/SAF haliyle gider.
-    // Eskiden `imageQuality: 70` vardı; image_picker fotoğrafı %70 kalitede
-    // YENİDEN KODLUYORDU (görünür kalite kaybı). maxWidth/maxHeight de
-    // verilmez, yoksa yeniden boyutlandırılır.
-    final x = await _resimSecici.pickImage(source: ImageSource.gallery);
-    if (x != null) await _medyaGonder(File(x.path), MesajTipi.resim);
+  // ⚠️ imageQuality / maxWidth VERİLMEZ → fotoğraf ORİJİNAL/SAF haliyle
+  // gider. Eskiden `imageQuality: 70` vardı; image_picker fotoğrafı %70
+  // kalitede YENİDEN KODLUYORDU (görünür kalite kaybı).
+
+  /// Galeriden BİRDEN ÇOK fotoğraf/video seç → önizleme → gönder.
+  Future<void> _galeridenSec() async {
+    try {
+      final secilen = await _resimSecici.pickMultipleMedia(limit: 30);
+      if (secilen.isEmpty) return;
+      await _onizleVeGonder([for (final x in secilen) File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('galeri secilemedi: $e');
+    }
   }
 
-  Future<void> _videoSec() async {
-    final x = await _resimSecici.pickVideo(source: ImageSource.gallery);
-    if (x != null) await _medyaGonder(File(x.path), MesajTipi.video);
+  Future<void> _kameraFoto() async {
+    try {
+      final x = await _resimSecici.pickImage(source: ImageSource.camera);
+      if (x != null) await _onizleVeGonder([File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('kamera acilamadi: $e');
+      _kameraHatasi();
+    }
+  }
+
+  Future<void> _kameraVideo() async {
+    try {
+      final x = await _resimSecici.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(minutes: 5),
+      );
+      if (x != null) await _onizleVeGonder([File(x.path)]);
+    } catch (e) {
+      HataServisi.instance.iz('kamera acilamadi: $e');
+      _kameraHatasi();
+    }
+  }
+
+  void _kameraHatasi() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Kamera açılamadı. Kamera iznini kontrol et.')),
+    );
+  }
+
+  /// Önizleme/açıklama ekranını açar; "Gönder" denirse hepsini SIRAYLA
+  /// gönderir (üstte "2/5 gönderiliyor…").
+  Future<void> _onizleVeGonder(List<File> dosyalar) async {
+    if (!mounted) return;
+    final liste = await Navigator.of(context).push<List<GonderilecekMedya>>(
+      MaterialPageRoute(
+        builder: (_) =>
+            MedyaGonderEkrani(dosyalar: dosyalar, kime: widget.karsi.ad),
+      ),
+    );
+    if (liste == null || liste.isEmpty || !mounted) return;
+    setState(() => _yukleniyor = true);
+    var basarisiz = 0;
+    for (var i = 0; i < liste.length; i++) {
+      if (mounted && liste.length > 1) {
+        setState(() => _yuklemeMetni = '${i + 1}/${liste.length} gönderiliyor…');
+      }
+      final m = liste[i];
+      // Ekrandan çıkılsa da gönderim SÜRER (servis widget'a bağlı değil).
+      final ok = await _servis.medyaGonder(
+        widget.chatId,
+        widget.karsi.uid,
+        m.dosya,
+        m.tip,
+        aciklama: m.aciklama,
+      );
+      if (!ok) basarisiz++;
+    }
+    if (!mounted) return;
+    setState(() {
+      _yukleniyor = false;
+      _yuklemeMetni = null;
+    });
+    if (basarisiz > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            liste.length == 1
+                ? 'Gönderilemedi. İnternet bağlantını kontrol et.'
+                : '$basarisiz öğe gönderilemedi. İnternet bağlantını kontrol et.',
+          ),
+        ),
+      );
+    }
   }
 
   /// Telefondan belge seçip gönderir (Cloudinary ücretsiz: en fazla 10 MB).
@@ -764,24 +854,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   }
 
   Future<void> _medyaGonder(File dosya, MesajTipi tip) async {
-    setState(() => _yukleniyor = true);
-    final ok = await _servis.medyaGonder(
-      widget.chatId,
-      widget.karsi.uid,
-      dosya,
-      tip,
+    await _yukleVeGonder(
+      () => _servis.medyaGonder(widget.chatId, widget.karsi.uid, dosya, tip),
+      hata: 'Gönderilemedi. İnternet bağlantını kontrol et.',
     );
-    if (!mounted) return;
-    setState(() => _yukleniyor = false);
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Medya gönderilemedi. Cloudinary ayarı yapılmamış olabilir.',
-          ),
-        ),
-      );
-    }
     // ⚠️ Eskiden burada (gönderim BİTTİKTEN sonra) `_zorlaKaydir = true`
     // kuruluyordu; mesaj ise yerel yazımla çok önce akışa düşmüş oluyordu →
     // bayrak askıda kalıp dakikalar sonra karşının ilgisiz mesajında listeyi
@@ -889,6 +965,11 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                 LinearProgressIndicator(
                   color: Renkler.neon,
                   backgroundColor: Renkler.yuzey,
+                ),
+              if (_yukleniyor && _yuklemeMetni != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(_yuklemeMetni!, style: Yazi.kucuk),
                 ),
               Expanded(
                 child: StreamBuilder<List<Mesaj>>(
@@ -1959,6 +2040,22 @@ class _MesajBalonu extends StatelessWidget {
                       children: [
                         if (mesaj.yanitMi) _alintiKutusu(),
                         _icerik(context),
+                        // Fotoğraf/video AÇIKLAMASI (linkler tıklanabilir).
+                        if ((mesaj.tip == MesajTipi.resim ||
+                                mesaj.tip == MesajTipi.video) &&
+                            mesaj.metin.trim().isNotEmpty)
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 220),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+                              child: LinkliMetin(
+                                metin: mesaj.metin.trim(),
+                                stil: benimMi ? Yazi.govdeAccent : Yazi.govde,
+                                linkRengi:
+                                    benimMi ? Renkler.metinKoyu : Renkler.neon,
+                              ),
+                            ),
+                          ),
                         Padding(
                           padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
                           child: Row(

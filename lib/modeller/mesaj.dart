@@ -242,7 +242,8 @@ class Mesaj {
     };
   }
 
-  /// Medya (resim/video/ses) mesajı için Firestore verisi.
+  /// Medya (resim/video/ses/gif) mesajı için Firestore verisi. [metin]
+  /// fotoğraf/videonun AÇIKLAMASIDIR (boş olabilir).
   static Map<String, dynamic> yeniMedyaVerisi({
     required String gonderen,
     required MesajTipi tip,
@@ -256,6 +257,8 @@ class Mesaj {
       'medyaUrl': medyaUrl,
       'zaman': FieldValue.serverTimestamp(),
       'goruldu': false,
+      // Açıklamada link varsa galerinin "Linkler" sekmesinde de görünsün.
+      if (linkIceriyor(metin)) 'link': true,
     };
   }
 }
