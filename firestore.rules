@@ -66,6 +66,26 @@ service cloud.firestore {
               (d.yanitGonderen is string &&
                d.yanitGonderen in get(/databases/$(database)/documents/chats/$(chatId)).data.katilimcilar));
     }
+    // MESAJ DÜZENLEME: yalnız KENDİ METİN mesajın, yalnız İLK 15 DAKİKA,
+    // yalnız `metin` + `duzenlendi` değişir. `duzenlendi == request.time`:
+    // istemci serverTimestamp yazar → "düzenlendi" etiketi sahte olamaz.
+    // Süre istemcide de var: lib/servisler/mesaj_servisi.dart → duzenlemeSuresi
+    // (ikisi birlikte değişmeli). Arkadaşlık bitince / engelde düzenleme yok
+    // (yeni mesaj gönderememekle aynı mantık).
+    function mesajDuzenlemeGecerli(chatId) {
+      return resource.data.gonderen == request.auth.uid
+        && resource.data.get('tip', 'metin') == 'metin'
+        && resource.data.zaman is timestamp
+        && request.time < resource.data.zaman + duration.value(900, 's')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['metin', 'duzenlendi'])
+        && request.resource.data.metin is string
+        && request.resource.data.metin.size() > 0
+        && request.resource.data.metin.size() <= 4096
+        && request.resource.data.duzenlendi == request.time
+        && arkadasMi(chatId)
+        && !engelli(chatId);
+    }
     // İki uid'den SIRALI çift kimliği — istemcideki `ciftKimligi()` ile aynı.
     // ⚠️ friendships/chats/engellenenler/aramalar dokümanlarının kimliği
     // HER ZAMAN içindeki uid'lerden türetilmiş olmalı. Doğrulanmazsa biri
@@ -256,8 +276,9 @@ service cloud.firestore {
                'yanitId', 'yanitOnizleme', 'yanitGonderen'])
           && yanitAlanlariGecerli(chatId, request.resource.data);
         allow update: if chatKatilimcisi(chatId)
-          && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['goruldu', 'tepki', 'sesDinlendi']);
+          && (request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['goruldu', 'tepki', 'sesDinlendi'])
+              || mesajDuzenlemeGecerli(chatId));
         // SİLME: yalnızca KENDİ mesajını ve yalnızca ilk 60 SANİYE içinde.
         // ⚠️ Süre SUNUCUDA doğrulanır — istemcideki gizleme yeterli değildir
         // (uygulama değiştirilip eski mesaj silinmeye çalışılabilir).

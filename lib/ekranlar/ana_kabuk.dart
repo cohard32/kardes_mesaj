@@ -5,6 +5,7 @@ import '../main.dart' show bekleyenSohbetiAc;
 import '../parcalar/guncelleme_akisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
+import '../servisler/hatirlatici_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
@@ -41,6 +42,8 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     // ⚠️ Nabız: uygulama öldürülürse cevrimdisiYap hiç çalışmaz; okuyanlar
     // sonGorulme 150 sn'yi geçince çevrimdışı sayar (Kullanici.cevrimici).
     PresenceServisi.instance.nabziBaslat();
+    // Doğum günü / önemli gün bildirimlerini (yerel alarm) güncel tut.
+    HatirlaticiServisi.instance.baslat();
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi
     // varsa (navigator artık hazır) ilgili ekranı aç.
     WidgetsBinding.instance.addPostFrameCallback((_) {

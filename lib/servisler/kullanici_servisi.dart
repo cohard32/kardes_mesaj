@@ -303,6 +303,17 @@ class KullaniciServisi {
     await _users.doc(uid).set(veri, SetOptions(merge: true));
   }
 
+  /// Doğum gününü ayarlar ("AA-GG", yıl saklanmaz) ya da [ayGun] null ise
+  /// siler. Arkadaşlar profilde görür ve hatırlatıcı alır.
+  Future<void> dogumGunuAyarla(String? ayGun) async {
+    final uid = _uid;
+    if (uid == null) return;
+    await _users.doc(uid).set(
+      {'dogumGunu': ayGun ?? FieldValue.delete()},
+      SetOptions(merge: true),
+    );
+  }
+
   /// Şifre sıfırlama e-postası gönderir.
   Future<void> sifreSifirla(String eposta) async {
     try {

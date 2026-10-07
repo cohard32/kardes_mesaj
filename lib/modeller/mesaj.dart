@@ -31,6 +31,10 @@ class Mesaj {
   final String? yanitOnizleme; // ≤120 karakter metin veya "📷 Fotoğraf" vb.
   final String? yanitGonderen; // alıntılanan mesajın göndereninin uid'i
 
+  /// Mesaj gönderildikten sonra düzenlendi mi (balonda "düzenlendi" yazar).
+  /// Sunucu damgası kuralda doğrulanır → sahte etiket yazılamaz.
+  final bool duzenlendi;
+
   Mesaj({
     required this.id,
     required this.gonderen,
@@ -44,6 +48,7 @@ class Mesaj {
     this.yanitId,
     this.yanitOnizleme,
     this.yanitGonderen,
+    this.duzenlendi = false,
   });
 
   /// Bu mesaj bir yanıt mı (balonda alıntı kutusu çizilsin mi)?
@@ -69,6 +74,7 @@ class Mesaj {
       yanitId: _metinMi(d['yanitId']),
       yanitOnizleme: _metinMi(d['yanitOnizleme']),
       yanitGonderen: _metinMi(d['yanitGonderen']),
+      duzenlendi: d['duzenlendi'] != null,
     );
   }
 

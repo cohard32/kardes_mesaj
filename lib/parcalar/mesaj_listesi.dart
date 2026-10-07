@@ -73,7 +73,7 @@ class MesajListesi extends StatefulWidget {
   static const double eskiYukleEsigi = 400;
 
   @override
-  State<MesajListesi> createState() => _MesajListesiState();
+  State<MesajListesi> createState() => MesajListesiDurumu();
 }
 
 /// Mesaj kimliğine bağlı GlobalKey (eşitlik = kimlik; her id için tek örnek).
@@ -82,7 +82,9 @@ class _MesajAnahtari extends GlobalKey<State<StatefulWidget>> {
   final String id;
 }
 
-class _MesajListesiState extends State<MesajListesi> {
+/// Dışarıdan erişilebilen durum: sohbet içi aramada bir mesaja gitmek için
+/// `GlobalKey<MesajListesiDurumu>` ile [mesajaGit] çağrılır.
+class MesajListesiDurumu extends State<MesajListesi> {
   final Key _merkez = const ValueKey<String>('mesaj_listesi_merkez');
   ScrollController? _ic;
   ScrollController get _ctrl => widget.controller ?? _ic!;
@@ -115,10 +117,10 @@ class _MesajListesiState extends State<MesajListesi> {
   );
 
   @override
-  void didUpdateWidget(MesajListesi old) {
-    super.didUpdateWidget(old);
-    if (old.controller != widget.controller) {
-      (old.controller ?? _ic)?.removeListener(_kaydirmaDinle);
+  void didUpdateWidget(MesajListesi oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      (oldWidget.controller ?? _ic)?.removeListener(_kaydirmaDinle);
       if (widget.controller == null) {
         _ic ??= _icDenetleyici();
       } else {
@@ -127,11 +129,11 @@ class _MesajListesiState extends State<MesajListesi> {
       }
       _ctrl.addListener(_kaydirmaDinle);
     }
-    if (old.eskiYukle == null && widget.eskiYukle != null) {
+    if (oldWidget.eskiYukle == null && widget.eskiYukle != null) {
       _eskiIstendi = false;
     }
-    if (identical(old.mesajlar, widget.mesajlar)) return;
-    _mesajlarDegisti(old.mesajlar, widget.mesajlar);
+    if (identical(oldWidget.mesajlar, widget.mesajlar)) return;
+    _mesajlarDegisti(oldWidget.mesajlar, widget.mesajlar);
     _kareSonra(_eskiKontrol);
   }
 
@@ -313,6 +315,48 @@ class _MesajListesiState extends State<MesajListesi> {
     }
     _eskiIstendi = true;
     yukle();
+  }
+
+  /// [id]li mesaja kaydırır ve ekranın ortasına getirir (sohbet içi arama).
+  /// Liste tembel kurulduğu için uzaktaki mesajın balonu henüz YOKTUR:
+  /// kurulu balonların sırasına bakılıp hedefe doğru ekran ekran atlanır,
+  /// balon kurulunca `ensureVisible` ile ortalanır. Mesaj listede yoksa
+  /// (yüklenmemiş / silinmiş) false döner.
+  Future<bool> mesajaGit(String id) async {
+    final m = widget.mesajlar;
+    final hedef = _indeks(m, id);
+    if (hedef < 0) return false;
+    for (var deneme = 0; deneme < 200 && mounted; deneme++) {
+      final ctx = _anahtarlar[id]?.currentContext;
+      if (ctx != null && ctx.mounted) {
+        await Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        );
+        return true;
+      }
+      if (!_ctrl.hasClients) return false;
+      // Kurulu balonların en eski/en yenisi (index büyük = daha eski = üstte).
+      var enKucuk = -1, enBuyuk = -1;
+      for (var i = 0; i < m.length; i++) {
+        if (_anahtarlar[m[i].id]?.currentContext == null) continue;
+        if (enKucuk < 0) enKucuk = i;
+        enBuyuk = i;
+      }
+      final p = _ctrl.position;
+      final adim = p.viewportDimension * 0.8;
+      // reverse:true → piksel artınca YUKARI (eskiye) gidilir.
+      final yeni = (enKucuk < 0 || hedef > enBuyuk)
+          ? p.pixels + adim
+          : p.pixels - adim;
+      final sinirli = yeni.clamp(p.minScrollExtent, p.maxScrollExtent);
+      if (sinirli == p.pixels) return false; // daha gidecek yer yok
+      _ctrl.jumpTo(sinirli);
+      await SchedulerBinding.instance.endOfFrame;
+    }
+    return false;
   }
 
   _MesajAnahtari _anahtar(String id) =>

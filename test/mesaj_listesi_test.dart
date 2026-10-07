@@ -546,4 +546,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(_konumlar(tester, gorunen), isNot(once));
   });
+
+  testWidgets('mesajaGit: uzaktaki (kurulmamış) mesaja gider, ortalar', (
+    tester,
+  ) async {
+    final anahtar = GlobalKey<MesajListesiDurumu>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MesajListesi(
+            key: anahtar,
+            mesajlar: _aralik(1, 300),
+            benimUid: _ben,
+            ogeKurucu: (_, m) => _DurumluOge(m),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('m5'), findsNothing); // en eskiler kurulmamış
+
+    final git = anahtar.currentState!.mesajaGit('m5');
+    await tester.pumpAndSettle();
+    expect(await git, isTrue);
+    expect(find.text('m5'), findsOneWidget);
+    final ekran = tester.getSize(find.byType(Scaffold));
+    final y = tester.getCenter(find.text('m5')).dy;
+    expect(y, inInclusiveRange(ekran.height * 0.25, ekran.height * 0.75));
+
+    // Geri dönüş (en yeniye doğru) de çalışır.
+    final geri = anahtar.currentState!.mesajaGit('m298');
+    await tester.pumpAndSettle();
+    expect(await geri, isTrue);
+    expect(find.text('m298'), findsOneWidget);
+
+    // Listede olmayan mesaj.
+    expect(await anahtar.currentState!.mesajaGit('yok'), isFalse);
+  });
 }

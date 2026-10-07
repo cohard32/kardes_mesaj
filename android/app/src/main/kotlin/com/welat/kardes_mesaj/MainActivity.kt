@@ -134,6 +134,31 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    // Mesajdaki bağlantıyı tarayıcıda (ya da adresi işleyen
+                    // uygulamada) açar. ⚠️ Yalnız http/https: karşı tarafın
+                    // gönderdiği "intent:" / "file:" / "content:" gibi bir
+                    // adres buradan ASLA başlatılmaz (Dart tarafında da kontrol var).
+                    "linkAc" -> {
+                        val adres = call.argument<String>("url")
+                        val uri = try { Uri.parse(adres) } catch (e: Exception) { null }
+                        val sema = uri?.scheme?.lowercase()
+                        if (uri == null || (sema != "http" && sema != "https") ||
+                            uri.host.isNullOrEmpty()) {
+                            result.success(false)
+                        } else {
+                            try {
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, uri)
+                                        .addCategory(Intent.CATEGORY_BROWSABLE)
+                                )
+                                result.success(true)
+                            } catch (e: Exception) {
+                                // Tarayıcı yok / devre dışı
+                                result.success(false)
+                            }
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }

@@ -1,11 +1,11 @@
-// Firestore güvenlik kuralları birim testi (97 senaryo).
+// Firestore güvenlik kuralları birim testi (107 senaryo).
 // ÇALIŞTIRMA (Java 21 gerekir — Android Studio JBR uygun):
 //   1) geçici klasör aç, bu dosyayı + firestore.rules'u kopyala
 //   2) npm init -y && npm pkg set type=module
 //   3) npm i @firebase/rules-unit-testing firebase
 //   4) firebase.json: {"firestore":{"rules":"firestore.rules"},"emulators":{"firestore":{"port":8080}}}
 //   5) JAVA_HOME=<jbr> firebase emulators:exec --only firestore --project demo-x "node firestore_rules_test.mjs"
-// Beklenen: 97 PASS / 0 FAIL (T6 eski public fcmToken geçiş sınırı olarak PASS sayılır).
+// Beklenen: 107 PASS / 0 FAIL (T6 eski public fcmToken geçiş sınırı olarak PASS sayılır).
 import {
   initializeTestEnvironment,
   assertFails,
@@ -377,6 +377,45 @@ await env.withSecurityRulesDisabled(async (ctx) => {
 });
 log(await ok(assertSucceeds(setDoc(doc(A(), 'users/alice'), { sessizSohbetler: deleteField(), fcmToken: deleteField() }, { merge: true }))),
   'SZ4 eski public sessizSohbetler/fcmToken alani silinebilir (pozitif, gecis)');
+
+// ---- DZ: MESAJ DUZENLEME (kendi METIN mesajin, ilk 15 dk) ----
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  const simdi = TS.now();
+  const eskiT = TS.fromMillis(Date.now() - 16 * 60 * 1000);
+  await setDoc(doc(db, `chats/${AB}/messages/d_yeni`), { gonderen:'alice', metin:'yeni', tip:'metin', zaman:simdi, goruldu:false });
+  await setDoc(doc(db, `chats/${AB}/messages/d_eski`), { gonderen:'alice', metin:'eski', tip:'metin', zaman:eskiT, goruldu:false });
+  await setDoc(doc(db, `chats/${AB}/messages/d_bob`),  { gonderen:'bob',   metin:'bob',  tip:'metin', zaman:simdi, goruldu:false });
+  await setDoc(doc(db, `chats/${AB}/messages/d_resim`),{ gonderen:'alice', metin:'', tip:'resim', medyaUrl:'https://x/y.jpg', zaman:simdi });
+  await setDoc(doc(db, `chats/${AB}/messages/d_tipsiz`),{ gonderen:'alice', metin:'eski surum', zaman:simdi });
+});
+const MSG = (id) => `chats/${AB}/messages/${id}`;
+log(await ok(assertSucceeds(updateDoc(doc(A(), MSG('d_yeni')), { metin:'duzeltildi', duzenlendi: serverTimestamp() }))),
+  'DZ1 kendi metin mesajini ILK 15 DK icinde duzenleyebilir (pozitif)');
+log(await ok(assertSucceeds(updateDoc(doc(A(), MSG('d_tipsiz')), { metin:'duzeltildi', duzenlendi: serverTimestamp() }))),
+  'DZ1b tip alani olmayan (eski) metin mesaji duzenlenebilir (pozitif)');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_eski')), { metin:'gec', duzenlendi: serverTimestamp() }))),
+  'DZ2 15 DK dolmus mesaj duzenlenemez');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_bob')), { metin:'sahte', duzenlendi: serverTimestamp() }))),
+  'DZ3 BASKASININ mesaji duzenlenemez');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_resim')), { metin:'alt yazi', duzenlendi: serverTimestamp() }))),
+  'DZ4 medya mesaji duzenlenemez');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'x', duzenlendi: TS.fromDate(new Date('2000-01-01')) }))),
+  'DZ5 duzenlendi damgasi sunucu zamani olmali');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'', duzenlendi: serverTimestamp() }))),
+  'DZ6 bos metne duzenlenemez');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'x', gonderen:'bob', duzenlendi: serverTimestamp() }))),
+  'DZ7 duzenlemede baska alan (gonderen) degistirilemez');
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'x'.repeat(4097), duzenlendi: serverTimestamp() }))),
+  'DZ8 4096 karakterden uzun metin reddedilir');
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await setDoc(doc(ctx.firestore(), `engellenenler/${AB}`), { uidler:['alice','bob'], engelleyen:'bob' });
+});
+log(await ok(assertFails(updateDoc(doc(A(), MSG('d_yeni')), { metin:'engelde', duzenlendi: serverTimestamp() }))),
+  'DZ9 engelliyken duzenlenemez');
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await deleteDoc(doc(ctx.firestore(), `engellenenler/${AB}`));
+});
 
 console.log(`\n==== SONUC: ${pass} PASS / ${fail} FAIL ====`);
 await env.cleanup();

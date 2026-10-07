@@ -5,6 +5,7 @@ import '../servisler/hata_servisi.dart';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -14,6 +15,7 @@ import '../modeller/kullanici.dart';
 import '../modeller/mesaj.dart';
 import '../modeller/sohbet.dart';
 import '../parcalar/kullanici_avatar.dart';
+import '../parcalar/linkli_metin.dart';
 import '../parcalar/mesaj_listesi.dart';
 import '../servisler/aktarici_servisi.dart';
 import '../servisler/arama_servisi.dart';
@@ -26,6 +28,7 @@ import '../servisler/ses_oynatici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
 import '../tema.dart';
 import '../yardimcilar/mesaj_metni.dart';
+import '../yardimcilar/sohbet_arama.dart';
 import '../yardimcilar/zaman_metni.dart';
 import 'arama_ekrani.dart';
 import 'gif_secici.dart';
@@ -129,6 +132,23 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   // YANIT: yazma alanının üstündeki alıntı çubuğu. ValueNotifier: çubuğu
   // açıp kapatmak tüm sohbet ekranını (mesaj listesi) yeniden çizmesin.
   final _yanitVN = ValueNotifier<Mesaj?>(null);
+
+  // DÜZENLEME: düzenlenen mesaj (null = normal gönderim). Yazma alanı
+  // mesajın metniyle dolar; gönder düğmesi düzenlemeyi kaydeder.
+  final _duzenleVN = ValueNotifier<Mesaj?>(null);
+
+  // SOHBET İÇİ ARAMA. Yalnız YÜKLÜ mesajlarda arar; en eskiye gelince ↑
+  // daha eski sayfaları yükleyip aramayı sürdürür.
+  final _listeAnahtari = GlobalKey<MesajListesiDurumu>();
+  final _aramaCtrl = TextEditingController();
+  bool _aramaAcik = false;
+  List<Mesaj> _aramaSonuclari = const [];
+  int _aramaIndeks = 0; // 0 = en yeni eşleşme
+  List<Mesaj>? _aramaKaynak; // sonuçların hesaplandığı liste
+  bool _aramaEskiBekleniyor = false;
+  // Bulunan mesajın kısa süre parlaması.
+  final _vurguVN = ValueNotifier<String?>(null);
+  Timer? _vurguTimer;
 
   // SESSİZE ALMA (canlı; başlıktaki ikon + menü metni için).
   bool _sessiz = false;
@@ -338,6 +358,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _dalgaVN.dispose();
     _iptalBolgesindeVN.dispose();
     _yanitVN.dispose();
+    _duzenleVN.dispose();
+    _aramaCtrl.dispose();
+    _vurguTimer?.cancel();
+    _vurguVN.dispose();
     super.dispose();
   }
 
@@ -406,6 +430,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Future<void> _gonder() async {
     final metin = _mesajCtrl.text;
     if (metin.trim().isEmpty) return;
+    final duzenlenen = _duzenleVN.value;
+    if (duzenlenen != null) return _duzenlemeyiKaydet(duzenlenen, metin);
     final yanit = _yanitVN.value;
     _mesajCtrl.clear();
     _yanitVN.value = null;
@@ -687,214 +713,260 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // ModalRoute'a bağımlılık: üstteki ekran kapanıp bu sohbet tekrar en üste
     // gelince build yeniden çalışır → bekleyen mesajlar o an "görüldü" olur.
     _rotaGorunur = ModalRoute.of(context)?.isCurrent ?? true;
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => ProfilGoruntuleEkrani(kullanici: widget.karsi),
-            ),
-          ),
-          child: _AppBarBaslik(
-            chatId: widget.chatId,
-            karsi: widget.karsi,
-            sessiz: _sessiz,
-          ),
-        ),
-        actions: [
-          if (_aramaBasliyor)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Renkler.neon,
-                  semanticsLabel: 'Arama başlatılıyor',
-                ),
+    return PopScope(
+      // Geri tuşu önce aramayı kapatır.
+      canPop: !_aramaAcik,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _aramaAcik) _aramaKapat();
+      },
+      child: Scaffold(
+        appBar: _aramaAcik ? _aramaCubugu() : AppBar(
+          titleSpacing: 0,
+          title: GestureDetector(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ProfilGoruntuleEkrani(kullanici: widget.karsi),
               ),
             ),
-          IconButton(
-            tooltip: 'Sesli ara',
-            icon: const Icon(Icons.call_outlined),
-            onPressed:
-                _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.ses),
+            child: _AppBarBaslik(
+              chatId: widget.chatId,
+              karsi: widget.karsi,
+              sessiz: _sessiz,
+            ),
           ),
-          IconButton(
-            tooltip: 'Görüntülü ara',
-            icon: const Icon(Icons.videocam_outlined),
-            onPressed:
-                _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.video),
-          ),
-          // ⚠️ Menü (tek seçeneği "Sessize al") YALNIZ aktarıcılı derlemede:
-          // gizlilik gereği sessiz sohbet listesi artık yalnız SAHİBİNİN
-          // okuyabildiği gizli belgede (users/{uid}/ozel/bildirim). Sessizi
-          // bildirim GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
-          // aktarıcıdır; aktarıcısız (eski yol) derlemede gönderen karşının
-          // listesini okuyamaz → seçenek hiçbir şey yapmazken "sessize
-          // alındı" demek yanıltıcı olurdu.
-          if (AktariciServisi.etkin)
-            PopupMenuButton<String>(
-              tooltip: 'Diğer',
-              color: Renkler.yuzey,
-              onSelected: (secim) {
-                if (secim == 'sessiz') _sessizDegistir();
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem<String>(
-                  value: 'sessiz',
-                  child: Row(
-                    children: [
-                      Icon(
-                        _sessiz
-                            ? Icons.notifications_active_outlined
-                            : Icons.notifications_off_outlined,
-                        color: Renkler.neon,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(_sessiz ? 'Sessizi kapat' : 'Sohbeti sessize al'),
-                    ],
+          actions: [
+            if (_aramaBasliyor)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Renkler.neon,
+                    semanticsLabel: 'Arama başlatılıyor',
                   ),
                 ),
-              ],
-            ),
-        ],
-      ),
-      body: Zemin(
-        parlama: const Alignment(0.6, -1),
-        child: Column(
-          children: [
-            if (_yukleniyor)
-              LinearProgressIndicator(
-                color: Renkler.neon,
-                backgroundColor: Renkler.yuzey,
               ),
-            Expanded(
-              child: StreamBuilder<List<Mesaj>>(
-                stream: _mesajlarAkisi, // önbellekli (her build'de yenilenmez)
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return const _BosDurum(
-                      ikon: Icons.error_outline,
-                      yazi: 'Mesajlar yüklenemedi',
-                    );
-                  }
-                  // ⚠️ `waiting` DEĞİL `hasData`: sayfalamada limit artınca
-                  // akış yenilenir ve StreamBuilder eski veriyi koruyarak
-                  // `waiting`e döner. Eskiden bu anda liste yerine spinner
-                  // çiziliyor (yanıp sönme) ve kaydırma konumu kayboluyordu.
-                  if (!snapshot.hasData) {
-                    return Center(
-                      child: CircularProgressIndicator(color: Renkler.neon),
-                    );
-                  }
-
-                  final mesajlar = snapshot.data!;
-                  // Sayfalama durumunu YALNIZ yeni limitin verisi gelince
-                  // güncelle: `waiting`teki ESKİ veri (50 < 100) "hepsi
-                  // yüklendi" sanılıp sayfalama erkenden durmasın.
-                  if (snapshot.connectionState == ConnectionState.active) {
-                    _eskiYukleniyor = false;
-                    _hepsiYuklendi = mesajlar.length < _mesajLimit;
-                  }
-                  if (mesajlar.isEmpty) {
-                    return const _BosDurum(
-                      ikon: Icons.chat_bubble_outline_rounded,
-                      yazi: 'Henüz mesaj yok.\nİlk mesajı sen yaz 👋',
-                    );
-                  }
-
-                  // NOT: liste YENİDEN ESKİYE sıralı; görüldü mantığı
-                  // sıraya bakmaz (yalnız "karşıdan gelen + görülmemiş"
-                  // filtresi), dolayısıyla etkilenmez.
-                  _sonMesajlar = mesajlar;
-                  WidgetsBinding.instance.addPostFrameCallback(
-                    (_) => _gorulduGuncelle(),
-                  );
-
-                  // Kaydırma mantığı (yeni mesajda kaymama, alta takip,
-                  // kendi mesajında alta inme, sayfalama) MesajListesi'nde.
-                  // Öğeler mesaj kimliğiyle anahtarlanır → oynayan video /
-                  // ses dalgası index'te değil MESAJDA kalır.
-                  return MesajListesi(
-                    mesajlar: mesajlar,
-                    benimUid: _uid,
-                    eskiYukle: _hepsiYuklendi ? null : _eskiYukle,
-                    ogeKurucu: (context, m) => _MesajBalonu(
-                      mesaj: m,
-                      benimMi: m.gonderen == _uid,
-                      chatId: widget.chatId,
-                      benimUid: _uid,
-                      karsiAd: widget.karsi.ad,
-                      onUzunBas: () => _tepkiSec(m),
-                    ),
-                  );
+            IconButton(
+              tooltip: 'Sohbette ara',
+              icon: const Icon(Icons.search_rounded),
+              onPressed: _aramaAc,
+            ),
+            IconButton(
+              tooltip: 'Sesli ara',
+              icon: const Icon(Icons.call_outlined),
+              onPressed:
+                  _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.ses),
+            ),
+            IconButton(
+              tooltip: 'Görüntülü ara',
+              icon: const Icon(Icons.videocam_outlined),
+              onPressed:
+                  _aramaBasliyor ? null : () => _aramaBaslat(AramaTipi.video),
+            ),
+            // ⚠️ Menü (tek seçeneği "Sessize al") YALNIZ aktarıcılı derlemede:
+            // gizlilik gereği sessiz sohbet listesi artık yalnız SAHİBİNİN
+            // okuyabildiği gizli belgede (users/{uid}/ozel/bildirim). Sessizi
+            // bildirim GÖNDERİRKEN uygulayan, o belgeyi hizmet hesabıyla okuyan
+            // aktarıcıdır; aktarıcısız (eski yol) derlemede gönderen karşının
+            // listesini okuyamaz → seçenek hiçbir şey yapmazken "sessize
+            // alındı" demek yanıltıcı olurdu.
+            if (AktariciServisi.etkin)
+              PopupMenuButton<String>(
+                tooltip: 'Diğer',
+                color: Renkler.yuzey,
+                onSelected: (secim) {
+                  if (secim == 'sessiz') _sessizDegistir();
                 },
-              ),
-            ),
-            // Yazma alanı HER ZAMAN ağaçta kalır: basılı-tut jestinin sahibi
-            // odur; kayıt sırasında widget ağaçtan çıkarılsaydı parmak
-            // kalktığında "bitir" olayı hiç gelmez, kayıt asılı kalırdı.
-            // Kayıt göstergesi ÜSTÜNE bindirilir (IgnorePointer → jesti bozmaz).
-            if (_engelleyen != null)
-              _EngelSeridi(
-                benEngelledim: _engelleyen == _uid,
-                karsiAd: widget.karsi.ad,
-              )
-            else ...[
-              ValueListenableBuilder<Mesaj?>(
-                valueListenable: _yanitVN,
-                builder: (_, yanit, _) => yanit == null
-                    ? const SizedBox.shrink()
-                    : _YanitCubugu(
-                        kimden: yanit.gonderen == _uid
-                            ? 'Sen'
-                            : widget.karsi.ad,
-                        onizleme: yanit.yanitIcinOnizleme,
-                        onKapat: () => _yanitVN.value = null,
-                      ),
-              ),
-              Stack(
-                children: [
-                  _YazmaAlani(
-                    controller: _mesajCtrl,
-                    odak: _odak,
-                    emojiAcik: _emojiAcik,
-                    onGonder: _gonder,
-                    onEk: _ekMenu,
-                    onEmoji: _emojiToggle,
-                    onMikrofonBilgi: _mikrofonBilgi,
-                    onKayitBasla: _kayitBaslat,
-                    onKayitSurukle: _kayitSurukle,
-                    onKayitBitir: _kayitBitir,
-                  ),
-                  Positioned.fill(
-                    child: ValueListenableBuilder<bool>(
-                      valueListenable: _kayitYapiliyorVN,
-                      builder: (_, kayitta, _) => kayitta
-                          ? IgnorePointer(
-                              child: _KayitKaplamasi(
-                                saniye: _kayitSaniyeVN,
-                                dalga: _dalgaVN,
-                                iptalBolgesinde: _iptalBolgesindeVN,
-                              ),
-                            )
-                          : const SizedBox.shrink(),
+                itemBuilder: (_) => [
+                  PopupMenuItem<String>(
+                    value: 'sessiz',
+                    child: Row(
+                      children: [
+                        Icon(
+                          _sessiz
+                              ? Icons.notifications_active_outlined
+                              : Icons.notifications_off_outlined,
+                          color: Renkler.neon,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(_sessiz ? 'Sessizi kapat' : 'Sohbeti sessize al'),
+                      ],
                     ),
                   ),
                 ],
               ),
-            ],
-            ValueListenableBuilder<bool>(
-              valueListenable: _kayitYapiliyorVN,
-              builder: (_, kayitta, _) => (_emojiAcik && !kayitta)
-                  ? _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil)
-                  : const SizedBox.shrink(),
-            ),
           ],
+        ),
+        body: Zemin(
+          parlama: const Alignment(0.6, -1),
+          child: Column(
+            children: [
+              if (_yukleniyor)
+                LinearProgressIndicator(
+                  color: Renkler.neon,
+                  backgroundColor: Renkler.yuzey,
+                ),
+              Expanded(
+                child: StreamBuilder<List<Mesaj>>(
+                  stream: _mesajlarAkisi, // önbellekli (her build'de yenilenmez)
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return const _BosDurum(
+                        ikon: Icons.error_outline,
+                        yazi: 'Mesajlar yüklenemedi',
+                      );
+                    }
+                    // ⚠️ `waiting` DEĞİL `hasData`: sayfalamada limit artınca
+                    // akış yenilenir ve StreamBuilder eski veriyi koruyarak
+                    // `waiting`e döner. Eskiden bu anda liste yerine spinner
+                    // çiziliyor (yanıp sönme) ve kaydırma konumu kayboluyordu.
+                    if (!snapshot.hasData) {
+                      return Center(
+                        child: CircularProgressIndicator(color: Renkler.neon),
+                      );
+                    }
+
+                    final mesajlar = snapshot.data!;
+                    // Sayfalama durumunu YALNIZ yeni limitin verisi gelince
+                    // güncelle: `waiting`teki ESKİ veri (50 < 100) "hepsi
+                    // yüklendi" sanılıp sayfalama erkenden durmasın.
+                    if (snapshot.connectionState == ConnectionState.active) {
+                      _eskiYukleniyor = false;
+                      _hepsiYuklendi = mesajlar.length < _mesajLimit;
+                    }
+                    if (mesajlar.isEmpty) {
+                      return const _BosDurum(
+                        ikon: Icons.chat_bubble_outline_rounded,
+                        yazi: 'Henüz mesaj yok.\nİlk mesajı sen yaz 👋',
+                      );
+                    }
+
+                    // NOT: liste YENİDEN ESKİYE sıralı; görüldü mantığı
+                    // sıraya bakmaz (yalnız "karşıdan gelen + görülmemiş"
+                    // filtresi), dolayısıyla etkilenmez.
+                    _sonMesajlar = mesajlar;
+                    WidgetsBinding.instance.addPostFrameCallback(
+                      (_) => _gorulduGuncelle(),
+                    );
+                    // Arama açıkken liste değişti (yeni mesaj / eski sayfa /
+                    // düzenleme) → sonuçlar tazelenir.
+                    if (_aramaAcik && !identical(mesajlar, _aramaKaynak)) {
+                      _aramaKaynak = mesajlar;
+                      WidgetsBinding.instance.addPostFrameCallback(
+                        (_) => _aramaTazele(),
+                      );
+                    }
+
+                    // Kaydırma mantığı (yeni mesajda kaymama, alta takip,
+                    // kendi mesajında alta inme, sayfalama) MesajListesi'nde.
+                    // Öğeler mesaj kimliğiyle anahtarlanır → oynayan video /
+                    // ses dalgası index'te değil MESAJDA kalır.
+                    return MesajListesi(
+                      key: _listeAnahtari,
+                      mesajlar: mesajlar,
+                      benimUid: _uid,
+                      eskiYukle: _hepsiYuklendi ? null : _eskiYukle,
+                      // Aramada bulunan mesaj kısa süre parlar.
+                      ogeKurucu: (context, m) => ValueListenableBuilder<String?>(
+                        valueListenable: _vurguVN,
+                        builder: (_, vurgu, cocuk) => AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          decoration: BoxDecoration(
+                            color: vurgu == m.id
+                                ? Renkler.neon.withValues(alpha: 0.16)
+                                : Renkler.neon.withValues(alpha: 0),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: cocuk,
+                        ),
+                        child: _MesajBalonu(
+                          mesaj: m,
+                          benimMi: m.gonderen == _uid,
+                          chatId: widget.chatId,
+                          benimUid: _uid,
+                          karsiAd: widget.karsi.ad,
+                          onUzunBas: () => _tepkiSec(m),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              // Yazma alanı HER ZAMAN ağaçta kalır: basılı-tut jestinin sahibi
+              // odur; kayıt sırasında widget ağaçtan çıkarılsaydı parmak
+              // kalktığında "bitir" olayı hiç gelmez, kayıt asılı kalırdı.
+              // Kayıt göstergesi ÜSTÜNE bindirilir (IgnorePointer → jesti bozmaz).
+              if (_engelleyen != null)
+                _EngelSeridi(
+                  benEngelledim: _engelleyen == _uid,
+                  karsiAd: widget.karsi.ad,
+                )
+              else ...[
+                ValueListenableBuilder<Mesaj?>(
+                  valueListenable: _duzenleVN,
+                  builder: (_, duzenlenen, _) => duzenlenen != null
+                      ? _YanitCubugu(
+                          ikon: Icons.edit_rounded,
+                          kimden: 'Mesajı düzenle',
+                          onizleme: duzenlenen.yanitIcinOnizleme,
+                          kapatIpucu: 'Düzenlemeyi iptal et',
+                          onKapat: _duzenlemeIptal,
+                        )
+                      : ValueListenableBuilder<Mesaj?>(
+                          valueListenable: _yanitVN,
+                          builder: (_, yanit, _) => yanit == null
+                              ? const SizedBox.shrink()
+                              : _YanitCubugu(
+                                  kimden: yanit.gonderen == _uid
+                                      ? 'Sen'
+                                      : widget.karsi.ad,
+                                  onizleme: yanit.yanitIcinOnizleme,
+                                  onKapat: () => _yanitVN.value = null,
+                                ),
+                        ),
+                ),
+                Stack(
+                  children: [
+                    _YazmaAlani(
+                      controller: _mesajCtrl,
+                      odak: _odak,
+                      emojiAcik: _emojiAcik,
+                      onGonder: _gonder,
+                      onEk: _ekMenu,
+                      onEmoji: _emojiToggle,
+                      onMikrofonBilgi: _mikrofonBilgi,
+                      onKayitBasla: _kayitBaslat,
+                      onKayitSurukle: _kayitSurukle,
+                      onKayitBitir: _kayitBitir,
+                    ),
+                    Positioned.fill(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _kayitYapiliyorVN,
+                        builder: (_, kayitta, _) => kayitta
+                            ? IgnorePointer(
+                                child: _KayitKaplamasi(
+                                  saniye: _kayitSaniyeVN,
+                                  dalga: _dalgaVN,
+                                  iptalBolgesinde: _iptalBolgesindeVN,
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              ValueListenableBuilder<bool>(
+                valueListenable: _kayitYapiliyorVN,
+                builder: (_, kayitta, _) => (_emojiAcik && !kayitta)
+                    ? _EmojiPaneli(onEmoji: _emojiEkle, onSil: _emojiSil)
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -908,6 +980,10 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     // Sesli mesaj galeriye kaydedilmez (galeri foto/video içindir).
     final indirilebilir = medyaMi && mesaj.tip != MesajTipi.ses;
     final silinebilir = _servis.silinebilirMi(mesaj);
+    final duzenlenebilir =
+        _engelleyen == null && _servis.duzenlenebilirMi(mesaj);
+    final kopyalanabilir =
+        mesaj.tip == MesajTipi.metin && mesaj.metin.isNotEmpty;
 
     showModalBottomSheet<void>(
       context: context,
@@ -948,6 +1024,28 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                   _yanitla(mesaj);
                 },
               ),
+            if (duzenlenebilir)
+              ListTile(
+                leading: Icon(Icons.edit_rounded, color: Renkler.neon),
+                title: Text('Düzenle', style: Yazi.isim),
+                subtitle: Text('İlk 15 dakika içinde', style: Yazi.kucuk),
+                onTap: () {
+                  Navigator.pop(context);
+                  _duzenle(mesaj);
+                },
+              ),
+            if (kopyalanabilir)
+              ListTile(
+                leading: Icon(Icons.copy_rounded, color: Renkler.neon),
+                title: Text('Kopyala', style: Yazi.isim),
+                onTap: () {
+                  Navigator.pop(context);
+                  Clipboard.setData(ClipboardData(text: mesaj.metin));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Mesaj kopyalandı')),
+                  );
+                },
+              ),
             if (indirilebilir)
               ListTile(
                 leading: Icon(Icons.download_rounded, color: Renkler.neon),
@@ -979,9 +1077,221 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   /// Mesajı yanıtlamak üzere seç: yazma alanının üstünde alıntı çubuğu
   /// açılır ve klavye gelir. Gönderilen METİN mesajı bu alıntıyı taşır.
   void _yanitla(Mesaj mesaj) {
+    if (_duzenleVN.value != null) _duzenlemeIptal();
     _yanitVN.value = mesaj;
     if (_emojiAcik) setState(() => _emojiAcik = false);
     _odak.requestFocus();
+  }
+
+  // ---- DÜZENLEME ----
+
+  /// Mesajı düzenlemeye başla: yazma alanı mesajın metniyle dolar, üstte
+  /// "Mesajı düzenle" çubuğu açılır.
+  void _duzenle(Mesaj mesaj) {
+    _yanitVN.value = null;
+    _duzenleVN.value = mesaj;
+    _mesajCtrl.value = TextEditingValue(
+      text: mesaj.metin,
+      selection: TextSelection.collapsed(offset: mesaj.metin.length),
+    );
+    if (_emojiAcik) setState(() => _emojiAcik = false);
+    _odak.requestFocus();
+  }
+
+  void _duzenlemeIptal() {
+    _duzenleVN.value = null;
+    _mesajCtrl.clear();
+  }
+
+  Future<void> _duzenlemeyiKaydet(Mesaj mesaj, String metin) async {
+    final temiz = metin.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    if (temiz.length > MesajServisi.metinSiniri) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Mesaj çok uzun.')),
+      );
+      return;
+    }
+    _duzenleVN.value = null;
+    _mesajCtrl.clear();
+    _yaziyorTimer?.cancel();
+    _yaziyorGonderildi = false;
+    unawaited(_presence.yaziyorAyarla(widget.chatId, false));
+    if (temiz == mesaj.metin.trim()) return; // değişiklik yok
+    try {
+      await _servis.mesajDuzenle(widget.chatId, mesaj.id, temiz);
+    } catch (e) {
+      HataServisi.instance.iz('mesaj duzenlenemedi: $e');
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Düzenlenemedi — 15 dakikalık süre dolmuş olabilir.'),
+        ),
+      );
+    }
+  }
+
+  // ---- SOHBET İÇİ ARAMA ----
+
+  void _aramaAc() {
+    _aramaCtrl.clear();
+    setState(() {
+      _aramaAcik = true;
+      _aramaSonuclari = const [];
+      _aramaIndeks = 0;
+      _aramaKaynak = _sonMesajlar;
+    });
+  }
+
+  void _aramaKapat() {
+    _vurguTimer?.cancel();
+    _vurguVN.value = null;
+    setState(() {
+      _aramaAcik = false;
+      _aramaSonuclari = const [];
+      _aramaEskiBekleniyor = false;
+    });
+  }
+
+  /// Sorgu değişti → en yeni eşleşmeye git.
+  void _aramaYap() {
+    final sonuc = sohbetteAra(_sonMesajlar, _aramaCtrl.text);
+    setState(() {
+      _aramaSonuclari = sonuc;
+      _aramaIndeks = 0;
+      _aramaKaynak = _sonMesajlar;
+      _aramaEskiBekleniyor = false;
+    });
+    if (sonuc.isNotEmpty) _aramaGit();
+  }
+
+  /// Mesaj listesi değişti: seçili eşleşmeyi koruyarak sonuçları yenile.
+  /// Eski sayfa ARAMA için yüklendiyse bir sonraki (daha eski) eşleşmeye geç.
+  void _aramaTazele() {
+    if (!mounted || !_aramaAcik) return;
+    final seciliId = _aramaIndeks < _aramaSonuclari.length
+        ? _aramaSonuclari[_aramaIndeks].id
+        : null;
+    final yeni = sohbetteAra(_sonMesajlar, _aramaCtrl.text);
+    var i = seciliId == null ? 0 : yeni.indexWhere((m) => m.id == seciliId);
+    if (i < 0) i = 0;
+    final bekliyordu = _aramaEskiBekleniyor;
+    final eskiyeGec = bekliyordu && i + 1 < yeni.length && seciliId != null;
+    _aramaEskiBekleniyor = false;
+    setState(() {
+      _aramaSonuclari = yeni;
+      _aramaIndeks = eskiyeGec ? i + 1 : i;
+    });
+    if (eskiyeGec || (bekliyordu && seciliId == null && yeni.isNotEmpty)) {
+      _aramaGit();
+    } else if (bekliyordu) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _hepsiYuklendi
+                ? 'Daha eski eşleşme yok.'
+                : 'Yüklenen mesajlarda daha eski eşleşme yok — ↑ ile devam et.',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// [yon] 1 = daha eski, -1 = daha yeni eşleşme. En eskideyken ↑ daha
+  /// eski mesajları yükleyip aramayı sürdürür.
+  void _aramaSonraki(int yon) {
+    final n = _aramaSonuclari.length;
+    if (yon > 0 && _aramaIndeks + 1 >= n) {
+      if (_hepsiYuklendi) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Daha eski eşleşme yok.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      if (_aramaEskiBekleniyor) return;
+      _aramaEskiBekleniyor = true;
+      setState(() => _mesajLimit += 200);
+      return;
+    }
+    if (n == 0) return;
+    setState(() => _aramaIndeks = (_aramaIndeks + yon).clamp(0, n - 1));
+    _aramaGit();
+  }
+
+  Future<void> _aramaGit() async {
+    if (_aramaIndeks >= _aramaSonuclari.length) return;
+    final id = _aramaSonuclari[_aramaIndeks].id;
+    _vurguTimer?.cancel();
+    _vurguVN.value = id;
+    await _listeAnahtari.currentState?.mesajaGit(id);
+    _vurguTimer = Timer(const Duration(milliseconds: 1600), () {
+      if (_vurguVN.value == id) _vurguVN.value = null;
+    });
+  }
+
+  PreferredSizeWidget _aramaCubugu() {
+    final n = _aramaSonuclari.length;
+    final sorguVar = _aramaCtrl.text.trim().length >= 2;
+    return AppBar(
+      leading: IconButton(
+        tooltip: 'Aramayı kapat',
+        icon: const Icon(Icons.arrow_back_rounded),
+        onPressed: _aramaKapat,
+      ),
+      titleSpacing: 0,
+      title: TextField(
+        controller: _aramaCtrl,
+        autofocus: true,
+        textInputAction: TextInputAction.search,
+        style: Yazi.govde,
+        cursorColor: Renkler.neon,
+        decoration: InputDecoration(
+          hintText: 'Sohbette ara…',
+          hintStyle: Yazi.kucuk,
+          filled: false,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          isDense: true,
+        ),
+        onChanged: (_) => _aramaYap(),
+        onSubmitted: (_) => _aramaSonraki(1),
+      ),
+      actions: [
+        if (sorguVar)
+          Center(
+            child: Text(
+              n == 0 ? '0' : '${_aramaIndeks + 1}/$n',
+              style: Yazi.kucuk,
+            ),
+          ),
+        if (_aramaEskiBekleniyor)
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Renkler.neon,
+              ),
+            ),
+          ),
+        IconButton(
+          tooltip: 'Daha eski eşleşme',
+          icon: const Icon(Icons.keyboard_arrow_up_rounded),
+          onPressed: sorguVar ? () => _aramaSonraki(1) : null,
+        ),
+        IconButton(
+          tooltip: 'Daha yeni eşleşme',
+          icon: const Icon(Icons.keyboard_arrow_down_rounded),
+          onPressed: _aramaIndeks > 0 ? () => _aramaSonraki(-1) : null,
+        ),
+      ],
+    );
   }
 
   /// Sohbeti sessize al / sessizi kapat. Ekrandaki durum canlı akıştan
@@ -1349,9 +1659,11 @@ class _MesajBalonu extends StatelessWidget {
         );
       case MesajTipi.metin:
         // Neon balon üstünde koyu, karşı tarafın koyu balonunda açık metin
-        return Text(
-          mesaj.metin,
-          style: benimMi ? Yazi.govdeAccent : Yazi.govde,
+        // Bağlantılar altı çizili ve tıklanınca tarayıcıda açılır.
+        return LinkliMetin(
+          metin: mesaj.metin,
+          stil: benimMi ? Yazi.govdeAccent : Yazi.govde,
+          linkRengi: benimMi ? Renkler.metinKoyu : Renkler.neon,
         );
     }
   }
@@ -1390,7 +1702,6 @@ class _MesajBalonu extends StatelessWidget {
                 top: 4,
                 bottom: mesaj.tepki != null ? 16 : 4,
               ),
-              padding: EdgeInsets.all(medyaMi ? 5 : 12),
               // Kendi balonun: neon gradient + ÇOK HAFİF glow (göz yormasın).
               // Karşı taraf: zeminden net ayrışan koyu yüzey, GLOW YOK.
               // Organik köşe — dip köşe kısa. 3D his gradient + iç ışıktan gelir.
@@ -1407,59 +1718,77 @@ class _MesajBalonu extends StatelessWidget {
                     ),
               child: Stack(
                 children: [
-                  // Neon balonda iç highlight/gölge (3D hacim)
-                  if (benimMi)
-                    const Positioned.fill(child: IcIsik(kose: Kose.balonBen)),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (mesaj.yanitMi) _alintiKutusu(),
-                      _icerik(context),
-                      Padding(
-                        padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Gelen, henüz dinlenmemiş sesli mesaj → neon nokta
-                            if (mesaj.tip == MesajTipi.ses &&
-                                !benimMi &&
-                                !mesaj.sesDinlendi) ...[
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: Kutular.neonNokta(),
-                              ),
-                              const SizedBox(width: 5),
-                            ],
-                            Text(
-                              _saat(mesaj.zaman),
-                              style: benimMi ? Yazi.zamanAccent : Yazi.zaman,
-                            ),
-                            if (benimMi) ...[
-                              const SizedBox(width: 4),
-                              Icon(
-                                mesaj.goruldu ? Icons.done_all : Icons.done,
-                                size: 15,
-                                color: mesaj.goruldu
-                                    ? Renkler.metinKoyu
-                                    : Renkler.metinKoyuYumusak,
-                              ),
-                              // Gönderdiğim ses dinlendiyse kulaklık
+                  // Cam parıltısı BALONUN TAMAMINDA (bkz. BalonParilti):
+                  // iç boşluk aşağıdaki Padding'de, parıltı onun dışında.
+                  Positioned.fill(
+                    child: BalonParilti(
+                      kose: benimMi ? Kose.balonBen : Kose.balonKarsi,
+                      vurgu: benimMi,
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(medyaMi ? 5 : 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (mesaj.yanitMi) _alintiKutusu(),
+                        _icerik(context),
+                        Padding(
+                          padding: EdgeInsets.only(top: 3, left: medyaMi ? 6 : 0),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Gelen, henüz dinlenmemiş sesli mesaj → neon nokta
                               if (mesaj.tip == MesajTipi.ses &&
-                                  mesaj.sesDinlendi) ...[
+                                  !benimMi &&
+                                  !mesaj.sesDinlendi) ...[
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: Kutular.neonNokta(),
+                                ),
+                                const SizedBox(width: 5),
+                              ],
+                              if (mesaj.duzenlendi) ...[
+                                Text(
+                                  'düzenlendi',
+                                  style: (benimMi
+                                          ? Yazi.zamanAccent
+                                          : Yazi.zaman)
+                                      .copyWith(fontStyle: FontStyle.italic),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              Text(
+                                _saat(mesaj.zaman),
+                                style: benimMi ? Yazi.zamanAccent : Yazi.zaman,
+                              ),
+                              if (benimMi) ...[
                                 const SizedBox(width: 4),
                                 Icon(
-                                  Icons.headset_rounded,
-                                  size: 13,
-                                  color: Renkler.metinKoyu,
+                                  mesaj.goruldu ? Icons.done_all : Icons.done,
+                                  size: 15,
+                                  color: mesaj.goruldu
+                                      ? Renkler.metinKoyu
+                                      : Renkler.metinKoyuYumusak,
                                 ),
+                                // Gönderdiğim ses dinlendiyse kulaklık
+                                if (mesaj.tip == MesajTipi.ses &&
+                                    mesaj.sesDinlendi) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.headset_rounded,
+                                    size: 13,
+                                    color: Renkler.metinKoyu,
+                                  ),
+                                ],
                               ],
                             ],
-                          ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1854,14 +2183,20 @@ class _SesOynaticiState extends State<_SesOynatici> {
 
 /// Yazma alanının üstündeki yanıt çubuğu: kime yanıt verildiği + alıntı
 /// önizlemesi + kapat (X). Kapatınca mesaj normal (yanıtsız) gider.
+/// Yazma alanının üstündeki çubuk: yanıtlanan mesaj (alıntı) ya da
+/// düzenlenen mesaj ([ikon] = kalem).
 class _YanitCubugu extends StatelessWidget {
   final String kimden;
   final String onizleme;
   final VoidCallback onKapat;
+  final IconData ikon;
+  final String kapatIpucu;
   const _YanitCubugu({
     required this.kimden,
     required this.onizleme,
     required this.onKapat,
+    this.ikon = Icons.reply_rounded,
+    this.kapatIpucu = 'Yanıtı kapat',
   });
 
   @override
@@ -1883,7 +2218,7 @@ class _YanitCubugu extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(Icons.reply_rounded, size: 18, color: Renkler.neon),
+              Icon(ikon, size: 18, color: Renkler.neon),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -1907,7 +2242,7 @@ class _YanitCubugu extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Yanıtı kapat',
+                tooltip: kapatIpucu,
                 visualDensity: VisualDensity.compact,
                 icon: Icon(
                   Icons.close,
