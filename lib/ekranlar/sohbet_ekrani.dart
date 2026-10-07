@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
 
 import '../modeller/kullanici.dart';
@@ -142,6 +143,12 @@ class _SohbetEkraniState extends State<SohbetEkrani>
   Timer? _kayitTimer;
   StreamSubscription<Amplitude>? _ampSub;
   final _kayitYapiliyorVN = ValueNotifier<bool>(false);
+  // KİLİT: kayıtta parmak yukarı kaydırılınca kayıt eller serbest sürer
+  // (bırakınca gönderilmez; sil / durdur-dinle / gönder düğmeleri çıkar).
+  final _kilitliVN = ValueNotifier<bool>(false);
+  // Durdurulmuş, göndermeden önce dinlenen kaydın yolu (null = önizleme yok).
+  final _onizlemeVN = ValueNotifier<String?>(null);
+  int _onizlemeSaniye = 0;
   final _kayitSaniyeVN = ValueNotifier<int>(0);
   final _dalgaVN = ValueNotifier<List<double>>(<double>[]);
   final _iptalBolgesindeVN = ValueNotifier<bool>(false);
@@ -470,6 +477,8 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _mesajCtrl.dispose();
     _odak.dispose();
     _kayitYapiliyorVN.dispose();
+    _kilitliVN.dispose();
+    _onizlemeVN.dispose();
     _kayitSaniyeVN.dispose();
     _dalgaVN.dispose();
     _iptalBolgesindeVN.dispose();
@@ -913,16 +922,25 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     _kayitYapiliyorVN.value = true;
   }
 
-  /// Parmak sola kaydıkça iptal bölgesine girildi mi (çöp kutusu).
-  void _kayitSurukle(double dx) {
-    if (!_kayitYapiliyorVN.value) return;
-    final iptal = dx < -70;
+  /// Parmak sola kaydıkça iptal bölgesine girildi mi (çöp kutusu);
+  /// YUKARI kaydırılınca kayıt KİLİTLENİR (eller serbest).
+  void _kayitSurukle(Offset o) {
+    if (!_kayitYapiliyorVN.value || _kilitliVN.value) return;
+    if (o.dy < -80 && o.dx > -50) {
+      _iptalBolgesindeVN.value = false;
+      _kilitliVN.value = true;
+      HapticFeedback.mediumImpact();
+      return;
+    }
+    final iptal = o.dx < -70;
     if (_iptalBolgesindeVN.value != iptal) _iptalBolgesindeVN.value = iptal;
   }
 
   /// Parmak kalktı → iptal bölgesindeyse çöpe at, değilse gönder.
+  /// Kilitliyse HİÇBİR ŞEY yapma: kayıt sürer, düğmelerle bitirilir.
   Future<void> _kayitBitir() async {
     if (!_kayitYapiliyorVN.value) return;
+    if (_kilitliVN.value) return;
     if (_iptalBolgesindeVN.value) {
       await _kayitIptal();
       return;
@@ -949,7 +967,42 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
     if (yol != null) await _medyaGonder(File(yol), MesajTipi.ses);
+  }
+
+  /// Kilitli kayıtta "durdur": kayıt biter, GÖNDERİLMEZ — önce dinlenir.
+  Future<void> _kayitDurdurOnizle() async {
+    final sn = _kayitSaniyeVN.value;
+    final yol = await _kayitci.stop();
+    await _kayitTemizle();
+    _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
+    if (yol == null) return;
+    if (sn < 1) {
+      try {
+        await File(yol).delete();
+      } catch (_) {}
+      return;
+    }
+    _onizlemeSaniye = sn;
+    _onizlemeVN.value = yol;
+  }
+
+  /// Önizlenen kaydı gönder / sil.
+  Future<void> _onizlemeGonder() async {
+    final yol = _onizlemeVN.value;
+    _onizlemeVN.value = null;
+    if (yol != null) await _medyaGonder(File(yol), MesajTipi.ses);
+  }
+
+  Future<void> _onizlemeSil() async {
+    final yol = _onizlemeVN.value;
+    _onizlemeVN.value = null;
+    if (yol == null) return;
+    try {
+      await File(yol).delete();
+    } catch (_) {}
   }
 
   // İptal: kaydı sil, gönderme
@@ -958,6 +1011,7 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     final yol = await _kayitci.stop();
     await _kayitTemizle();
     _kayitYapiliyorVN.value = false;
+    _kilitliVN.value = false;
     _iptalBolgesindeVN.value = false;
     if (yol != null) {
       try {
@@ -1199,17 +1253,45 @@ class _SohbetEkraniState extends State<SohbetEkrani>
                       onKayitBitir: _kayitBitir,
                     ),
                     Positioned.fill(
-                      child: ValueListenableBuilder<bool>(
-                        valueListenable: _kayitYapiliyorVN,
-                        builder: (_, kayitta, _) => kayitta
-                            ? IgnorePointer(
-                                child: _KayitKaplamasi(
-                                  saniye: _kayitSaniyeVN,
-                                  dalga: _dalgaVN,
-                                  iptalBolgesinde: _iptalBolgesindeVN,
-                                ),
-                              )
-                            : const SizedBox.shrink(),
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([
+                          _kayitYapiliyorVN,
+                          _kilitliVN,
+                          _onizlemeVN,
+                        ]),
+                        builder: (_, _) {
+                          final onizleme = _onizlemeVN.value;
+                          if (onizleme != null) {
+                            // Durdurulmuş kayıt: dinle / sil / gönder.
+                            return _SesOnizleme(
+                              yol: onizleme,
+                              sureSn: _onizlemeSaniye,
+                              onSil: _onizlemeSil,
+                              onGonder: _onizlemeGonder,
+                            );
+                          }
+                          if (!_kayitYapiliyorVN.value) {
+                            return const SizedBox.shrink();
+                          }
+                          if (_kilitliVN.value) {
+                            // Kilitli kayıt: düğmeler DOKUNULABİLİR.
+                            return _KilitliKayit(
+                              saniye: _kayitSaniyeVN,
+                              dalga: _dalgaVN,
+                              onSil: _kayitIptal,
+                              onDurdur: _kayitDurdurOnizle,
+                              onGonder: _kayitGonder,
+                            );
+                          }
+                          // Basılı tutarken: yalnız GÖSTERGE (jest mikrofonda).
+                          return IgnorePointer(
+                            child: _KayitKaplamasi(
+                              saniye: _kayitSaniyeVN,
+                              dalga: _dalgaVN,
+                              iptalBolgesinde: _iptalBolgesindeVN,
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -2938,8 +3020,8 @@ class _YazmaAlani extends StatelessWidget {
   /// Basılı tutma başladı → kayda başla
   final VoidCallback onKayitBasla;
 
-  /// Basılıyken yatay kayma (sola kaydırınca iptal bölgesi)
-  final void Function(double dx) onKayitSurukle;
+  /// Basılıyken kayma (sola → iptal bölgesi, yukarı → kilit)
+  final void Function(Offset kayma) onKayitSurukle;
 
   /// Parmak kalktı → gönder veya iptal
   final VoidCallback onKayitBitir;
@@ -3038,7 +3120,7 @@ class _YazmaAlani extends StatelessWidget {
                         GestureDetector(
                           onLongPressStart: (_) => onKayitBasla(),
                           onLongPressMoveUpdate: (d) =>
-                              onKayitSurukle(d.localOffsetFromOrigin.dx),
+                              onKayitSurukle(d.localOffsetFromOrigin),
                           onLongPressEnd: (_) => onKayitBitir(),
                           onLongPressCancel: onKayitBitir,
                           child: Uc3DDugme(
@@ -3198,6 +3280,7 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                         ),
                         const SizedBox(width: 8),
                         if (!iptal)
+                          // ◀ sola: iptal · ▲ yukarı: kilit (eller serbest)
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -3206,7 +3289,18 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
                                 size: 16,
                                 color: Renkler.metinSoluk,
                               ),
-                              Text('kaydır', style: Yazi.zaman),
+                              Text('sil', style: Yazi.zaman),
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.lock_outline_rounded,
+                                size: 13,
+                                color: Renkler.metinSoluk,
+                              ),
+                              Icon(
+                                Icons.keyboard_arrow_up,
+                                size: 16,
+                                color: Renkler.metinSoluk,
+                              ),
                             ],
                           ),
                       ],
@@ -3234,6 +3328,247 @@ class _KayitKaplamasiState extends State<_KayitKaplamasi>
           ),
         );
       },
+    );
+  }
+}
+
+/// KİLİTLİ KAYIT (eller serbest): süre + canlı dalga; 🗑 sil, ■ durdur
+/// (dinlemek için), ➤ gönder. Düğmeler dokunulabilir (IgnorePointer YOK).
+class _KilitliKayit extends StatelessWidget {
+  final ValueNotifier<int> saniye;
+  final ValueNotifier<List<double>> dalga;
+  final VoidCallback onSil;
+  final VoidCallback onDurdur;
+  final VoidCallback onGonder;
+  const _KilitliKayit({
+    required this.saniye,
+    required this.dalga,
+    required this.onSil,
+    required this.onDurdur,
+    required this.onGonder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
+        color: Renkler.zemin,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Kaydı sil',
+              icon: Icon(Icons.delete_outline, color: Renkler.tehlike),
+              onPressed: onSil,
+            ),
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_rounded, size: 14, color: Renkler.neon),
+                    const SizedBox(width: 6),
+                    ValueListenableBuilder<int>(
+                      valueListenable: saniye,
+                      builder: (_, sn, _) => Text(
+                        '${(sn ~/ 60).toString().padLeft(2, '0')}:'
+                        '${(sn % 60).toString().padLeft(2, '0')}',
+                        style: Yazi.stil(13, FontWeight.w700, Renkler.metin)
+                            .copyWith(
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ValueListenableBuilder<List<double>>(
+                        valueListenable: dalga,
+                        builder: (_, d, _) => SizedBox(
+                          height: 24,
+                          child: CustomPaint(
+                            painter: _DalgaPainter(d, Renkler.neon, canli: true),
+                            size: Size.infinite,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Durdur ve dinle',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.stop_circle_outlined,
+                          color: Renkler.tehlike),
+                      onPressed: onDurdur,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Uc3DDugme(
+              kose: Kose.dugme,
+              padding: const EdgeInsets.all(13),
+              onTap: onGonder,
+              cocuk: Icon(Icons.send_rounded,
+                  color: Renkler.metinKoyu, size: 22),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// GÖNDERMEDEN DİNLE: durdurulmuş kaydı çal/duraklat, ilerleme, 🗑 sil, ➤ gönder.
+/// Kendi oynatıcısı vardır (kapanınca serbest bırakılır).
+class _SesOnizleme extends StatefulWidget {
+  final String yol;
+  final int sureSn;
+  final VoidCallback onSil;
+  final VoidCallback onGonder;
+  const _SesOnizleme({
+    required this.yol,
+    required this.sureSn,
+    required this.onSil,
+    required this.onGonder,
+  });
+
+  @override
+  State<_SesOnizleme> createState() => _SesOnizlemeState();
+}
+
+class _SesOnizlemeState extends State<_SesOnizleme> {
+  final _oynatici = AudioPlayer();
+  final List<StreamSubscription<Object?>> _abonelikler = [];
+  bool _caliyor = false;
+  Duration _konum = Duration.zero;
+  Duration? _sure;
+
+  @override
+  void initState() {
+    super.initState();
+    _abonelikler
+      ..add(_oynatici.onPositionChanged.listen((p) {
+        if (mounted) setState(() => _konum = p);
+      }))
+      ..add(_oynatici.onDurationChanged.listen((d) {
+        if (mounted) setState(() => _sure = d);
+      }))
+      ..add(_oynatici.onPlayerComplete.listen((_) {
+        if (mounted) {
+          setState(() {
+            _caliyor = false;
+            _konum = Duration.zero;
+          });
+        }
+      }));
+  }
+
+  @override
+  void dispose() {
+    for (final a in _abonelikler) {
+      a.cancel();
+    }
+    _oynatici.dispose();
+    super.dispose();
+  }
+
+  Future<void> _calDuraklat() async {
+    try {
+      if (_caliyor) {
+        await _oynatici.pause();
+      } else {
+        // Çalan sesli mesaj varsa sustur (aynı anda iki ses olmasın).
+        await SesOynaticiServisi.instance.durdur();
+        await _oynatici.play(DeviceFileSource(widget.yol));
+      }
+      if (mounted) setState(() => _caliyor = !_caliyor);
+    } catch (e) {
+      HataServisi.instance.iz('onizleme calinamadi: $e');
+    }
+  }
+
+  String _mmss(int sn) =>
+      '${(sn ~/ 60).toString().padLeft(2, '0')}:${(sn % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final toplam = _sure ?? Duration(seconds: widget.sureSn);
+    final oran = toplam.inMilliseconds == 0
+        ? 0.0
+        : (_konum.inMilliseconds / toplam.inMilliseconds).clamp(0.0, 1.0);
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 8, 10, 10),
+        color: Renkler.zemin,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Kaydı sil',
+              icon: Icon(Icons.delete_outline, color: Renkler.tehlike),
+              onPressed: () {
+                _oynatici.stop();
+                widget.onSil();
+              },
+            ),
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.only(left: 4, right: 12),
+                decoration: Kutular.duzYuzey(kose: Kose.alan, kenarli: true),
+                child: Row(
+                  children: [
+                    IconButton(
+                      tooltip: _caliyor ? 'Duraklat' : 'Dinle',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        _caliyor
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_fill,
+                        color: Renkler.neon,
+                        size: 30,
+                      ),
+                      onPressed: _calDuraklat,
+                    ),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: oran,
+                          minHeight: 4,
+                          color: Renkler.neon,
+                          backgroundColor: Renkler.kenar,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      _caliyor || _konum > Duration.zero
+                          ? _mmss(_konum.inSeconds)
+                          : _mmss(toplam.inSeconds),
+                      style: Yazi.stil(12, FontWeight.w700, Renkler.metin),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Uc3DDugme(
+              kose: Kose.dugme,
+              padding: const EdgeInsets.all(13),
+              onTap: () {
+                _oynatici.stop();
+                widget.onGonder();
+              },
+              cocuk: Icon(Icons.send_rounded,
+                  color: Renkler.metinKoyu, size: 22),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
