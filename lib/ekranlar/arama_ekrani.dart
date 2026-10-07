@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../servisler/arama_servisi.dart';
+import '../servisler/baglanti_kalitesi.dart';
 import '../servisler/hata_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
+import '../servisler/kucuk_pencere.dart';
 import '../servisler/ringback_servisi.dart';
+import '../servisler/yerel_olaylar.dart';
 import '../tema.dart';
 
 /// Karşı tarafın kanaldaki varlığına göre arama aşaması.
@@ -184,6 +187,7 @@ class _AramaEkraniState extends State<AramaEkrani> {
     });
     _arama.karsiUid.addListener(_baglantiKontrol);
     _arama.oturumVN.addListener(_oturumKontrol);
+    YerelOlaylar.kucukPencerede.addListener(_pencereDegisti);
     // ARAYAN "çalıyor" tonu: SADECE arayanda ve karşı taraf henüz katılmadıysa.
     if (widget.benArayanim && _arama.karsiUid.value == null) {
       RingbackServisi.instance.baslat();
@@ -245,7 +249,15 @@ class _AramaEkraniState extends State<AramaEkrani> {
     if (mounted) _rotayiKapat();
   }
 
+  // Küçük pencereye girildi/çıkıldı → düzen değişir.
+  void _pencereDegisti() {
+    if (mounted) setState(() {});
+  }
+
   void _zamanlayicilariBirak() {
+    YerelOlaylar.kucukPencerede.removeListener(_pencereDegisti);
+    // Görüşme bitti → ana ekrana dönmek artık küçük pencere açmasın.
+    if (_video) KucukPencere.izinVer(false);
     RingbackServisi.instance.durdur();
     _sayac?.cancel();
     _zamanAsimi?.cancel();
@@ -274,6 +286,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
         // Karşı taraf kanala katıldı → konuşma başlıyor, ton DERHAL sussun.
         RingbackServisi.instance.durdur();
         _zamanAsimi?.cancel();
+        // Görüntülü görüşme bağlandı: ana ekrana dönünce küçük pencere.
+        if (_video) KucukPencere.izinVer(true);
         // Süre sayacı kopmada DURMAZ: gösterilen süre görüşmenin toplam
         // süresidir (telefon uygulamalarındaki gibi). Kopukken rozet süre
         // yerine "Yeniden bağlanıyor…" gösterdiği için akan sayaç görünmez;
@@ -362,6 +376,9 @@ class _AramaEkraniState extends State<AramaEkrani> {
 
   @override
   Widget build(BuildContext context) {
+    // KÜÇÜK PENCERE (PiP): yalnız karşı tarafın görüntüsü; düğme/yazı yok
+    // (minik pencerede taşar, zaten dokunulamaz).
+    final kucukPencere = _video && YerelOlaylar.kucukPencerede.value;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -371,7 +388,9 @@ class _AramaEkraniState extends State<AramaEkrani> {
         backgroundColor: Renkler.zeminDerin,
         // Sesli aramada video yok → dengeli dikey düzen.
         // Görüntülü aramada video tam ekran → üstü/altı bindirmeli.
-        body: _video ? _videoDuzeni() : _sesliDuzen(),
+        body: kucukPencere
+            ? _uzakGorunum()
+            : (_video ? _videoDuzeni() : _sesliDuzen()),
       ),
     );
   }
@@ -401,6 +420,26 @@ class _AramaEkraniState extends State<AramaEkrani> {
             ),
           ),
         Positioned(top: 56, left: 0, right: 0, child: _ustBilgi()),
+        // Küçük pencereye geç (görüşme bağlıyken): başka uygulamaya bakarken
+        // görüntü köşede sürer.
+        Positioned(
+          top: 40,
+          left: 8,
+          child: ValueListenableBuilder<int?>(
+            valueListenable: _arama.karsiUid,
+            builder: (_, uid, _) => uid == null
+                ? const SizedBox.shrink()
+                : IconButton(
+                    tooltip: 'Küçük pencere',
+                    onPressed: KucukPencere.gir,
+                    icon: Icon(
+                      Icons.picture_in_picture_alt_rounded,
+                      color: VideoSahne.metin,
+                      size: 26,
+                    ),
+                  ),
+          ),
+        ),
         Positioned(left: 0, right: 0, bottom: 44, child: _kontroller()),
       ],
     );
@@ -571,6 +610,8 @@ class _AramaEkraniState extends State<AramaEkrani> {
                     const SizedBox(width: 8),
                     Text(_sure,
                         style: Yazi.stil(14, FontWeight.w700, Renkler.neon)),
+                    const SizedBox(width: 10),
+                    const _KaliteCubuklari(),
                   ] else ...[
                     SizedBox(
                       width: 12,
@@ -587,6 +628,22 @@ class _AramaEkraniState extends State<AramaEkrani> {
                 ],
               ),
             ),
+            // Bağlantı zayıfsa açıkça söyle (sinyal çubuklarının altında).
+            if (bagli)
+              ValueListenableBuilder<int>(
+                valueListenable: _arama.baglantiKalitesi,
+                builder: (_, deger, _) {
+                  final uyari = kaliteUyarisi(kaliteCoz(deger));
+                  if (uyari == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      uyari,
+                      style: Yazi.stil(12, FontWeight.w700, Renkler.tehlike),
+                    ),
+                  );
+                },
+              ),
             // Agora bağlantı/token hatası (tanı için)
             ValueListenableBuilder<String?>(
               valueListenable: _arama.sonHata,
@@ -677,6 +734,51 @@ class _AramaEkraniState extends State<AramaEkrani> {
           size: 24,
         ),
       ),
+    );
+  }
+}
+
+/// Görüşme sinyal çubukları (4 çubuk): iyi → 4, orta → 2, zayıf → 1, yok → 0.
+class _KaliteCubuklari extends StatelessWidget {
+  const _KaliteCubuklari();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: AramaServisi.instance.baglantiKalitesi,
+      builder: (_, deger, _) {
+        final k = kaliteCoz(deger);
+        final dolu = kaliteCubuk(k);
+        final renk = switch (k) {
+          BaglantiKalitesi.zayif || BaglantiKalitesi.kopuk => Renkler.tehlike,
+          _ => Renkler.neon,
+        };
+        return Semantics(
+          label: 'Bağlantı kalitesi: ${switch (k) {
+            BaglantiKalitesi.iyi => 'iyi',
+            BaglantiKalitesi.orta => 'orta',
+            BaglantiKalitesi.zayif => 'zayıf',
+            BaglantiKalitesi.kopuk => 'yok',
+            BaglantiKalitesi.bilinmiyor => 'ölçülüyor',
+          }}',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (var i = 0; i < 4; i++)
+                Container(
+                  width: 3,
+                  height: 5.0 + i * 3,
+                  margin: const EdgeInsets.only(left: 2),
+                  decoration: BoxDecoration(
+                    color: i < dolu ? renk : renk.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

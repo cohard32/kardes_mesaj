@@ -25,6 +25,10 @@ class MainActivity : FlutterActivity() {
     // Kotlin → Dart olayları (paylaşım geldi, küçük pencere değişti).
     private var olayKanali: MethodChannel? = null
 
+    // Görüntülü görüşme bağlıyken true: ana ekrana dönülünce görüntü
+    // küçük pencerede (PiP) sürer.
+    private var pipIzinli = false
+
     // Dosya (PDF, Word…) seçici
     private val dosyaSecKodu = 4672
     private var beklenenDosya: MethodChannel.Result? = null
@@ -155,6 +159,40 @@ class MainActivity : FlutterActivity() {
                     // işlenmemiş içerik (bkz. PaylasimAktivitesi). Alınınca silinir.
                     "paylasimAl" -> result.success(PaylasimDeposu.al())
 
+                    // KÜÇÜK PENCERE (PiP). Android 12+: izin verilince sistem
+                    // ana ekrana dönüşte kendiliğinden geçer (otomatik giriş);
+                    // 8-11: onUserLeaveHint'te elle geçilir.
+                    "kucukPencereIzni" -> {
+                        pipIzinli = call.argument<Boolean>("acik") == true
+                        if (Build.VERSION.SDK_INT >= 31) {
+                            try {
+                                setPictureInPictureParams(pipParametreleri())
+                            } catch (e: Exception) {
+                                // Cihaz PiP desteklemiyor: sessizce geç.
+                            }
+                        }
+                        // Görüşme küçük penceredeyken BİTTİ → pencereyi kapat
+                        // (yoksa köşede minik bir sohbet ekranı kalırdı).
+                        if (!pipIzinli && Build.VERSION.SDK_INT >= 26 &&
+                            isInPictureInPictureMode
+                        ) {
+                            moveTaskToBack(false)
+                        }
+                        result.success(null)
+                    }
+
+                    "kucukPencereyeGec" -> {
+                        var ok = false
+                        if (Build.VERSION.SDK_INT >= 26) {
+                            ok = try {
+                                enterPictureInPictureMode(pipParametreleri())
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        result.success(ok)
+                    }
+
                     "dosyaSec" -> {
                         beklenenDosya?.success(null) // aynı anda tek seçici
                         beklenenDosya = result
@@ -279,6 +317,38 @@ class MainActivity : FlutterActivity() {
             this, arrayOf(hedef.absolutePath), arrayOf(mime), null
         )
         return true
+    }
+
+    @android.annotation.TargetApi(26)
+    private fun pipParametreleri(): android.app.PictureInPictureParams {
+        val b = android.app.PictureInPictureParams.Builder()
+            .setAspectRatio(android.util.Rational(9, 16))
+        if (Build.VERSION.SDK_INT >= 31) {
+            b.setAutoEnterEnabled(pipIzinli)
+            b.setSeamlessResizeEnabled(false)
+        }
+        return b.build()
+    }
+
+    // Kullanıcı "ev" tuşuyla uygulamadan çıkıyor → görüşme sürüyorsa küçük
+    // pencere. (Android 12+ bunu otomatik giriş ile kendisi yapar.)
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (pipIzinli && Build.VERSION.SDK_INT in 26..30) {
+            try {
+                enterPictureInPictureMode(pipParametreleri())
+            } catch (e: Exception) {
+                // Desteklenmiyor
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        olayKanali?.invokeMethod("pipDegisti", isInPictureInPictureMode)
     }
 
     // Uygulama AÇIKKEN yeni paylaşım geldi (PaylasimAktivitesi bu aktiviteyi
