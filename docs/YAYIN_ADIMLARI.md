@@ -134,3 +134,12 @@ Bu dalın arama/bildirim değişiklikleri gerçek cihaz gerektirir:
 - [ ] Mesaja yanıt veriliyor, alıntı görünüyor
 - [ ] Ayarlar → Görünüm'de 5 tema arasında geçiş anında oluyor, açık ekranlar kapanmıyor
 - [ ] Büyük bir videoyu galeriye indirirken uygulama donmuyor
+- [ ] Kendi metin mesajına uzun bas → Düzenle → kaydet: iki telefonda da yeni metin + "düzenlendi" görünüyor (15 dk sonra seçenek çıkmıyor)
+- [ ] Mesajdaki `https://…` / `www.…` linkine dokununca tarayıcı açılıyor
+- [ ] Sohbette 🔍 → kelime yaz → ↑/↓ ile eşleşmeler arasında gidiliyor, bulunan mesaj parlıyor
+- [ ] Profil → Doğum günleri ve önemli günler: kendi doğum gününü ayarla, bir gün ekle; arkadaşın profilinde 🎂 görünüyor
+- [ ] Hatırlatıcı testi: bugünün tarihine bir gün ekle → ertesi yıl için kurulur; yarının tarihine ekleyip telefon saatini ertesi gün 09:01'e alınca bildirim geliyor
+
+> **Mesaj düzenleme için kuralları YENİDEN yayınlayın** (1. adım, aynı komut):
+> `firebase deploy --only firestore:rules --project kardes-mesaj`. Yayınlanmadan
+> düzenleme "Düzenlenemedi" hatası verir; diğer her şey çalışır.
