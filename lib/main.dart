@@ -18,6 +18,7 @@ import 'servisler/ayar_servisi.dart';
 import 'servisler/bildirim_servisi.dart';
 import 'servisler/hata_servisi.dart';
 import 'servisler/kullanici_servisi.dart';
+import 'servisler/yerel_olaylar.dart';
 import 'tema.dart';
 
 /// Uygulama dışından (CallKit olayları) gezinmek için global navigator anahtarı.
@@ -25,6 +26,8 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Android → Dart olayları (paylaşım geldi, küçük pencere) — erkenden.
+  YerelOlaylar.baslat();
   // ⚠️ Bayat "görüşmedeyim" kaydını sil — runApp'ten ve FCM dinleyicilerinden
   // ÖNCE. Yeni süreçte Dart tarafında süren bir görüşme OLAMAZ (Agora motoru
   // süreçle birlikte ölür). Görüşme ortasında süreç ölünce (kaydırıp kapatma,

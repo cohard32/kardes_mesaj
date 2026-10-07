@@ -58,6 +58,36 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- "Paylaş → ROY MESSANGER": başka uygulamalardan metin, link,
+             fotoğraf, video ve belge alır (görünmez, kısa ömürlü; içeriği
+             kopyalayıp asıl ekranı açar — bkz. Paylasim.kt). -->
+        <activity
+            android:name=".PaylasimAktivitesi"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
+                <data android:mimeType="application/*"/>
+                <data android:mimeType="text/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
+        </activity>
         <!-- FCM varsayilan bildirim kanali (bildirim_servisi.dart ile ayni id) -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"

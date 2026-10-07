@@ -6,12 +6,15 @@ import '../parcalar/guncelleme_akisi.dart';
 import '../servisler/arama_servisi.dart';
 import '../servisler/bildirim_servisi.dart';
 import '../servisler/hatirlatici_servisi.dart';
+import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/resim_onbellegi.dart';
 import '../servisler/sohbet_servisi.dart';
+import '../servisler/yerel_olaylar.dart';
 import '../tema.dart';
 import 'arama_ekrani.dart';
 import 'arkadaslar_ekrani.dart';
+import 'paylasim_hedefi_ekrani.dart';
 import 'profil_ekrani.dart';
 import 'sohbet_listesi_ekrani.dart';
 
@@ -47,19 +50,35 @@ class _AnaKabukState extends State<AnaKabuk> with WidgetsBindingObserver {
     HatirlaticiServisi.instance.baslat();
     // Resim önbelleği sınırı aştıysa en eski kullanılanları sil (arka planda).
     ResimOnbellegi.instance.budama();
+    YerelOlaylar.paylasimGeldi.addListener(_paylasimKontrol);
     // Kapalıyken CallKit'ten kabul edilmiş arama / tıklanmış mesaj bildirimi
     // varsa (navigator artık hazır) ilgili ekranı aç.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bekleyenAramayiAc();
       bekleyenSohbetiAc();
+      // "Paylaş → ROY" ile uygulama KAPALIYKEN gelen içerik.
+      _paylasimKontrol();
       // Açılışta güncelleme kontrolü (eskiden SohbetEkrani'ndaydı; FAZ 4'te
       // ana ekran AnaKabuk olduğu için buraya taşındı → her açılışta çalışır).
       if (mounted) guncellemeAkisi(context, sessiz: true);
     });
   }
 
+  /// Bekleyen paylaşım varsa "Kime gönderilsin?" ekranını açar.
+  /// Uygulama açıkken gelen paylaşımda da (YerelOlaylar) çağrılır.
+  Future<void> _paylasimKontrol() async {
+    final p = await PaylasimServisi.instance.al();
+    if (p == null || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PaylasimHedefiEkrani(paylasim: p),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    YerelOlaylar.paylasimGeldi.removeListener(_paylasimKontrol);
     WidgetsBinding.instance.removeObserver(this);
     PresenceServisi.instance.nabziDurdur();
     PresenceServisi.instance.cevrimdisiYap();

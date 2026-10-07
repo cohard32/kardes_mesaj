@@ -22,6 +22,9 @@ class MainActivity : FlutterActivity() {
     private val sesSecKodu = 4671
     private var beklenenSonuc: MethodChannel.Result? = null
 
+    // Kotlin → Dart olayları (paylaşım geldi, küçük pencere değişti).
+    private var olayKanali: MethodChannel? = null
+
     // Dosya (PDF, Word…) seçici
     private val dosyaSecKodu = 4672
     private var beklenenDosya: MethodChannel.Result? = null
@@ -29,6 +32,10 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        olayKanali = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "kardes_mesaj/olaylar"
+        )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, kanalAdi)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -144,6 +151,10 @@ class MainActivity : FlutterActivity() {
                     // kalıcı değil) ve {yol, ad, boyut, mime} döner. Boyut
                     // `azami`yı aşıyorsa kopyalanmaz: {hata: "buyuk", ad, boyut}.
                     // Vazgeçilirse null.
+                    // Başka uygulamadan "Paylaş → ROY" ile gelen ve henüz
+                    // işlenmemiş içerik (bkz. PaylasimAktivitesi). Alınınca silinir.
+                    "paylasimAl" -> result.success(PaylasimDeposu.al())
+
                     "dosyaSec" -> {
                         beklenenDosya?.success(null) // aynı anda tek seçici
                         beklenenDosya = result
@@ -270,55 +281,14 @@ class MainActivity : FlutterActivity() {
         return true
     }
 
-    /**
-     * content:// adresindeki dosyayı önbelleğe kopyalar. ARKA PLAN iş
-     * parçacığında çağrılmalı (büyük dosyada UI donmasın).
-     * Boyut [azami]'yı aşarsa KOPYALAMAZ, {hata: "buyuk"} döner.
-     */
-    private fun uriyiKopyala(uri: Uri, azami: Long): Map<String, Any?> {
-        var ad: String? = null
-        var boyut: Long = -1
-        try {
-            contentResolver.query(
-                uri,
-                arrayOf(
-                    android.provider.OpenableColumns.DISPLAY_NAME,
-                    android.provider.OpenableColumns.SIZE
-                ),
-                null, null, null
-            )?.use { c ->
-                if (c.moveToFirst()) {
-                    val adSutun = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    val boyutSutun = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                    if (adSutun >= 0) ad = c.getString(adSutun)
-                    if (boyutSutun >= 0 && !c.isNull(boyutSutun)) boyut = c.getLong(boyutSutun)
-                }
-            }
-        } catch (e: Exception) {
-            // Ad/boyut okunamazsa kopyadan hesaplanır.
+    // Uygulama AÇIKKEN yeni paylaşım geldi (PaylasimAktivitesi bu aktiviteyi
+    // SINGLE_TOP ile öne getirdi) → Dart'a haber ver, o da paylasimAl ister.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(PaylasimAktivitesi.EK_ANAHTAR, false)) {
+            olayKanali?.invokeMethod("paylasimGeldi", null)
         }
-        val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-        val temizAd = (ad ?: "dosya").replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        if (boyut > azami) {
-            return mapOf("hata" to "buyuk", "ad" to temizAd, "boyut" to boyut)
-        }
-        val dizin = java.io.File(cacheDir, "gelen_dosyalar")
-        if (!dizin.exists()) dizin.mkdirs()
-        val hedef = java.io.File(dizin, "${System.currentTimeMillis()}_$temizAd")
-        val giris = contentResolver.openInputStream(uri)
-            ?: return mapOf("hata" to "okunamadi", "ad" to temizAd)
-        giris.use { g -> hedef.outputStream().use { c -> g.copyTo(c) } }
-        val gercekBoyut = hedef.length()
-        if (gercekBoyut > azami) {
-            hedef.delete()
-            return mapOf("hata" to "buyuk", "ad" to temizAd, "boyut" to gercekBoyut)
-        }
-        return mapOf(
-            "yol" to hedef.absolutePath,
-            "ad" to temizAd,
-            "boyut" to gercekBoyut,
-            "mime" to mime
-        )
     }
 
     @Deprecated("Deprecated in Java")
@@ -335,7 +305,7 @@ class MainActivity : FlutterActivity() {
             val azami = dosyaAzami
             Thread {
                 try {
-                    val bilgi = uriyiKopyala(uri, azami)
+                    val bilgi = uriyiKopyala(this, uri, azami)
                     runOnUiThread { sonuc.success(bilgi) }
                 } catch (e: Exception) {
                     runOnUiThread { sonuc.error("KOPYALANAMADI", e.message, null) }

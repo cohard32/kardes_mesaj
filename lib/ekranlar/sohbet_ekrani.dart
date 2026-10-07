@@ -25,6 +25,7 @@ import '../servisler/bildirim_servisi.dart';
 import '../servisler/dosya_servisi.dart';
 import '../servisler/medya_indir_servisi.dart';
 import '../servisler/mesaj_servisi.dart';
+import '../servisler/paylasim_servisi.dart';
 import '../servisler/presence_servisi.dart';
 import '../servisler/ses_oynatici_servisi.dart';
 import '../servisler/sohbet_servisi.dart';
@@ -66,7 +67,16 @@ class SohbetEkrani extends StatefulWidget {
   final String chatId;
   final Kullanici karsi;
 
-  const SohbetEkrani({super.key, required this.chatId, required this.karsi});
+  /// Başka uygulamadan "Paylaş → ROY" ile gelen ve bu sohbete gönderilecek
+  /// içerik (bkz. PaylasimHedefiEkrani). Açılışta bir kez işlenir.
+  final GelenPaylasim? paylasim;
+
+  const SohbetEkrani({
+    super.key,
+    required this.chatId,
+    required this.karsi,
+    this.paylasim,
+  });
 
   @override
   State<SohbetEkrani> createState() => _SohbetEkraniState();
@@ -211,6 +221,85 @@ class _SohbetEkraniState extends State<SohbetEkrani>
     }
     // CallKit ile (kapalıyken) kabul edilmiş bir arama varsa ekranını aç.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bekleyenAramayiAc());
+    final paylasim = widget.paylasim;
+    if (paylasim != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _paylasimiIsle(paylasim));
+    }
+  }
+
+  /// "Paylaş → ROY" ile gelen içerik: metin/link yazma alanına konur (kişi
+  /// düzenleyip gönderir), foto/video önizleme+açıklama ekranına gider,
+  /// belge onayla gönderilir. Çok büyük dosyalar söylenir.
+  Future<void> _paylasimiIsle(GelenPaylasim p) async {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (p.buyukler.isNotEmpty) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '${p.buyukler.join(', ')} çok büyük olduğu için alınamadı '
+            '(en fazla 100 MB).',
+          ),
+        ),
+      );
+    }
+    final metin = p.metin?.trim();
+    if (metin != null && metin.isNotEmpty) {
+      _mesajCtrl.value = TextEditingValue(
+        text: metin,
+        selection: TextSelection.collapsed(offset: metin.length),
+      );
+      _odak.requestFocus();
+    }
+    final medya = [
+      for (final d in p.dosyalar)
+        if (!d.belgeMi) File(d.yol),
+    ];
+    if (medya.isNotEmpty) await _onizleVeGonder(medya);
+    for (final d in p.dosyalar.where((d) => d.belgeMi)) {
+      if (!mounted) return;
+      if (d.boyut > DosyaServisi.azamiBoyut) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              '"${d.ad}" çok büyük (${boyutMetni(d.boyut)}). '
+              'Belgeler en fazla 10 MB olabilir.',
+            ),
+          ),
+        );
+        continue;
+      }
+      final onay = await showDialog<bool>(
+        context: context,
+        builder: (dc) => AlertDialog(
+          title: const Text('Belge gönderilsin mi?'),
+          content: Text('"${d.ad}" (${boyutMetni(d.boyut)}) '
+              '${widget.karsi.ad} kişisine gönderilecek.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dc, false),
+              child: const Text('Vazgeç'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dc, true),
+              child: const Text('Gönder'),
+            ),
+          ],
+        ),
+      );
+      if (onay != true || !mounted) continue;
+      await _yukleVeGonder(
+        () => _servis.dosyaGonder(
+          widget.chatId,
+          widget.karsi.uid,
+          File(d.yol),
+          ad: d.ad,
+          boyut: d.boyut,
+        ),
+        hata: '"${d.ad}" gönderilemedi.',
+      );
+    }
   }
 
   // Ekran KAPALIYKEN aramanın çalışması için gereken izinler:
